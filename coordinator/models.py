@@ -5,9 +5,14 @@ from __future__ import annotations
 import enum
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class JobStatus(str, enum.Enum):
@@ -73,6 +78,9 @@ class Job:
     status: JobStatus = JobStatus.PENDING
     tasks: list[Task] = field(default_factory=list)
     error: Optional[str] = None
+    created_at: str = field(default_factory=_now_iso)
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
 
     @property
     def total_rows_written(self) -> int:
@@ -83,15 +91,39 @@ class Job:
         terminal = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
         return sum(1 for t in self.tasks if t.status in terminal)
 
+    @property
+    def progress_percent(self) -> float:
+        total = len(self.tasks)
+        return round(100.0 * self.completed / total, 1) if total else 0.0
+
     def status_view(self) -> dict:
         return {
             "job_id": self.job_id,
             "status": self.status.value,
             "completed": self.completed,
             "total": len(self.tasks),
+            "progress_percent": self.progress_percent,
             "total_rows_written": self.total_rows_written,
             "error": self.error,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
             "tasks": [t.summary() for t in self.tasks],
+        }
+
+    def progress_view(self) -> dict:
+        """진행 상태 확인용 경량 뷰(태스크 목록 제외)."""
+        return {
+            "job_id": self.job_id,
+            "status": self.status.value,
+            "progress_percent": self.progress_percent,
+            "completed": self.completed,
+            "total": len(self.tasks),
+            "total_rows_written": self.total_rows_written,
+            "error": self.error,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
         }
 
     def result_view(self) -> dict:

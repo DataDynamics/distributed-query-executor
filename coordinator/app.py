@@ -137,12 +137,24 @@ def create_app(
         background.add_task(runner.run, job)
         return CreateJobResponse(job_id=job.job_id)
 
-    @app.get("/jobs/{job_id}", tags=["Jobs"], summary="작업 상태 조회")
+    @app.get("/jobs/{job_id}", tags=["Jobs"], summary="작업 상태 조회(태스크 포함)")
     def get_job(job_id: str):
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         return job.status_view()
+
+    @app.get(
+        "/jobs/{job_id}/status",
+        tags=["Jobs"],
+        summary="작업 진행 상태(진행률) 조회",
+        description="job_id 로 현재 상태/진행률을 조회한다(태스크 목록 제외, 경량).",
+    )
+    def get_job_progress(job_id: str):
+        job = store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job.progress_view()
 
     @app.get("/jobs/{job_id}/result", tags=["Jobs"], summary="작업 결과(적재 요약) 조회")
     def get_job_result(job_id: str):

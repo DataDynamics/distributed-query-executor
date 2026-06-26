@@ -101,6 +101,36 @@ QUERY_EXECUTOR_CONFIG_DIR=packaging/config \
   .venv/bin/python -m coordinator
 ```
 
+## 작업 상태 확인 & 이력
+
+작업을 제출하면 `job_id` 를 받고, 그 `job_id` 로 진행 상태를 조회한다.
+
+```bash
+# 1) 제출 → job_id
+JOB=$(curl -s localhost:8000/jobs -H 'content-type: application/json' \
+  -d '{"sql":"SELECT a, dt FROM t WHERE dt IN ('\''1'\'','\''2'\'')","partition_column":"dt","target_table":"public.t"}' \
+  | python -c 'import sys,json;print(json.load(sys.stdin)["job_id"])')
+
+# 2) 진행 상태(경량) 조회
+curl -s localhost:8000/jobs/$JOB/status
+# {"job_id":"...","status":"RUNNING","progress_percent":50.0,"completed":1,"total":2, ...}
+
+# 전체 상태(태스크 포함)
+curl -s localhost:8000/jobs/$JOB
+```
+
+| 엔드포인트 | 설명 |
+|---|---|
+| `POST /jobs` | 작업 제출 → `{job_id}` 반환 |
+| `GET /jobs/{job_id}/status` | **진행 상태/진행률**(경량, 태스크 제외) |
+| `GET /jobs/{job_id}` | 전체 상태(태스크 목록 포함) |
+| `GET /jobs/{job_id}/result` | 적재 결과 요약 |
+
+- 디스패처의 `run(job)` 은 실행 후 `job_id` 를 반환하며, **실행 시작/종료마다 PostgreSQL
+  이력 테이블(`history.table`, 기본 `job_history`)에 한 행씩 기록**한다.
+- 기록 대상 DB는 `history.db_dsn`(미설정 시 `monitor.db_dsn`)을 사용한다. 둘 다 없으면
+  이력 기록은 비활성(경고 로그)된다. 스키마: `packaging/config/history-schema.sql`.
+
 ## API 문서 (Swagger)
 
 두 서비스 모두 FastAPI 기반 대화형 문서를 제공한다.

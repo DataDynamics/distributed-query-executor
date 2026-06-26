@@ -16,12 +16,13 @@ class FakeRunner:
     def __init__(self) -> None:
         self.runs: list[Job] = []
 
-    async def run(self, job: Job) -> None:
+    async def run(self, job: Job) -> str:
         self.runs.append(job)
         for task in job.tasks:
             task.status = TaskStatus.DONE
             task.rows_written = 10
         job.status = JobStatus.DONE
+        return job.job_id
 
 
 @pytest.fixture

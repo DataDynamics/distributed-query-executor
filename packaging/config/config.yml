@@ -32,6 +32,10 @@ monitor:
   table: ${monitor.table:executor_health_metrics}
   disk_path: ${monitor.disk_path:/}
 
+history:
+  db_dsn: ${history.db_dsn:}
+  table: ${history.table:job_history}
+
 executor:
   host: ${executor.host:0.0.0.0}
   impala:

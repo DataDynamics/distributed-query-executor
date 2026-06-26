@@ -7,27 +7,37 @@ Coordinator는 결과 행을 직접 받지 않는다. executor가 Impala -> Gree
 from __future__ import annotations
 
 import asyncio
-from typing import Protocol
+from datetime import datetime, timezone
+from typing import Optional, Protocol
 
 import httpx
 
 from .config import Settings
+from .history import JobHistoryRepository
 from .models import Job, JobStatus, Task, TaskStatus
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class JobRunner(Protocol):
-    async def run(self, job: Job) -> None: ...
+    async def run(self, job: Job) -> str: ...
 
 
 class HttpDispatcher:
     """executor 서비스와 HTTP로 통신하는 실제 디스패처."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, history: Optional[JobHistoryRepository] = None):
         self.settings = settings
         self._sem = asyncio.Semaphore(settings.max_dispatch_concurrency)
+        self.history = history or JobHistoryRepository(settings)
 
-    async def run(self, job: Job) -> None:
+    async def run(self, job: Job) -> str:
+        """Job 을 실행하고 job_id 를 반환한다. 시작/종료 이력을 DB에 기록한다."""
         job.status = JobStatus.RUNNING
+        job.started_at = _now_iso()
+        await self.history.record(job)  # 시작 이력
         try:
             async with httpx.AsyncClient(timeout=self.settings.task_timeout_s) as client:
                 await asyncio.gather(
@@ -35,6 +45,9 @@ class HttpDispatcher:
                 )
         finally:
             self._finalize(job)
+            job.finished_at = _now_iso()
+            await self.history.record(job)  # 종료 이력
+        return job.job_id
 
     async def _run_task(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         async with self._sem:

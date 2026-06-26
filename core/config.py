@@ -106,6 +106,11 @@ class Settings:
         # /metrics 에서 사용량을 측정할 디스크 경로
         self.monitor_disk_path: str = _get("monitor", "disk_path", "/")
 
+        # ───────── Coordinator - Job 실행 이력(PostgreSQL) ─────────
+        # 비어 있으면 monitor.db_dsn 을 재사용. 둘 다 없으면 이력 기록 비활성.
+        self.history_db_dsn: str = _get("history", "db_dsn", "") or self.monitor_db_dsn
+        self.history_table: str = _get("history", "table", "job_history")
+
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")
         # Impala (source) — TLS + Kerberos(GSSAPI) 환경
