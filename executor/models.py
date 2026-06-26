@@ -1,4 +1,4 @@
-"""Executor-side task model and API schemas."""
+"""Executor 측 task 모델 및 API 스키마."""
 
 from __future__ import annotations
 

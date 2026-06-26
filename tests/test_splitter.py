@@ -1,4 +1,4 @@
-"""Tests for splitting the IN-list into N sub-queries."""
+"""IN 목록을 N개의 sub-query로 분할하는 기능 테스트."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def test_round_robin_distribution():
 def test_parallelism_greater_than_values_is_clamped():
     parsed = _parse("'1','2','3'")
     subs = split(parsed, parallelism=10, strategy="contiguous")
-    assert len(subs) == 3  # one value per sub-query, no empty sub-queries
+    assert len(subs) == 3  # sub-query당 값 1개, 빈 sub-query 없음
 
 
 def test_parallelism_one_keeps_all_values():
@@ -44,8 +44,8 @@ def test_each_subquery_is_valid_and_preserves_other_predicates():
     parsed = _parse("'1','2','3','4'")
     subs = split(parsed, parallelism=2)
     for s in subs:
-        # every sub-query must re-validate cleanly
+        # 모든 sub-query는 다시 검증해도 통과해야 한다
         reparsed = validate_and_parse(s.sql, "dt")
         assert reparsed.partition_values == s.partition_values
-        # the unrelated predicate must survive the rewrite
+        # 무관한 술어(region)는 재작성 후에도 보존되어야 한다
         assert "region" in s.sql.lower()

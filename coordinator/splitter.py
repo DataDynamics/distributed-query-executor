@@ -1,4 +1,4 @@
-"""Split a validated query into N sub-queries by chunking the partition IN-list."""
+"""검증된 쿼리를 파티션 IN 목록 기준으로 N개의 sub-query로 분할한다."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class SubQuery:
 
 
 def _chunk(values: list, n: int, strategy: str) -> list[list]:
-    """Split ``values`` into at most ``n`` non-empty buckets."""
+    """``values`` 를 최대 ``n`` 개의 비어 있지 않은 버킷으로 분할."""
     n = max(1, min(n, len(values)))
     if strategy == "round_robin":
         buckets: list[list] = [[] for _ in range(n)]
@@ -24,7 +24,7 @@ def _chunk(values: list, n: int, strategy: str) -> list[list]:
             buckets[i % n].append(v)
         return buckets
 
-    # contiguous (default): distribute the remainder across the first buckets
+    # contiguous(기본): 나머지를 앞쪽 버킷부터 하나씩 분배
     size, rem = divmod(len(values), n)
     buckets = []
     start = 0
@@ -38,9 +38,9 @@ def _chunk(values: list, n: int, strategy: str) -> list[list]:
 def split(
     parsed: ParsedQuery, parallelism: int, strategy: str = "contiguous"
 ) -> list[SubQuery]:
-    """Produce N complete sub-query SQL strings, each scanning a value subset.
+    """각각 값 부분집합을 스캔하는 완전한 sub-query SQL 문자열 N개를 생성한다.
 
-    ``parallelism`` is clamped to the number of IN values (no empty sub-query).
+    ``parallelism`` 은 IN 값 개수로 클램핑된다(빈 sub-query 생성 안 함).
     """
     value_exprs = list(parsed.expression.find(exp.In).expressions)
     buckets = _chunk(value_exprs, parallelism, strategy)

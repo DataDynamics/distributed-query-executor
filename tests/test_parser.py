@@ -1,4 +1,4 @@
-"""Validation test cases for the query parser (the heart of stage-1 safety)."""
+"""쿼리 파서 검증 테스트 케이스(1단계 안정성의 핵심)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from coordinator.parser import QueryValidationError, validate_and_parse
 PCOL = "dt"
 
 
-# ----------------------------- valid queries -----------------------------
+# ----------------------------- 유효한 쿼리 -----------------------------
 
 
 def test_simple_select_ok():
@@ -34,7 +34,7 @@ def test_select_with_extra_predicates_ok():
 
 
 def test_qualified_partition_column_ok():
-    # partition_column given as 't.dt', IN uses the same qualified column
+    # partition_column이 't.dt'로 주어지고 IN도 동일한 한정 컬럼을 사용
     parsed = validate_and_parse(
         "SELECT a FROM t WHERE t.dt IN ('1','2')", "t.dt"
     )
@@ -55,16 +55,16 @@ def test_case_insensitive_keywords_ok():
     assert len(parsed.partition_values) == 2
 
 
-# --------------------------- rejected queries ---------------------------
+# --------------------------- 거부되는 쿼리 ---------------------------
 
 
 @pytest.mark.parametrize(
     "sql, code",
     [
-        # not parseable
+        # 파싱 불가
         ("SELECT FROM WHERE ((", "PARSE_ERROR"),
         ("", "PARSE_ERROR"),
-        # not a SELECT
+        # SELECT가 아님
         ("INSERT INTO t VALUES (1)", "NOT_A_SELECT"),
         ("UPDATE t SET a=1 WHERE dt IN ('1')", "NOT_A_SELECT"),
         ("DELETE FROM t WHERE dt IN ('1')", "NOT_A_SELECT"),
@@ -74,17 +74,17 @@ def test_case_insensitive_keywords_ok():
             "UNION ALL SELECT a FROM t WHERE dt IN ('2')",
             "NOT_A_SELECT",
         ),
-        # multiple statements
+        # 다중 문
         ("SELECT a FROM t WHERE dt IN ('1'); SELECT 1", "MULTIPLE_STATEMENTS"),
-        # missing partition IN
+        # 파티션 IN 없음
         ("SELECT a FROM t", "NO_PARTITION_IN_CLAUSE"),
         ("SELECT a FROM t WHERE region='KR'", "NO_PARTITION_IN_CLAUSE"),
         ("SELECT a FROM t WHERE dt = '1'", "NO_PARTITION_IN_CLAUSE"),
         ("SELECT a FROM t WHERE other IN ('1','2')", "NO_PARTITION_IN_CLAUSE"),
-        # negated / subquery IN
+        # 부정(NOT IN) / 서브쿼리 IN
         ("SELECT a FROM t WHERE dt NOT IN ('1','2')", "NEGATED_IN"),
         ("SELECT a FROM t WHERE dt IN (SELECT dt FROM cal)", "SUBQUERY_IN_CLAUSE"),
-        # unsupported stage-1 constructs
+        # 1단계 미지원 구문
         ("SELECT a FROM t WHERE dt IN ('1') GROUP BY a", "UNSUPPORTED_GROUP_BY"),
         ("SELECT count(*) FROM t WHERE dt IN ('1')", "UNSUPPORTED_AGGREGATE"),
         ("SELECT sum(amount) FROM t WHERE dt IN ('1')", "UNSUPPORTED_AGGREGATE"),

@@ -1,4 +1,4 @@
-"""Coordinator FastAPI application factory."""
+"""Coordinator FastAPI 애플리케이션 팩토리."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from .splitter import split
 
 
 def _assign_executors(count: int, executors: list[str]) -> list[Optional[str]]:
-    """Round-robin executor URLs across N tasks (None if none configured)."""
+    """N개의 task에 executor URL을 라운드로빈 배정(설정 없으면 None)."""
     if not executors:
         return [None] * count
     cycle = itertools.cycle(executors)
@@ -47,7 +47,7 @@ def create_app(
 
     @app.post("/jobs", response_model=CreateJobResponse, status_code=202)
     def create_job(req: CreateJobRequest, background: BackgroundTasks):
-        # Synchronous validation + split: errors are returned to the client now.
+        # 동기 검증 + 분할: 오류는 지금 즉시 클라이언트에게 반환한다.
         parsed = validate_and_parse(req.sql, req.partition_column)
         sub_queries = split(parsed, req.parallelism, req.split_strategy)
 
@@ -97,7 +97,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found")
         for task in job.tasks:
             if task.task_id == task_id:
-                return task.detail()  # includes the full sub_query text
+                return task.detail()  # sub_query 전문 포함
         raise HTTPException(status_code=404, detail="task not found")
 
     @app.get("/healthz")

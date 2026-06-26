@@ -1,12 +1,12 @@
-"""SQL validation & parsing for incoming Impala SELECT queries.
+"""들어온 Impala SELECT 쿼리에 대한 검증 및 파싱.
 
-Stage 1 only supports a *simple* SELECT:
-  - single statement, must be a SELECT
-  - must contain ``<partition_column> IN (<literal>, ...)`` in the predicate
-  - no GROUP BY / HAVING / aggregate functions / DISTINCT / JOIN
-  - the IN list must be literal values (no subquery), non-empty, not negated
+1단계(Stage 1)는 *단순* SELECT만 지원한다:
+  - 단일 문이어야 하며 반드시 SELECT
+  - 술어(predicate)에 ``<partition_column> IN (<리터럴>, ...)`` 가 있어야 함
+  - GROUP BY / HAVING / 집계 함수 / DISTINCT / JOIN 미지원
+  - IN 목록은 리터럴 값이어야 하고(서브쿼리 불가), 비어 있지 않으며, 부정(NOT IN)이 아니어야 함
 
-Impala SQL is parsed with sqlglot's ``hive`` dialect (closest available).
+Impala SQL은 sqlglot의 ``hive`` 방언으로 파싱한다(가장 근접한 방언).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ DIALECT = "hive"
 
 
 class QueryValidationError(Exception):
-    """Raised when an incoming query is not supported by stage 1."""
+    """들어온 쿼리가 1단계에서 지원되지 않을 때 발생."""
 
     def __init__(self, code: str, message: str):
         self.code = code
@@ -37,14 +37,14 @@ class ParsedQuery:
 
 
 def _column_name(node: exp.Expression | None) -> str | None:
-    """Return the bare column name (without table qualifier), or None."""
+    """테이블 한정자를 제외한 순수 컬럼명을 반환(없으면 None)."""
     if isinstance(node, exp.Column):
         return node.name
     return None
 
 
 def find_partition_in(select: exp.Expression, partition_column: str) -> exp.In | None:
-    """Find the ``IN`` node whose left-hand side is the partition column."""
+    """좌변이 파티션 컬럼인 ``IN`` 노드를 찾는다."""
     target = partition_column.split(".")[-1].lower()
     for in_node in select.find_all(exp.In):
         if _column_name(in_node.this) == target.lower() or (
@@ -55,9 +55,9 @@ def find_partition_in(select: exp.Expression, partition_column: str) -> exp.In |
 
 
 def validate_and_parse(sql: str, partition_column: str) -> ParsedQuery:
-    """Validate the query for stage-1 support and return a :class:`ParsedQuery`.
+    """1단계 지원 여부를 검증하고 :class:`ParsedQuery` 를 반환한다.
 
-    Raises :class:`QueryValidationError` with a stable ``code`` on any violation.
+    위반 시 안정적인 ``code`` 를 가진 :class:`QueryValidationError` 를 발생시킨다.
     """
     if not sql or not sql.strip():
         raise QueryValidationError("PARSE_ERROR", "빈 쿼리입니다.")
@@ -66,7 +66,7 @@ def validate_and_parse(sql: str, partition_column: str) -> ParsedQuery:
 
     try:
         statements = [s for s in sqlglot.parse(sql, read=DIALECT) if s is not None]
-    except Exception as exc:  # sqlglot raises ParseError / TokenError
+    except Exception as exc:  # sqlglot은 ParseError / TokenError 를 발생시킴
         raise QueryValidationError("PARSE_ERROR", f"SQL 파싱 실패: {exc}") from exc
 
     if not statements:

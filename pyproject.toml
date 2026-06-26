@@ -1,7 +1,7 @@
 [project]
 name = "query-executor"
 version = "0.1.0"
-description = "Coordinator + N Executor API: split an Impala SELECT by partition IN-list and load into Greenplum"
+description = "Coordinator + N Executor API: Impala SELECT를 파티션 IN 목록으로 분할해 Greenplum에 적재"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Runtime DB drivers for the executor. Not needed for coordinator unit tests.
+# executor 런타임 DB 드라이버. coordinator 단위 테스트에는 필요 없음.
 executor = [
     "impyla>=0.18",
     "psycopg[binary]>=3.1",

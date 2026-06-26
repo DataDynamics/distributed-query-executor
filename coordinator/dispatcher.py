@@ -1,7 +1,7 @@
-"""Job execution: dispatch sub-queries to executors and track their status.
+"""Job 실행: sub-query를 executor로 디스패치하고 상태를 추적한다.
 
-The coordinator never receives result rows — executors stream Impala -> Greenplum
-directly. Here we only POST sub-queries, poll status, and aggregate row counts.
+Coordinator는 결과 행을 직접 받지 않는다. executor가 Impala -> Greenplum 으로 직접
+스트리밍한다. 여기서는 sub-query를 POST하고, 상태를 polling하며, row count만 집계한다.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ class JobRunner(Protocol):
 
 
 class HttpDispatcher:
-    """Real dispatcher that talks to executor services over HTTP."""
+    """executor 서비스와 HTTP로 통신하는 실제 디스패처."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -53,7 +53,7 @@ class HttpDispatcher:
                     },
                 )
                 await self._poll(client, task)
-            except Exception as exc:  # network / timeout / executor error
+            except Exception as exc:  # 네트워크 / 타임아웃 / executor 오류
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
 

@@ -1,8 +1,8 @@
-"""Impala-read / Greenplum-write backends.
+"""Impala 읽기 / Greenplum 쓰기 백엔드.
 
-The real backend uses impyla + psycopg and is imported lazily so the coordinator
-test-suite (and local dev) does not require DB drivers. A MockBackend is provided
-for development and integration tests without live clusters.
+실제 백엔드는 impyla + psycopg 를 사용하며, coordinator 테스트(및 로컬 개발)에서 DB
+드라이버가 필요 없도록 지연 임포트(lazy import)한다. 라이브 클러스터 없이 개발/통합
+테스트를 할 수 있도록 MockBackend도 제공한다.
 """
 
 from __future__ import annotations
@@ -20,12 +20,12 @@ class Backend(Protocol):
         partition_values: list[str],
         on_progress=None,
     ) -> int:
-        """Read sub_query from source, write into target_table, return rows written."""
+        """소스에서 sub_query를 읽어 target_table에 쓰고, 적재된 행 수를 반환."""
         ...
 
 
 class MockBackend:
-    """Returns a deterministic row count; no real I/O. For dev/tests."""
+    """결정적인 행 수를 반환하고 실제 I/O는 하지 않음. 개발/테스트용."""
 
     def __init__(self, rows_per_value: int = 100):
         self.rows_per_value = rows_per_value
@@ -38,7 +38,7 @@ class MockBackend:
 
 
 class ImpalaToGreenplumBackend:
-    """Real backend: stream from Impala via impyla, COPY into Greenplum via psycopg."""
+    """실제 백엔드: impyla로 Impala에서 스트리밍, psycopg COPY로 Greenplum에 적재."""
 
     def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000):
         self.impala_dsn = impala_dsn
@@ -46,8 +46,8 @@ class ImpalaToGreenplumBackend:
         self.batch_size = batch_size
 
     def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None) -> int:
-        from impala.dbapi import connect as impala_connect  # lazy import
-        import psycopg  # lazy import
+        from impala.dbapi import connect as impala_connect  # 지연 임포트
+        import psycopg  # 지연 임포트
 
         rows_written = 0
         impala_conn = impala_connect(**self.impala_dsn)

@@ -1,0 +1,5 @@
+# Executor 런타임 의존성 (Impala 읽기 + Greenplum 적재용 드라이버 포함)
+# RHEL 9.2에서 impyla 빌드에 gcc / python3.11-devel / cyrus-sasl-devel 이 필요할 수 있음 (README 참고)
+-r requirements.txt
+impyla>=0.19
+psycopg[binary]>=3.2

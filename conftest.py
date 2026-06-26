@@ -1,4 +1,4 @@
-"""Ensure the repository root is importable as ``coordinator`` / ``executor``."""
+"""저장소 루트를 ``coordinator`` / ``executor`` 로 임포트할 수 있게 한다."""
 
 import os
 import sys

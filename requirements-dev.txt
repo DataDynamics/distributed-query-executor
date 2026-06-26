@@ -1,0 +1,4 @@
+# 개발/테스트 의존성
+-r requirements.txt
+pytest>=9.0
+pytest-asyncio>=1.0

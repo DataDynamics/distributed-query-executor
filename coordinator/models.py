@@ -1,4 +1,4 @@
-"""Domain models (Job/Task) and API request/response schemas."""
+"""도메인 모델(Job/Task) 및 API 요청/응답 스키마."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _new_id(prefix: str) -> str:
 class Task:
     job_id: str
     executor_url: Optional[str]
-    sub_query: str  # full sub-query text sent to the executor (retained)
+    sub_query: str  # executor로 보낸 sub-query 전문(보관)
     partition_values: list[str]
     task_id: str = field(default_factory=lambda: _new_id("t"))
     status: TaskStatus = TaskStatus.QUEUED
@@ -106,13 +106,13 @@ class Job:
         }
 
 
-# ----------------------------- API schemas -----------------------------
+# ----------------------------- API 스키마 -----------------------------
 
 
 class CreateJobRequest(BaseModel):
-    sql: str = Field(..., description="Impala SELECT query")
-    partition_column: str = Field(..., description="Column used to split via IN-list")
-    target_table: str = Field(..., description="Greenplum target table")
+    sql: str = Field(..., description="Impala SELECT 쿼리")
+    partition_column: str = Field(..., description="IN 목록으로 분할할 기준 컬럼")
+    target_table: str = Field(..., description="Greenplum 적재 대상 테이블")
     write_mode: Literal["append", "overwrite_partitions"] = "append"
     parallelism: int = Field(default=4, ge=1, le=128)
     split_strategy: Literal["contiguous", "round_robin"] = "contiguous"

@@ -1,4 +1,4 @@
-"""In-memory job store. Swap for Redis/Postgres in production."""
+"""인메모리 Job 저장소. 운영 환경에서는 Redis/Postgres로 교체."""
 
 from __future__ import annotations
 

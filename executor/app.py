@@ -1,4 +1,4 @@
-"""Executor FastAPI application: accepts tasks, runs them, exposes status."""
+"""Executor FastAPI 애플리케이션: task를 받아 실행하고 상태를 노출한다."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
         try:
             task.status = TaskStatus.READING
             loop = asyncio.get_running_loop()
-            # impyla/psycopg are blocking -> run in a thread to keep the loop free.
+            # impyla/psycopg는 블로킹이므로 스레드에서 실행해 이벤트 루프를 막지 않는다.
             task.status = TaskStatus.WRITING
             rows = await loop.run_in_executor(
                 None,

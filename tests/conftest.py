@@ -1,4 +1,4 @@
-"""Shared test fixtures for the coordinator API."""
+"""Coordinator API 테스트용 공용 픽스처."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from coordinator.models import Job, JobStatus, TaskStatus
 
 
 class FakeRunner:
-    """Records dispatched jobs and marks them DONE without any network I/O."""
+    """디스패치된 Job을 기록하고, 네트워크 I/O 없이 DONE으로 표시한다."""
 
     def __init__(self) -> None:
         self.runs: list[Job] = []
