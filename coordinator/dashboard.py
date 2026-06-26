@@ -71,8 +71,8 @@ DASHBOARD_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Query Coordinator 모니터링</title>
 <style>
-  :root { --bg:#0f1419; --panel:#1a222c; --line:#2b3947; --fg:#d6e1ec; --mut:#8aa0b4;
-          --ok:#3fb950; --bad:#f85149; --warn:#d29922; --acc:#58a6ff; }
+  :root { --bg:#ffffff; --panel:#ffffff; --line:#e1e4e8; --fg:#1f2328; --mut:#6e7781;
+          --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; --acc:#0969da; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg);
          font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif; }
@@ -83,12 +83,12 @@ DASHBOARD_HTML = """<!doctype html>
   .tabs { display:flex; gap:4px; padding:10px 20px 0; flex-wrap:wrap; }
   .tabs button { background:var(--panel); color:var(--mut); border:1px solid var(--line);
                  border-bottom:none; padding:8px 14px; border-radius:6px 6px 0 0; cursor:pointer; }
-  .tabs button.active { color:var(--fg); background:#22303d; border-color:var(--acc); }
+  .tabs button.active { color:var(--fg); background:#ddf4ff; border-color:var(--acc); }
   main { padding:16px 20px; }
   .panel { display:none; }
   .panel.active { display:block; }
   .cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+  .card { background:#f6f8fa; border:1px solid var(--line); border-radius:8px;
           padding:12px 16px; min-width:150px; }
   .card .k { color:var(--mut); font-size:12px; }
   .card .v { font-size:20px; font-weight:600; }
@@ -96,13 +96,13 @@ DASHBOARD_HTML = """<!doctype html>
           border:1px solid var(--line); border-radius:8px; overflow:hidden; }
   th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line);
           font-size:13px; white-space:nowrap; }
-  th { color:var(--mut); font-weight:600; background:#16202a; position:sticky; top:0; }
-  tr:hover td { background:#202b36; }
+  th { color:var(--mut); font-weight:600; background:#f6f8fa; position:sticky; top:0; }
+  tr:hover td { background:#f6f8fa; }
   .pill { padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; }
   .s-DONE{color:var(--ok);} .s-RUNNING,.s-SPLITTING,.s-PENDING{color:var(--acc);}
   .s-FAILED{color:var(--bad);} .s-CANCELLED,.s-PARTIAL{color:var(--warn);}
   .ok{color:var(--ok);} .bad{color:var(--bad);}
-  .bar { background:#0b1116; border-radius:6px; height:8px; width:120px; display:inline-block;
+  .bar { background:#eaeef2; border-radius:6px; height:8px; width:120px; display:inline-block;
          vertical-align:middle; overflow:hidden; }
   .bar > i { display:block; height:100%; background:var(--acc); }
   .mut{color:var(--mut);} .err{color:var(--bad);} code{color:var(--acc);}
