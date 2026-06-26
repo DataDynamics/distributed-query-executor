@@ -79,6 +79,17 @@ curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
 }'
 ```
 
+## 배포 (systemd, RHEL 9.2)
+
+coordinator 1개 + executor 다수를 systemd 서비스로 운영하는 구성과 설치 스크립트는
+[`deploy/README.md`](deploy/README.md) 참고.
+
+```bash
+sudo ./deploy/install.sh
+sudo systemctl enable --now query-executor@8001 query-executor@8002
+sudo systemctl enable --now query-coordinator
+```
+
 ## 1단계(Stage 1) 지원 범위
 
 단순 `SELECT`(+ `ORDER BY` / `LIMIT`)만 지원한다. 파서는 GROUP BY, 집계 함수,

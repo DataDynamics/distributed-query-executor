@@ -1,0 +1,31 @@
+[Unit]
+Description=Distributed Query Coordinator
+Documentation=https://github.com/DataDynamics/distributed-query-executor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=queryexec
+Group=queryexec
+WorkingDirectory=/opt/query-executor
+EnvironmentFile=/etc/query-executor/coordinator.env
+# 인메모리 Job 저장소를 사용하므로 단일 워커로 실행한다(상태 일관성 유지).
+# 다중 워커/다중 인스턴스가 필요하면 Job 저장소를 Redis로 교체할 것.
+ExecStart=/opt/query-executor/.venv/bin/uvicorn coordinator.app:app \
+    --host ${HOST} --port ${PORT} --workers 1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+
+# 보안 강화(hardening)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

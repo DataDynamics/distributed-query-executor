@@ -1,0 +1,33 @@
+[Unit]
+# 템플릿 유닛: 인스턴스 이름(%i)을 포트로 사용한다.
+#   예) systemctl start query-executor@8001  ->  포트 8001로 기동
+Description=Distributed Query Executor (port %i)
+Documentation=https://github.com/DataDynamics/distributed-query-executor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=queryexec
+Group=queryexec
+WorkingDirectory=/opt/query-executor
+EnvironmentFile=/etc/query-executor/executor.env
+# task 상태를 프로세스 메모리에 보관하므로 인스턴스(포트)당 단일 워커로 실행한다.
+# 처리량 확장은 워커 수가 아니라 인스턴스 수를 늘려서 한다.
+ExecStart=/opt/query-executor/.venv/bin/uvicorn executor.app:app \
+    --host ${HOST} --port %i --workers 1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+
+# 보안 강화(hardening)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
