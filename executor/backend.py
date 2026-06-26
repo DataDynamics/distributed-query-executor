@@ -20,7 +20,11 @@ class Backend(Protocol):
         partition_values: list[str],
         on_progress=None,
     ) -> int:
-        """소스에서 sub_query를 읽어 target_table에 쓰고, 적재된 행 수를 반환."""
+        """[copy 모드] 소스에서 sub_query를 읽어 target_table에 COPY 적재, 행 수 반환."""
+        ...
+
+    def execute(self, sql: str) -> int:
+        """[statement 모드] 대상 DB에서 sql(예: INSERT ... SELECT)을 실행, 영향받은 행 수 반환."""
         ...
 
 
@@ -35,6 +39,9 @@ class MockBackend:
         if on_progress:
             on_progress(total)
         return total
+
+    def execute(self, sql: str) -> int:
+        return self.rows_per_value
 
 
 class ImpalaToGreenplumBackend:
@@ -52,6 +59,21 @@ class ImpalaToGreenplumBackend:
         self.impala_dsn = impala_dsn
         self.greenplum_dsn = greenplum_dsn
         self.batch_size = batch_size
+
+    def execute(self, sql: str) -> int:
+        """statement 모드: 대상 Greenplum 에서 SQL(예: INSERT ... SELECT)을 그대로 실행.
+
+        COPY를 쓰지 않으므로 컬럼 매핑은 SQL(INSERT 컬럼 목록/SELECT)이 책임진다.
+        반환값은 cursor.rowcount(영향받은 행 수, 미지원 시 0).
+        """
+        import psycopg  # 지연 임포트
+
+        with psycopg.connect(self.greenplum_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                affected = cur.rowcount
+            conn.commit()
+        return affected if affected and affected > 0 else 0
 
     def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None) -> int:
         from impala.dbapi import connect as impala_connect  # 지연 임포트

@@ -114,6 +114,7 @@ def create_app(
             parallelism=req.parallelism,
             split_strategy=req.split_strategy,
             failure_policy=req.failure_policy,
+            exec_mode=req.exec_mode,
             status=JobStatus.SPLITTING,
         )
         executor_urls = _assign_executors(len(sub_queries), settings.executors)

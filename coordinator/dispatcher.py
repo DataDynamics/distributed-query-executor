@@ -71,6 +71,7 @@ class HttpDispatcher:
                         "write_mode": job.write_mode,
                         "partition_column": job.partition_column,
                         "partition_values": task.partition_values,
+                        "exec_mode": job.exec_mode,
                     },
                 )
                 await self._poll(client, job, task)

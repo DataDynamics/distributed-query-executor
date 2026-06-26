@@ -27,6 +27,7 @@ class Task:
     write_mode: str
     partition_column: str
     partition_values: list[str]
+    exec_mode: str = "copy"  # "copy" | "statement"
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
     error: Optional[str] = None
@@ -51,3 +52,4 @@ class CreateTaskRequest(BaseModel):
     write_mode: Literal["append", "overwrite_partitions"] = "append"
     partition_column: str
     partition_values: list[str] = []
+    exec_mode: Literal["copy", "statement"] = "copy"

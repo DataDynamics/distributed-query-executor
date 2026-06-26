@@ -345,6 +345,31 @@ INSERT INTO staging.sales_part SELECT * FROM (SELECT a, dt FROM sales WHERE dt I
 
 > `wrapper_query` 에 placeholder가 없으면 422(`WRAPPER_PLACEHOLDER_MISSING`)를 반환한다.
 
+### 적재 방식 (`exec_mode`)
+
+executor가 분할/감싼 쿼리를 실행하는 방식을 고른다.
+
+| `exec_mode` | 동작 | 적합한 경우 |
+|---|---|---|
+| `copy` (기본) | Impala 에서 sub-query 를 **읽어** Greenplum 에 `COPY` 적재 | 소스(Impala)와 타깃(Greenplum)이 다른 엔진. 단, COPY는 SQL이 아니라 STDIN 벌크 로드라 **대상 테이블 컬럼과 정확히 일치**해야 한다 |
+| `statement` | wrapper 로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB(`greenplum.dsn`)에서 **그대로 실행** | `INSERT INTO ... SELECT (분할쿼리)` 처럼 한 DB 안에서 INSERT 로 적재. 컬럼 매핑은 INSERT 컬럼 목록/SELECT 가 담당하므로 COPY 의 엄격한 컬럼 일치 제약이 없다 |
+
+```bash
+# INSERT 래퍼를 대상 DB에서 직접 실행 (COPY 미사용)
+curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+  "sql": "SELECT a, dt FROM src WHERE dt IN ('\''1'\'','\''2'\'','\''3'\'')",
+  "partition_column": "dt",
+  "target_table": "public.mirror",
+  "parallelism": 3,
+  "exec_mode": "statement",
+  "wrapper_query": "INSERT INTO public.mirror (a, dt) SELECT a, dt FROM ({{SUBQUERY}}) s"
+}'
+```
+
+> `statement` 모드는 `greenplum.dsn` 한 연결에서 SQL을 실행하므로, INSERT 의 소스와
+> 타깃이 같은 DB(Greenplum)에 있어야 한다. (`impala.host` 없이 `greenplum.dsn` 만 있어도
+> statement 모드는 동작한다.)
+
 ### 1단계(strict=true) 범위
 단순 `SELECT`(+ `ORDER BY` / `LIMIT`)만 지원. GROUP BY, 집계 함수, DISTINCT, JOIN,
 NOT IN, 서브쿼리 IN, 파티션 `IN` 누락을 안정적인 에러 코드로 거부한다.

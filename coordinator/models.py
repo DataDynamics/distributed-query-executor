@@ -74,6 +74,7 @@ class Job:
     parallelism: int
     split_strategy: str
     failure_policy: str
+    exec_mode: str = "copy"
     job_id: str = field(default_factory=lambda: _new_id("job"))
     status: JobStatus = JobStatus.PENDING
     tasks: list[Task] = field(default_factory=list)
@@ -152,6 +153,11 @@ class CreateJobRequest(BaseModel):
     parallelism: int = Field(default=4, ge=1, le=128)
     split_strategy: Literal["contiguous", "round_robin"] = "contiguous"
     failure_policy: Literal["fail_fast", "best_effort"] = "fail_fast"
+    exec_mode: Literal["copy", "statement"] = Field(
+        default="copy",
+        description="copy: Impala read→Greenplum COPY. statement: wrapper로 감싼 "
+        "INSERT 등 SQL을 대상 DB에서 직접 실행(COPY 미사용).",
+    )
     sql_dialect: Optional[str] = Field(
         default=None,
         description="SQL 방언(미지정 시 서버 기본값). 예: hive, impala, postgres",

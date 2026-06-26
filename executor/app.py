@@ -20,35 +20,36 @@ logger = logging.getLogger(__name__)
 def _build_backend() -> Backend:
     """설정에 따라 실제 백엔드 또는 MockBackend를 선택한다.
 
-    impala.host 와 greenplum.dsn 이 모두 설정되어 있으면 실제 Impala→Greenplum
-    백엔드를 사용하고, 그렇지 않으면 MockBackend(실제 I/O 없음)로 동작한다.
+    greenplum.dsn 이 설정되면 실제 백엔드(ImpalaToGreenplumBackend)를 사용한다.
+      - statement 모드: greenplum.dsn 만 있으면 동작(INSERT ... SELECT 직접 실행)
+      - copy 모드: impala.host 도 있어야 동작(Impala read → Greenplum COPY)
+    아무 것도 없으면 MockBackend(실제 I/O 없음)로 동작한다.
     """
-    if settings.impala_host and settings.greenplum_dsn:
-        impala_dsn: dict = {
-            "host": settings.impala_host,
-            "port": settings.impala_port,
-            "database": settings.impala_database,
-            "auth_mechanism": settings.impala_auth_mechanism,
-            "use_ssl": settings.impala_use_ssl,
-        }
-        # TLS: CA 인증서로 서버 검증
-        if settings.impala_ca_cert:
-            impala_dsn["ca_cert"] = settings.impala_ca_cert
-        # Kerberos(GSSAPI): 서비스명 지정. 티켓은 OS 자격증명 캐시(KRB5CCNAME)를 사용한다.
-        if settings.impala_auth_mechanism.upper() == "GSSAPI":
-            impala_dsn["kerberos_service_name"] = settings.impala_kerberos_service_name
-        else:
-            # LDAP/PLAIN 인증일 때만 user/password 사용
-            if settings.impala_user:
-                impala_dsn["user"] = settings.impala_user
-            if settings.impala_password:
-                impala_dsn["password"] = settings.impala_password
+    if settings.greenplum_dsn:
+        impala_dsn: dict = {}
+        if settings.impala_host:
+            impala_dsn = {
+                "host": settings.impala_host,
+                "port": settings.impala_port,
+                "database": settings.impala_database,
+                "auth_mechanism": settings.impala_auth_mechanism,
+                "use_ssl": settings.impala_use_ssl,
+            }
+            # TLS: CA 인증서로 서버 검증
+            if settings.impala_ca_cert:
+                impala_dsn["ca_cert"] = settings.impala_ca_cert
+            # Kerberos(GSSAPI): 서비스명 지정. 티켓은 OS 자격증명 캐시(KRB5CCNAME)를 사용한다.
+            if settings.impala_auth_mechanism.upper() == "GSSAPI":
+                impala_dsn["kerberos_service_name"] = settings.impala_kerberos_service_name
+            else:
+                # LDAP/PLAIN 인증일 때만 user/password 사용
+                if settings.impala_user:
+                    impala_dsn["user"] = settings.impala_user
+                if settings.impala_password:
+                    impala_dsn["password"] = settings.impala_password
         logger.info(
-            "ImpalaToGreenplumBackend 사용 (impala=%s:%s, auth=%s, ssl=%s, batch=%s)",
-            settings.impala_host,
-            settings.impala_port,
-            settings.impala_auth_mechanism,
-            settings.impala_use_ssl,
+            "ImpalaToGreenplumBackend 사용 (impala=%s, batch=%s)",
+            settings.impala_host or "(미설정 → statement 모드만)",
             settings.copy_batch_size,
         )
         return ImpalaToGreenplumBackend(
@@ -56,7 +57,7 @@ def _build_backend() -> Backend:
             greenplum_dsn=settings.greenplum_dsn,
             batch_size=settings.copy_batch_size,
         )
-    logger.warning("impala.host/greenplum.dsn 미설정 → MockBackend 사용")
+    logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()
 
 
@@ -100,17 +101,24 @@ def create_app(
             # impyla/psycopg는 블로킹이므로 스레드에서 실행해 이벤트 루프를 막지 않는다.
             task.status = TaskStatus.WRITING
             await history.record(task)  # WRITING 이력
-            rows = await loop.run_in_executor(
-                None,
-                lambda: app.state.backend.move(
-                    task.sub_query,
-                    task.target_table,
-                    task.write_mode,
-                    task.partition_column,
-                    task.partition_values,
-                    progress,
-                ),
-            )
+            if task.exec_mode == "statement":
+                # wrapper 로 감싼 INSERT 등을 대상 DB에서 그대로 실행(COPY 미사용)
+                rows = await loop.run_in_executor(
+                    None, lambda: app.state.backend.execute(task.sub_query)
+                )
+            else:
+                # copy 모드: Impala read → Greenplum COPY
+                rows = await loop.run_in_executor(
+                    None,
+                    lambda: app.state.backend.move(
+                        task.sub_query,
+                        task.target_table,
+                        task.write_mode,
+                        task.partition_column,
+                        task.partition_values,
+                        progress,
+                    ),
+                )
             task.rows_written = rows
             # 실행 중 취소 요청이 들어왔으면 DONE 대신 CANCELLED 처리
             if task.cancel_requested:
@@ -143,6 +151,7 @@ def create_app(
             write_mode=req.write_mode,
             partition_column=req.partition_column,
             partition_values=req.partition_values,
+            exec_mode=req.exec_mode,
         )
         tasks[task.task_id] = task
         await history.record(task)  # QUEUED 이력
