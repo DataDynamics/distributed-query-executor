@@ -19,6 +19,11 @@ coordinator:
   host: ${coordinator.host:0.0.0.0}
   port: ${coordinator.port:8000}
   executor_mode: ${coordinator.executor_mode:remote}
+  id: ${coordinator.id:}
+
+store:
+  backend: ${store.backend:memory}
+  table: ${store.table:jobs}
   executors: ${coordinator.executors:}
   max_concurrent_jobs: ${coordinator.max_concurrent_jobs:16}
   max_dispatch_concurrency: ${coordinator.max_dispatch_concurrency:32}
@@ -40,6 +45,10 @@ history:
 
 executor:
   host: ${executor.host:0.0.0.0}
+  self_report: ${executor.self_report:false}
+  status_table: ${executor.status_table:executor_status}
+  status_interval_s: ${executor.status_interval_s:10}
+  max_concurrent_tasks: ${executor.max_concurrent_tasks:8}
   impala:
     host: ${impala.host:}
     port: ${impala.port:21050}

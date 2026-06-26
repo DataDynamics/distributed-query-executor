@@ -15,7 +15,8 @@ from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
-from .job_store import JobStore
+from .executor_status import ExecutorStatusRepository
+from .job_store import JobStore, build_job_store
 from .models import (
     CreateJobRequest,
     CreateJobResponse,
@@ -45,22 +46,30 @@ def create_app(
     settings: Optional[Settings] = None,
 ) -> FastAPI:
     settings = settings or default_settings
-    store = store or JobStore()
+    store = store or build_job_store(settings)
     if runner is None:
         runner = (
-            LocalDispatcher(settings)
+            LocalDispatcher(settings, store=store)
             if settings.executor_mode == "local"
-            else HttpDispatcher(settings)
+            else HttpDispatcher(settings, store=store)
         )
     monitor = HealthMonitor(settings)
+    # self-report 모드면 executor 상태를 공유 테이블에서 읽는다(coordinator 폴링/기록 안 함)
+    status_repo = (
+        ExecutorStatusRepository(settings.history_db_dsn, settings.executor_status_table)
+        if settings.executor_self_report and settings.history_db_dsn
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        await monitor.start()
+        if status_repo is None:
+            await monitor.start()
         try:
             yield
         finally:
-            await monitor.stop()
+            if status_repo is None:
+                await monitor.stop()
 
     app = FastAPI(
         title="Distributed Query Coordinator",
@@ -81,6 +90,7 @@ def create_app(
     app.state.runner = runner
     app.state.settings = settings
     app.state.monitor = monitor
+    app.state.status_repo = status_repo
 
     @app.exception_handler(QueryValidationError)
     async def _validation_handler(_: Request, exc: QueryValidationError):
@@ -254,8 +264,12 @@ def create_app(
                 status_code=409,
                 detail=f"이미 종료된 작업입니다(status={job.status.value}).",
             )
-        await runner.cancel(job)
+        # 공유 store 에 취소 플래그(다른 coordinator가 소유한 작업도 감지하도록)
+        store.request_cancel(job_id)
+        job.cancel_requested = True
+        await runner.cancel(job)  # 로컬 소유면 즉시 취소 + executor 전파
         job.status = JobStatus.CANCELLED
+        store.save(job)
         return job.progress_view()
 
     @app.get("/jobs/{job_id}/result", tags=["Jobs"], summary="작업 결과(적재 요약) 조회")
@@ -286,6 +300,8 @@ def create_app(
         description="모니터가 주기 폴링으로 보유한 executor별 CPU/메모리/디스크 상태.",
     )
     def list_executor_health():
+        if status_repo is not None:
+            return {"executors": status_repo.read_all()}
         return {"executors": monitor.snapshot()}
 
     @app.get(
@@ -296,7 +312,11 @@ def create_app(
         "실행 중인 job 수를 한 번에 반환한다. refresh=true(기본)면 executor를 즉시 폴링한다.",
     )
     async def cluster(refresh: bool = True):
-        executors = await monitor.poll_now() if refresh else monitor.snapshot()
+        if status_repo is not None:
+            # 멀티 coordinator: executor self-report 공유 테이블에서 조회
+            executors = status_repo.read_all()
+        else:
+            executors = await monitor.poll_now() if refresh else monitor.snapshot()
         coord_metrics = await asyncio.to_thread(
             collect_system_metrics, settings.monitor_disk_path
         )

@@ -68,6 +68,34 @@ class Task:
     def detail(self) -> dict:
         return {**self.summary(), "sub_query": self.sub_query}
 
+    def to_record(self) -> dict:
+        """공유 저장용 전체 직렬화."""
+        return {
+            "job_id": self.job_id,
+            "executor_url": self.executor_url,
+            "sub_query": self.sub_query,
+            "partition_values": self.partition_values,
+            "task_id": self.task_id,
+            "status": self.status.value,
+            "rows_written": self.rows_written,
+            "attempt": self.attempt,
+            "error": self.error,
+        }
+
+    @classmethod
+    def from_record(cls, d: dict) -> "Task":
+        return cls(
+            job_id=d["job_id"],
+            executor_url=d.get("executor_url"),
+            sub_query=d["sub_query"],
+            partition_values=list(d.get("partition_values") or []),
+            task_id=d["task_id"],
+            status=TaskStatus(d.get("status", "QUEUED")),
+            rows_written=d.get("rows_written", 0),
+            attempt=d.get("attempt", 0),
+            error=d.get("error"),
+        )
+
 
 @dataclass
 class Job:
@@ -120,6 +148,55 @@ class Job:
             "finished_at": self.finished_at,
             "tasks": [t.summary() for t in self.tasks],
         }
+
+    def to_record(self) -> dict:
+        """공유 저장(SqlJobStore)용 전체 직렬화."""
+        return {
+            "job_id": self.job_id,
+            "original_sql": self.original_sql,
+            "partition_column": self.partition_column,
+            "target_table": self.target_table,
+            "write_mode": self.write_mode,
+            "parallelism": self.parallelism,
+            "split_strategy": self.split_strategy,
+            "failure_policy": self.failure_policy,
+            "exec_mode": self.exec_mode,
+            "staging_table": self.staging_table,
+            "staging_ddl": self.staging_ddl,
+            "insert_sql": self.insert_sql,
+            "status": self.status.value,
+            "error": self.error,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "cancel_requested": self.cancel_requested,
+            "tasks": [t.to_record() for t in self.tasks],
+        }
+
+    @classmethod
+    def from_record(cls, d: dict) -> "Job":
+        job = cls(
+            original_sql=d["original_sql"],
+            partition_column=d["partition_column"],
+            target_table=d["target_table"],
+            write_mode=d["write_mode"],
+            parallelism=d["parallelism"],
+            split_strategy=d["split_strategy"],
+            failure_policy=d["failure_policy"],
+            exec_mode=d.get("exec_mode", "copy"),
+            staging_table=d.get("staging_table"),
+            staging_ddl=d.get("staging_ddl"),
+            insert_sql=d.get("insert_sql"),
+            job_id=d["job_id"],
+            status=JobStatus(d.get("status", "PENDING")),
+            error=d.get("error"),
+            created_at=d.get("created_at") or _now_iso(),
+            started_at=d.get("started_at"),
+            finished_at=d.get("finished_at"),
+            cancel_requested=d.get("cancel_requested", False),
+        )
+        job.tasks = [Task.from_record(t) for t in d.get("tasks", [])]
+        return job
 
     def progress_view(self) -> dict:
         """진행 상태 확인용 경량 뷰(태스크 목록 제외)."""

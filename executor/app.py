@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -14,6 +15,7 @@ from core.metrics import collect_system_metrics
 from .backend import Backend, build_backend
 from .history import TaskHistoryRepository
 from .models import CreateTaskRequest, Task, TaskStatus
+from .status import ExecutorStatusReporter
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +32,22 @@ def create_app(
     backend = backend or _build_backend()
     history = task_history or TaskHistoryRepository(settings)
     tasks: dict[str, Task] = {}
+    # 동시 task 상한(admission control). 0 이면 무제한.
+    _max = settings.executor_max_concurrent_tasks
+    sem = asyncio.Semaphore(_max) if _max and _max > 0 else None
+    reporter = ExecutorStatusReporter(settings)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if settings.executor_self_report:
+            await reporter.start()
+        try:
+            yield
+        finally:
+            await reporter.stop()
 
     app = FastAPI(
+        lifespan=lifespan,
         title="Distributed Query Executor",
         version="0.1.0",
         description=(
@@ -49,9 +65,14 @@ def create_app(
     app.state.task_history = history
 
     async def _run_with_ctx(task: Task) -> None:
-        # 백그라운드 실행 로그에도 [job_id][task_id] 가 붙도록 컨텍스트 바인딩
+        # 백그라운드 실행 로그에도 [job_id][task_id] 가 붙도록 컨텍스트 바인딩 +
+        # 동시 task 상한(admission control) 적용: 초과분은 슬롯이 날 때까지 대기.
         with job_log_context(task.job_id, task.task_id):
-            await _run(task)
+            if sem is not None:
+                async with sem:
+                    await _run(task)
+            else:
+                await _run(task)
 
     async def _run(task: Task) -> None:
         def progress(n: int) -> None:

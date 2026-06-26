@@ -9,6 +9,8 @@ coordinator·executor 가 동일한 설정 파일을 공유하며, 각자 필요
 """
 
 import os
+import socket
+import uuid
 from pathlib import Path
 
 from core.config_loader import load_config
@@ -81,6 +83,19 @@ class Settings:
             os.getenv("COORDINATOR_EXECUTOR_MODE")
             or _get("coordinator", "executor_mode", "remote")
         ).lower()
+        # 멀티 coordinator 식별자(로그/공유 store 소유 표기). 미지정 시 host:port 기반.
+        self.coordinator_id: str = (
+            os.getenv("COORDINATOR_ID")
+            or _get("coordinator", "id", "")
+            or f"{socket.gethostname()}:{self.coordinator_port}"
+        )
+
+        # ───────── 공유 상태 저장소(멀티 coordinator) ─────────
+        # store.backend: memory(기본, 단일) | postgres(공유). DSN 은 history.db_dsn 재사용.
+        self.store_backend: str = (
+            os.getenv("STORE_BACKEND") or _get("store", "backend", "memory")
+        ).lower()
+        self.store_table: str = _get("store", "table", "jobs")
         # dispatcher/app 에서 사용하는 속성명과 호환되도록 별칭 유지
         self.executors: list[str] = _csv_list(_get("coordinator", "executors", ""))
         self.max_concurrent_jobs: int = int(
@@ -121,6 +136,18 @@ class Settings:
 
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")
+        # executor self-report(멀티 coordinator): executor가 자기 상태를 공유 DB에 기록
+        self.executor_self_report: bool = _to_bool(
+            os.getenv("EXECUTOR_SELF_REPORT") or _get("executor", "self_report", False)
+        )
+        self.executor_status_table: str = _get("executor", "status_table", "executor_status")
+        self.executor_status_interval_s: float = float(
+            _get("executor", "status_interval_s", 10)
+        )
+        # executor 자체 동시 task 상한(admission control). 0 이면 무제한.
+        self.executor_max_concurrent_tasks: int = int(
+            _get("executor", "max_concurrent_tasks", 8)
+        )
         # Impala (source) — TLS + Kerberos(GSSAPI) 환경
         self.impala_host: str = _get_nested("executor", "impala", "host", "")
         self.impala_port: int = int(_get_nested("executor", "impala", "port", 21050))

@@ -7,6 +7,7 @@ Coordinator는 결과 행을 직접 받지 않는다. executor가 Impala -> Gree
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Optional, Protocol
 
@@ -16,6 +17,9 @@ from core.logging import job_log_context
 from .config import Settings
 from .history import JobHistoryRepository
 from .models import Job, JobStatus, Task, TaskStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -48,16 +52,39 @@ class JobRunner(Protocol):
 class HttpDispatcher:
     """executor 서비스와 HTTP로 통신하는 실제 디스패처."""
 
-    def __init__(self, settings: Settings, history: Optional[JobHistoryRepository] = None):
+    def __init__(self, settings: Settings, history: Optional[JobHistoryRepository] = None, store=None):
         self.settings = settings
         self._sem = asyncio.Semaphore(settings.max_dispatch_concurrency)
         self.history = history or JobHistoryRepository(settings)
+        self.store = store
+
+    def _save(self, job: Job) -> None:
+        if self.store is None:
+            return
+        try:
+            self.store.save(job)
+        except Exception:
+            logger.exception("job %s 저장 실패", job.job_id)
+
+    def _cancel_observed(self, job: Job) -> bool:
+        """로컬 플래그 또는 공유 store 의 취소 요청을 확인(멀티 coordinator)."""
+        if job.cancel_requested:
+            return True
+        if self.store is not None:
+            try:
+                if self.store.is_cancel_requested(job.job_id):
+                    job.cancel_requested = True
+                    return True
+            except Exception:
+                logger.exception("취소 플래그 조회 실패 job=%s", job.job_id)
+        return False
 
     async def run(self, job: Job) -> str:
         """Job 을 실행하고 job_id 를 반환한다. 시작/종료 이력을 DB에 기록한다."""
         with job_log_context(job.job_id):
             job.status = JobStatus.RUNNING
             job.started_at = _now_iso()
+            self._save(job)
             await self.history.record(job)  # 시작 이력
             try:
                 async with httpx.AsyncClient(timeout=self.settings.task_timeout_s) as client:
@@ -67,6 +94,7 @@ class HttpDispatcher:
             finally:
                 self._finalize(job)
                 job.finished_at = _now_iso()
+                self._save(job)
                 await self.history.record(job)  # 종료 이력
             return job.job_id
 
@@ -97,10 +125,12 @@ class HttpDispatcher:
             except Exception as exc:  # 네트워크 / 타임아웃 / executor 오류
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
+            finally:
+                self._save(job)
 
     async def _poll(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         while task.status not in _TERMINAL:
-            if job.cancel_requested:
+            if self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
                 return
             await asyncio.sleep(self.settings.poll_interval_s)
@@ -141,11 +171,32 @@ class LocalDispatcher:
     기본 백엔드는 build_backend(settings)(greenplum.dsn 없으면 MockBackend).
     """
 
-    def __init__(self, settings: Settings, history: Optional[JobHistoryRepository] = None, backend=None):
+    def __init__(self, settings: Settings, history: Optional[JobHistoryRepository] = None, backend=None, store=None):
         self.settings = settings
         self.history = history or JobHistoryRepository(settings)
         self._sem = asyncio.Semaphore(settings.max_dispatch_concurrency)
         self._backend = backend
+        self.store = store
+
+    def _save(self, job: Job) -> None:
+        if self.store is None:
+            return
+        try:
+            self.store.save(job)
+        except Exception:
+            logger.exception("job %s 저장 실패", job.job_id)
+
+    def _cancel_observed(self, job: Job) -> bool:
+        if job.cancel_requested:
+            return True
+        if self.store is not None:
+            try:
+                if self.store.is_cancel_requested(job.job_id):
+                    job.cancel_requested = True
+                    return True
+            except Exception:
+                logger.exception("취소 플래그 조회 실패 job=%s", job.job_id)
+        return False
 
     def _get_backend(self):
         if self._backend is None:
@@ -157,18 +208,20 @@ class LocalDispatcher:
         with job_log_context(job.job_id):
             job.status = JobStatus.RUNNING
             job.started_at = _now_iso()
+            self._save(job)
             await self.history.record(job)
             try:
                 await asyncio.gather(*(self._run_task(job, t) for t in job.tasks))
             finally:
                 finalize_job(job)
                 job.finished_at = _now_iso()
+                self._save(job)
                 await self.history.record(job)
             return job.job_id
 
     async def _run_task(self, job: Job, task: Task) -> None:
         async with self._sem:
-            if job.cancel_requested:
+            if self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
                 return
             backend = self._get_backend()
@@ -202,6 +255,8 @@ class LocalDispatcher:
             except Exception as exc:
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
+            finally:
+                self._save(job)
 
     async def cancel(self, job: Job) -> None:
         with job_log_context(job.job_id):

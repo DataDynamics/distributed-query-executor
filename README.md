@@ -299,6 +299,40 @@ SELECT recorded_at, task_id, executor_id, status, rows_written
 FROM task_history WHERE job_id = '<job_id>' ORDER BY recorded_at;
 ```
 
+## 멀티 coordinator
+
+coordinator를 여러 대 둘 수 있다. 이때 두 가지를 공유 PostgreSQL(`history.db_dsn`)로
+옮긴다(설정은 모든 coordinator·executor가 동일 DSN 공유).
+
+| 설정 | 효과 |
+|---|---|
+| `store.backend=postgres` | **공유 Job 저장소**(`jobs` 테이블). 어느 coordinator로 상태조회/취소 요청이 가도 동작 |
+| `executor.self_report=true` | **executor가 자기 상태를 직접 기록**(`executor_status` 테이블). coordinator는 읽기만 → 중복 폴링/기록 제거 |
+
+```properties
+# 모든 coordinator/executor 공통
+history.db_dsn=postgresql://user:pass@pg:5432/queryexec
+store.backend=postgres
+executor.self_report=true
+coordinator.id=coord-1     # 인스턴스마다 다르게(미지정 시 host:port)
+```
+
+동작:
+- **상태 조회/결과/취소**(`GET /jobs/{id}`·`/status`·`/result`, `POST /jobs/{id}/cancel`)가
+  공유 `jobs` 테이블 기반이라 **아무 coordinator로 라우팅돼도** 응답한다. 디스패처는 실행 중
+  스냅샷을 주기적으로 store에 저장한다.
+- **cross-coordinator 취소**: 다른 coordinator가 소유한 작업도 `cancel_requested` 플래그를
+  공유 store에 세우면 소유 coordinator가 polling 중 감지해 중단한다.
+- **executor 상태**: executor가 `executor.status_interval_s` 마다 `executor_status` 에
+  upsert(heartbeat). coordinator의 `/executors`·`/cluster` 는 이 테이블을 읽고, liveness 는
+  `updated_at` 신선도로 판정한다. (self_report 모드에선 coordinator 폴링/기록 미가동)
+- **executor admission control**: `executor.max_concurrent_tasks` 로 executor가 동시 실행
+  task 수를 제한(여러 coordinator의 합산 부하 방어). 초과분은 슬롯이 날 때까지 대기.
+
+스키마: `packaging/config/jobs-schema.sql`, `executor-status-schema.sql`(둘 다 앱이 자동 생성).
+
+> 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 두면 된다.
+
 ## 로컬 모드 (local mode)
 
 executor를 별도로 띄우지 않고 **coordinator 안에서 in-process로 직접 실행**한다. HTTP
