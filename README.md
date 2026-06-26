@@ -240,6 +240,25 @@ curl -s localhost:8000/jobs/$JOB
 | `GET /jobs/{job_id}/result` | 적재 결과 요약 |
 | `POST /jobs/{job_id}/cancel` | 작업 취소(각 executor에 전파). 이미 종료면 409 |
 
+### dry-run (쿼리 미리보기)
+
+`dry_run: true` 면 executor를 **호출하지 않고** 생성된 쿼리만 로깅·반환한다(작업 미저장,
+200 응답). 분할/래핑/스테이징 결과가 제대로 만들어지는지 확인하는 용도다.
+
+```bash
+curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+  "sql": "SELECT a, dt FROM sales WHERE dt IN ('\''1'\'','\''2'\'','\''3'\'')",
+  "partition_column": "dt", "target_table": "public.t", "parallelism": 2,
+  "dry_run": true
+}'
+# {"dry_run":true,"exec_mode":"copy","task_count":2,
+#  "tasks":[{"executor_url":null,"partition_values":["'1'","'2'"],
+#            "sub_query":"SELECT a, dt FROM sales WHERE dt IN ('1', '2')"}, ...]}
+```
+
+- 각 task의 `sub_query`(및 stage_insert면 `staging_ddl`/`insert_sql`)를 그대로 보여준다.
+- 검증은 동일하게 수행되므로 잘못된 쿼리는 dry-run에서도 422.
+
 ### 작업 취소
 
 ```bash

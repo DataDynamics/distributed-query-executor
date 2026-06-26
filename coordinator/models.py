@@ -170,6 +170,10 @@ class CreateJobRequest(BaseModel):
         default=None,
         description="stage_insert 모드: staging 테이블 생성 DDL(예: CREATE TEMP TABLE ...).",
     )
+    dry_run: bool = Field(
+        default=False,
+        description="True면 executor를 호출하지 않고 생성된 쿼리만 로깅/반환한다(작업 미저장).",
+    )
     sql_dialect: Optional[str] = Field(
         default=None,
         description="SQL 방언(미지정 시 서버 기본값). 예: hive, impala, postgres",

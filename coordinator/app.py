@@ -82,8 +82,9 @@ def create_app(
         status_code=202,
         tags=["Jobs"],
         summary="쿼리 작업 생성",
-        description="SQL을 검증·분할하여 작업을 생성하고 비동기로 디스패치한다. "
-        "검증 실패 시 422(error_code 포함)를 반환한다.",
+        description="SQL을 검증·분할하여 작업을 생성하고 비동기로 디스패치한다(202). "
+        "dry_run=true 면 executor 호출 없이 생성된 쿼리만 반환한다(200). "
+        "검증 실패 시 422(error_code 포함).",
     )
     def create_job(req: CreateJobRequest, background: BackgroundTasks):
         # 동기 검증 + 분할: 오류는 지금 즉시 클라이언트에게 반환한다.
@@ -125,6 +126,40 @@ def create_app(
             for sq in sub_queries:
                 sq.sql = wrap(sq.sql, req.wrapper_query, req.wrapper_placeholder)
 
+        executor_urls = _assign_executors(len(sub_queries), settings.executors)
+
+        # dry-run: executor 호출 없이 생성된 쿼리만 로깅/반환(작업 미저장)
+        if req.dry_run:
+            plan = []
+            for idx, (sq, url) in enumerate(zip(sub_queries, executor_urls), 1):
+                entry = {
+                    "executor_url": url,
+                    "partition_values": sq.partition_values,
+                    "sub_query": sq.sql,
+                }
+                logger.info(
+                    "[dry-run] task#%d (exec_mode=%s) sub_query=%s",
+                    idx, req.exec_mode, sq.sql,
+                )
+                if req.exec_mode == "stage_insert":
+                    entry["staging_table"] = req.staging_table
+                    entry["staging_ddl"] = req.staging_ddl
+                    entry["insert_sql"] = req.wrapper_query
+                    logger.info("[dry-run] task#%d staging_ddl=%s", idx, req.staging_ddl)
+                    logger.info("[dry-run] task#%d insert_sql=%s", idx, req.wrapper_query)
+                plan.append(entry)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "dry_run": True,
+                    "exec_mode": req.exec_mode,
+                    "partition_column": req.partition_column,
+                    "target_table": req.target_table,
+                    "task_count": len(plan),
+                    "tasks": plan,
+                },
+            )
+
         job = Job(
             original_sql=req.sql,
             partition_column=req.partition_column,
@@ -139,7 +174,6 @@ def create_app(
             insert_sql=req.wrapper_query if req.exec_mode == "stage_insert" else None,
             status=JobStatus.SPLITTING,
         )
-        executor_urls = _assign_executors(len(sub_queries), settings.executors)
         job.tasks = [
             Task(
                 job_id=job.job_id,
