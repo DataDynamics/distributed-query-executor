@@ -64,6 +64,26 @@ def test_jobs_list_endpoint(client, store):
     assert all(j["status"] in ("RUNNING", "SPLITTING", "PENDING") for j in only_running["jobs"])
 
 
+def test_history_endpoint_disabled_without_dsn(client):
+    # 기본 설정엔 history.db_dsn 이 없어 비활성(빈 결과)
+    body = client.get("/history?limit=20&offset=0").json()
+    assert body["enabled"] is False
+    assert body["rows"] == []
+    assert body["total"] == 0
+
+
+def test_history_clamps_limit(client):
+    body = client.get("/history?limit=9999&offset=-5").json()
+    assert body["limit"] <= 200
+    assert body["offset"] == 0
+
+
+def test_dashboard_has_history_tab(client):
+    html = client.get("/").text
+    assert 'data-tab="hist"' in html
+    assert "실행 이력" in html
+
+
 def test_dashboard_disabled(monkeypatch):
     from fastapi.testclient import TestClient
     from coordinator.app import create_app

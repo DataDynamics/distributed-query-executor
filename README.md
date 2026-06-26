@@ -365,6 +365,7 @@ curl -s localhost:8000/jobs/<job_id>/status   # {"status":"DONE", ...}
 | 탭 | 데이터 | 내용 |
 |---|---|---|
 | 처리중인 Query | `GET /jobs` | 작업 목록(상태/진행률/완료수/rows/exec_mode/partition/target) + 총/실행/활성 카드 |
+| 실행 이력 | `GET /history?limit=&offset=` | 과거 실행 이력(PostgreSQL `job_history`), **페이징**(이전/다음). DSN 미설정 시 안내 |
 | Executor 상황 | `GET /cluster` | coordinator CPU/메모리/디스크 카드 + executor별 health·CPU/MEM/DISK·last_seen |
 | 환경설정 | `GET /config` | 설정 key/value 표(**비밀값 마스킹**: DSN 비밀번호 `user:***@`, impala 비밀번호 `***`) |
 | 그외 정보 | `GET /info` | 버전·coordinator_id·executor_mode·store backend·self_report·uptime·상태별 job 수 |

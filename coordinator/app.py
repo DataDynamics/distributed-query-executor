@@ -19,6 +19,7 @@ from .dashboard import DASHBOARD_HTML, masked_config
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .executor_status import ExecutorStatusRepository
+from .history import JobHistoryRepository
 from .job_store import JobStore, build_job_store
 from .models import (
     CreateJobRequest,
@@ -402,6 +403,14 @@ def create_app(
             for j in jobs[:limit]
         ]
         return {"jobs": rows, "total": total_all, "running": running, "active": active}
+
+    history_reader = JobHistoryRepository(settings)
+
+    @app.get("/history", tags=["Jobs"], summary="과거 실행 이력(페이징)")
+    def get_history(limit: int = 20, offset: int = 0):
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+        return history_reader.read(limit=limit, offset=offset)
 
     if settings.dashboard_enabled:
 

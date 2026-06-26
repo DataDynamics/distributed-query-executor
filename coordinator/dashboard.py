@@ -107,6 +107,10 @@ DASHBOARD_HTML = """<!doctype html>
   .bar > i { display:block; height:100%; background:var(--acc); }
   .mut{color:var(--mut);} .err{color:var(--bad);} code{color:var(--acc);}
   .sec { color:var(--warn); font-weight:600; }
+  .pager { display:flex; gap:10px; align-items:center; margin-top:10px; }
+  .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+                  padding:6px 12px; border-radius:6px; cursor:pointer; }
+  .pager button:disabled { color:var(--mut); cursor:default; opacity:.5; }
 </style>
 </head>
 <body>
@@ -117,12 +121,14 @@ DASHBOARD_HTML = """<!doctype html>
 </header>
 <div class="tabs">
   <button data-tab="jobs" class="active">처리중인 Query</button>
+  <button data-tab="hist">실행 이력</button>
   <button data-tab="exec">Executor</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
 </div>
 <main>
   <section class="panel active" id="p-jobs"></section>
+  <section class="panel" id="p-hist"></section>
   <section class="panel" id="p-exec"></section>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
@@ -168,6 +174,38 @@ async function loadJobs(){
        <div class="card"><div class="k">활성(대기+실행)</div><div class="v">${d.active}</div></div>
      </div>` + table(cols, d.jobs);
 }
+let histOffset = 0; const HIST_LIMIT = 20; let histTotal = 0;
+async function loadHist(){
+  const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}`);
+  if(!d.enabled){
+    $("#p-hist").innerHTML = `<p class="mut">이력 DB(history.db_dsn)가 설정되지 않았습니다. ` +
+      `PostgreSQL 설정 시 과거 실행 이력이 표시됩니다.</p>`;
+    return;
+  }
+  histTotal = d.total || 0;
+  const cols = [
+    {t:"기록 시각", f:r=>`<span class="mut">${fmt(r.recorded_at)}</span>`},
+    {t:"작업 ID", f:r=>`<code>${r.job_id}</code>`},
+    {t:"상태", f:r=>pill(r.status)},
+    {t:"파티션 컬럼", k:"partition_column"},
+    {t:"대상 테이블", k:"target_table"},
+    {t:"완료/전체", f:r=>`${fmt(r.completed_tasks)}/${fmt(r.total_tasks)}`},
+    {t:"적재 행수", k:"total_rows_written"},
+    {t:"에러", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+  ];
+  const n = d.rows ? d.rows.length : 0;
+  const from = histTotal ? histOffset + 1 : 0;
+  const to = histOffset + n;
+  const pager = `<div class="pager">
+      <button onclick="histPrev()" ${histOffset<=0?'disabled':''}>← 이전</button>
+      <span class="mut">${from}–${to} / ${histTotal}</span>
+      <button onclick="histNext()" ${to>=histTotal?'disabled':''}>다음 →</button>
+    </div>`;
+  $("#p-hist").innerHTML = table(cols, d.rows) + pager;
+}
+function histPrev(){ histOffset = Math.max(0, histOffset - HIST_LIMIT); loadHist(); }
+function histNext(){ if(histOffset + HIST_LIMIT < histTotal){ histOffset += HIST_LIMIT; loadHist(); } }
+
 async function loadExec(){
   const d = await getJSON("/cluster");
   const cm = d.coordinator.metrics;
@@ -206,7 +244,7 @@ async function loadInfo(){
   const cols = [{t:"key",k:"key"},{t:"value",f:r=>fmt(String(r.value))}];
   $("#p-info").innerHTML = table(cols, rows.concat(byStatus));
 }
-const loaders = {jobs:loadJobs, exec:loadExec, conf:loadConf, info:loadInfo};
+const loaders = {jobs:loadJobs, hist:loadHist, exec:loadExec, conf:loadConf, info:loadInfo};
 async function refresh(){
   try{ await loaders[active](); $("#upd").textContent = "갱신: " + new Date().toLocaleTimeString();}
   catch(e){ $("#upd").textContent = "갱신 실패: " + e; }

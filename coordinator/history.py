@@ -62,6 +62,36 @@ class JobHistoryRepository:
         except Exception:
             logger.exception("job %s 이력 기록 실패", job.job_id)
 
+    def read(self, limit: int = 20, offset: int = 0) -> dict:
+        """과거 실행 이력 조회(페이징). 반환: {enabled, rows, total, limit, offset}."""
+        if not self.enabled:
+            return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
+        import psycopg  # 지연 임포트
+
+        with psycopg.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(_CREATE_TABLE.format(table=self.table))  # 없으면 생성
+                cur.execute(f"SELECT count(*) FROM {self.table}")
+                total = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT recorded_at, job_id, status, partition_column, target_table, "
+                    "completed_tasks, total_tasks, total_rows_written, error "
+                    f"FROM {self.table} ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
+                    (limit, offset),
+                )
+                rows = cur.fetchall()
+            conn.commit()
+        out = [
+            {
+                "recorded_at": r[0].isoformat() if r[0] is not None else None,
+                "job_id": r[1], "status": r[2], "partition_column": r[3],
+                "target_table": r[4], "completed_tasks": r[5], "total_tasks": r[6],
+                "total_rows_written": r[7], "error": r[8],
+            }
+            for r in rows
+        ]
+        return {"enabled": True, "rows": out, "total": total, "limit": limit, "offset": offset}
+
     def _write(self, job) -> None:
         import psycopg  # 지연 임포트
 
