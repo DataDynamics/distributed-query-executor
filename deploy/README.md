@@ -9,6 +9,8 @@ coordinator 1개와 executor 다수를 systemd 서비스로 운영하기 위한 
 |---|---|
 | `systemd/query-coordinator.service` | coordinator 서비스 유닛 |
 | `systemd/query-executor@.service` | executor **템플릿** 유닛(인스턴스 이름 = 포트) |
+| `systemd/query-executor-kinit.service` | Impala Kerberos 티켓 발급(keytab → 공유 ccache) |
+| `systemd/query-executor-kinit.timer` | Kerberos 티켓 주기적 갱신(4시간) |
 | `../packaging/config/config.properties` | Java 스타일 key=value 변수 정의 |
 | `../packaging/config/config.yml` | `${변수:기본값}` 치환을 쓰는 메인 YAML 설정 |
 | `install.sh` | 사용자/디렉터리/venv/설정/유닛을 한 번에 구성하는 설치 스크립트 |
@@ -53,14 +55,14 @@ coordinator.executors=http://127.0.0.1:8001,http://127.0.0.1:8002
 coordinator.max_concurrent_jobs=16
 coordinator.max_dispatch_concurrency=32
 
-# Executor - Impala (source). 비어 있으면 MockBackend 사용
+# Executor - Impala (source). 비어 있으면 MockBackend 사용. TLS + Kerberos(GSSAPI)
 impala.host=
 impala.port=21050
 impala.database=default
-impala.user=
-impala.password=
-impala.auth_mechanism=PLAIN
-impala.use_ssl=false
+impala.auth_mechanism=GSSAPI
+impala.kerberos_service_name=impala
+impala.use_ssl=true
+impala.ca_cert=/etc/query-executor/impala-ca.pem
 
 # Executor - Greenplum (target). 비어 있으면 MockBackend 사용
 greenplum.dsn=
@@ -69,7 +71,46 @@ copy.batch_size=10000
 
 > `impala.host` 와 `greenplum.dsn` 이 **모두** 설정되면 실제 `ImpalaToGreenplumBackend`
 > 가 동작하고, 하나라도 비어 있으면 `MockBackend`(실제 I/O 없음)로 폴백한다.
-> 실제 연결 시에는 `requirements-executor.txt` 도 설치해야 한다(impyla, psycopg).
+> 실제 연결 시에는 `requirements-executor.txt` 도 설치해야 한다(impyla, psycopg, SASL/GSSAPI).
+
+## Impala TLS + Kerberos
+
+executor만 Impala에 접속한다(coordinator는 무관). TLS 검증용 CA 인증서와 Kerberos
+keytab을 배치하고, systemd kinit 타이머로 티켓을 주기적으로 갱신한다.
+
+```bash
+# 0) 시스템 패키지 (RHEL 9.2)
+sudo dnf install -y krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi \
+    gcc gcc-c++ make python3.11-devel
+
+# 1) executor 드라이버 + SASL/GSSAPI 설치
+sudo /opt/query-executor/.venv/bin/pip install -r /opt/query-executor/requirements-executor.txt
+
+# 2) TLS CA 인증서 배치
+sudo cp impala-ca.pem /etc/query-executor/impala-ca.pem
+sudo chown root:queryexec /etc/query-executor/impala-ca.pem
+sudo chmod 644 /etc/query-executor/impala-ca.pem
+
+# 3) Kerberos keytab 배치 (queryexec 만 읽도록 600)
+sudo cp impala.keytab /etc/query-executor/impala.keytab
+sudo chown queryexec:queryexec /etc/query-executor/impala.keytab
+sudo chmod 600 /etc/query-executor/impala.keytab
+
+# 4) kinit 유닛의 principal/keytab 경로 수정
+sudo systemctl edit --full query-executor-kinit.service
+#   ExecStart=/usr/bin/kinit -kt /etc/query-executor/impala.keytab impala-user@EXAMPLE.COM
+
+# 5) 티켓 갱신 타이머 활성화 (부팅 1분 후 + 4시간마다 재발급)
+sudo systemctl enable --now query-executor-kinit.timer
+```
+
+동작 방식:
+- `query-executor-kinit.service`(oneshot)가 keytab으로 `/var/lib/query-executor/krb5cc`
+  공유 자격증명 캐시에 티켓을 발급한다.
+- executor 유닛은 `KRB5CCNAME=FILE:/var/lib/query-executor/krb5cc` 를 사용하고
+  `Wants/After=query-executor-kinit.service` 로 기동 전에 티켓을 확보한다.
+- `query-executor-kinit.timer` 가 4시간마다 재발급해 만료를 방지한다.
+- 티켓 확인: `sudo -u queryexec KRB5CCNAME=FILE:/var/lib/query-executor/krb5cc klist`
 
 ## 운영 명령
 

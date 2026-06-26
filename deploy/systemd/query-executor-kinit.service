@@ -1,0 +1,18 @@
+[Unit]
+Description=Renew Kerberos ticket for query-executor (Impala 접속용)
+Documentation=https://github.com/DataDynamics/distributed-query-executor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=queryexec
+Group=queryexec
+# /var/lib/query-executor 를 생성하고 서비스 계정 소유로 만든다(공유 ccache 저장 위치).
+StateDirectory=query-executor
+Environment=KRB5CCNAME=FILE:/var/lib/query-executor/krb5cc
+# ▼ 배포 환경에 맞게 principal 과 keytab 경로를 수정하세요.
+ExecStart=/usr/bin/kinit -kt /etc/query-executor/impala.keytab impala-user@EXAMPLE.COM
+
+[Install]
+WantedBy=multi-user.target

@@ -27,10 +27,12 @@ executor:
     host: ${impala.host:}
     port: ${impala.port:21050}
     database: ${impala.database:default}
+    auth_mechanism: ${impala.auth_mechanism:GSSAPI}
+    kerberos_service_name: ${impala.kerberos_service_name:impala}
+    use_ssl: ${impala.use_ssl:true}
+    ca_cert: ${impala.ca_cert:}
     user: ${impala.user:}
     password: ${impala.password:}
-    auth_mechanism: ${impala.auth_mechanism:PLAIN}
-    use_ssl: ${impala.use_ssl:false}
   greenplum:
     dsn: ${greenplum.dsn:}
   copy:

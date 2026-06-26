@@ -35,6 +35,9 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
 - 핵심 항목: `coordinator.executors`, `impala.*`, `greenplum.dsn`, `copy.batch_size`
 - `impala.host` 와 `greenplum.dsn` 이 모두 설정되면 실제 `ImpalaToGreenplumBackend`,
   아니면 `MockBackend`(실제 I/O 없음)로 폴백
+- Impala는 **TLS + Kerberos(GSSAPI)**: `impala.use_ssl`/`impala.ca_cert`,
+  `impala.auth_mechanism=GSSAPI`/`impala.kerberos_service_name`. 티켓은 OS 자격증명
+  캐시(KRB5CCNAME)를 사용 → systemd kinit 서비스/타이머로 keytab 갱신 ([deploy/README.md](deploy/README.md))
 - 로깅: `/var/log/query-executor/` 에 일 단위 롤링 (`코드/argus 공통 포맷`)
 
 ## 실행 환경 (RHEL 9.2)
@@ -45,9 +48,10 @@ RHEL 9.2 기본 Python은 3.9이므로, **Python 3.11+** 를 별도 설치한다
 # 1) Python 3.11 및 빌드 도구 설치
 sudo dnf install -y python3.11 python3.11-pip python3.11-devel
 
-# 2) (executor를 실제 Impala/Greenplum에 연결할 때만) impyla 빌드 의존성
-#    impyla는 SASL/Thrift 컴파일이 필요할 수 있다.
-sudo dnf install -y gcc gcc-c++ make cyrus-sasl-devel
+# 2) (executor를 실제 Impala/Greenplum에 연결할 때만) impyla + Kerberos/TLS 의존성
+#    Impala 는 TLS + Kerberos(GSSAPI) 환경이다.
+sudo dnf install -y gcc gcc-c++ make python3.11-devel \
+    krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi
 ```
 
 ## 설치 및 테스트

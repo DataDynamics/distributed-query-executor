@@ -89,18 +89,23 @@ class Settings:
 
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")
-        # Impala (source)
+        # Impala (source) — TLS + Kerberos(GSSAPI) 환경
         self.impala_host: str = _get_nested("executor", "impala", "host", "")
         self.impala_port: int = int(_get_nested("executor", "impala", "port", 21050))
         self.impala_database: str = _get_nested("executor", "impala", "database", "default")
-        self.impala_user: str = _get_nested("executor", "impala", "user", "")
-        self.impala_password: str = _get_nested("executor", "impala", "password", "")
         self.impala_auth_mechanism: str = _get_nested(
-            "executor", "impala", "auth_mechanism", "PLAIN"
+            "executor", "impala", "auth_mechanism", "GSSAPI"
+        )
+        self.impala_kerberos_service_name: str = _get_nested(
+            "executor", "impala", "kerberos_service_name", "impala"
         )
         self.impala_use_ssl: bool = _to_bool(
-            _get_nested("executor", "impala", "use_ssl", False)
+            _get_nested("executor", "impala", "use_ssl", True)
         )
+        self.impala_ca_cert: str = _get_nested("executor", "impala", "ca_cert", "")
+        # GSSAPI 에서는 사용하지 않음(LDAP/PLAIN 인증일 때만)
+        self.impala_user: str = _get_nested("executor", "impala", "user", "")
+        self.impala_password: str = _get_nested("executor", "impala", "password", "")
         # Greenplum (target)
         self.greenplum_dsn: str = _get_nested("executor", "greenplum", "dsn", "")
         self.copy_batch_size: int = int(

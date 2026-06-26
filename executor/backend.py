@@ -38,7 +38,15 @@ class MockBackend:
 
 
 class ImpalaToGreenplumBackend:
-    """실제 백엔드: impyla로 Impala에서 스트리밍, psycopg COPY로 Greenplum에 적재."""
+    """실제 백엔드: impyla로 Impala에서 스트리밍, psycopg COPY로 Greenplum에 적재.
+
+    impala_dsn 은 impyla connect() 에 그대로 전달된다. TLS + Kerberos 환경에서는
+    아래 키를 포함한다:
+      auth_mechanism='GSSAPI', kerberos_service_name='impala',
+      use_ssl=True, ca_cert='/path/to/ca.pem'
+    Kerberos 티켓은 OS 자격증명 캐시(KRB5CCNAME)를 사용하므로, 서비스 실행 전에
+    keytab 으로 kinit 되어 있어야 한다(systemd kinit 서비스 참고).
+    """
 
     def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000):
         self.impala_dsn = impala_dsn

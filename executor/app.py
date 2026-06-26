@@ -29,14 +29,24 @@ def _build_backend() -> Backend:
             "auth_mechanism": settings.impala_auth_mechanism,
             "use_ssl": settings.impala_use_ssl,
         }
-        if settings.impala_user:
-            impala_dsn["user"] = settings.impala_user
-        if settings.impala_password:
-            impala_dsn["password"] = settings.impala_password
+        # TLS: CA 인증서로 서버 검증
+        if settings.impala_ca_cert:
+            impala_dsn["ca_cert"] = settings.impala_ca_cert
+        # Kerberos(GSSAPI): 서비스명 지정. 티켓은 OS 자격증명 캐시(KRB5CCNAME)를 사용한다.
+        if settings.impala_auth_mechanism.upper() == "GSSAPI":
+            impala_dsn["kerberos_service_name"] = settings.impala_kerberos_service_name
+        else:
+            # LDAP/PLAIN 인증일 때만 user/password 사용
+            if settings.impala_user:
+                impala_dsn["user"] = settings.impala_user
+            if settings.impala_password:
+                impala_dsn["password"] = settings.impala_password
         logger.info(
-            "ImpalaToGreenplumBackend 사용 (impala=%s:%s, batch=%s)",
+            "ImpalaToGreenplumBackend 사용 (impala=%s:%s, auth=%s, ssl=%s, batch=%s)",
             settings.impala_host,
             settings.impala_port,
+            settings.impala_auth_mechanism,
+            settings.impala_use_ssl,
             settings.copy_batch_size,
         )
         return ImpalaToGreenplumBackend(

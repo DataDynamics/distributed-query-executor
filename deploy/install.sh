@@ -63,11 +63,20 @@ chown "$APP_USER:$APP_USER" "$LOG_DIR"
 echo "==> systemd 유닛 설치"
 cp "$APP_DIR/deploy/systemd/query-coordinator.service" /etc/systemd/system/
 cp "$APP_DIR/deploy/systemd/query-executor@.service" /etc/systemd/system/
+# Impala Kerberos 티켓 발급/갱신 유닛
+cp "$APP_DIR/deploy/systemd/query-executor-kinit.service" /etc/systemd/system/
+cp "$APP_DIR/deploy/systemd/query-executor-kinit.timer" /etc/systemd/system/
 systemctl daemon-reload
 
 echo
-echo "설치 완료. 설정을 확인/수정하세요:"
-echo "  $CONF_DIR/config.properties , $CONF_DIR/config.yml"
+echo "설치 완료. 다음을 확인/수정하세요:"
+echo "  - 설정:        $CONF_DIR/config.properties , $CONF_DIR/config.yml"
+echo "  - Impala TLS:  $CONF_DIR/impala-ca.pem (CA 인증서 배치)"
+echo "  - Kerberos:    $CONF_DIR/impala.keytab (keytab 배치, 소유자 queryexec, 권한 600)"
+echo "                 query-executor-kinit.service 의 principal/keytab 경로 수정"
+echo
+echo "Kerberos 티켓 갱신 타이머 활성화:"
+echo "  sudo systemctl enable --now query-executor-kinit.timer"
 echo
 echo "기동:"
 echo "  sudo systemctl enable --now query-executor@8001 query-executor@8002"
