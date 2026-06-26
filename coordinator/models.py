@@ -106,6 +106,7 @@ class Job:
     parallelism: int
     split_strategy: str
     failure_policy: str
+    username: Optional[str] = None
     exec_mode: str = "copy"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
@@ -160,6 +161,7 @@ class Job:
             "parallelism": self.parallelism,
             "split_strategy": self.split_strategy,
             "failure_policy": self.failure_policy,
+            "username": self.username,
             "exec_mode": self.exec_mode,
             "staging_table": self.staging_table,
             "staging_ddl": self.staging_ddl,
@@ -183,6 +185,7 @@ class Job:
             parallelism=d["parallelism"],
             split_strategy=d["split_strategy"],
             failure_policy=d["failure_policy"],
+            username=d.get("username"),
             exec_mode=d.get("exec_mode", "copy"),
             staging_table=d.get("staging_table"),
             staging_ddl=d.get("staging_ddl"),
@@ -233,6 +236,7 @@ class CreateJobRequest(BaseModel):
     sql: str = Field(..., description="Impala SELECT 쿼리")
     partition_column: str = Field(..., description="IN 목록으로 분할할 기준 컬럼")
     target_table: str = Field(..., description="Greenplum 적재 대상 테이블")
+    username: Optional[str] = Field(default=None, description="작업을 실행한 사용자")
     write_mode: Literal["append", "overwrite_partitions"] = "append"
     parallelism: int = Field(default=4, ge=1, le=128)
     split_strategy: Literal["contiguous", "round_robin"] = "contiguous"

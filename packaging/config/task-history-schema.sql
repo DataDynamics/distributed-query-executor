@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS task_history (
     recorded_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     job_id       TEXT NOT NULL,
     task_id      TEXT NOT NULL,
+    username     TEXT,
     executor_id  TEXT,
     status       TEXT NOT NULL,
     rows_written BIGINT,

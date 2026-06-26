@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     job_id        TEXT NOT NULL,
     task_id       TEXT NOT NULL,
+    username      TEXT,
     executor_id   TEXT,
     status        TEXT NOT NULL,
     rows_written  BIGINT,
@@ -28,8 +29,8 @@ CREATE TABLE IF NOT EXISTS {table} (
 """
 
 _INSERT = """
-INSERT INTO {table} (job_id, task_id, executor_id, status, rows_written, error)
-VALUES (%s, %s, %s, %s, %s, %s)
+INSERT INTO {table} (job_id, task_id, username, executor_id, status, rows_written, error)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -68,6 +69,7 @@ class TaskHistoryRepository:
         row = (
             task.job_id,
             task.task_id,
+            getattr(task, "username", None),
             self.executor_id,
             task.status.value,
             task.rows_written,

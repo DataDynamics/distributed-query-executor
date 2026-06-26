@@ -158,6 +158,7 @@ async function loadJobs(){
   const d = await getJSON("/jobs?limit=200");
   const cols = [
     {t:"작업 ID", k:"job_id", f:r=>`<code>${r.job_id}</code>`},
+    {t:"사용자", k:"username"},
     {t:"상태", f:r=>pill(r.status)},
     {t:"진행률", f:r=>bar(r.progress_percent)},
     {t:"완료/전체", f:r=>`${r.completed}/${r.total}`},
@@ -186,6 +187,7 @@ async function loadHist(){
   const cols = [
     {t:"기록 시각", f:r=>`<span class="mut">${fmt(r.recorded_at)}</span>`},
     {t:"작업 ID", f:r=>`<code>${r.job_id}</code>`},
+    {t:"사용자", k:"username"},
     {t:"상태", f:r=>pill(r.status)},
     {t:"파티션 컬럼", k:"partition_column"},
     {t:"대상 테이블", k:"target_table"},

@@ -27,6 +27,7 @@ class Task:
     write_mode: str
     partition_column: str
     partition_values: list[str]
+    username: Optional[str] = None
     exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
@@ -55,6 +56,7 @@ class CreateTaskRequest(BaseModel):
     write_mode: Literal["append", "overwrite_partitions"] = "append"
     partition_column: str
     partition_values: list[str] = []
+    username: Optional[str] = None
     exec_mode: Literal["copy", "statement", "stage_insert"] = "copy"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None

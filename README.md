@@ -238,7 +238,7 @@ curl -s localhost:8000/jobs/$JOB
 
 | 엔드포인트 | 설명 |
 |---|---|
-| `POST /jobs` | 작업 제출 → `{job_id}` 반환 |
+| `POST /jobs` | 작업 제출 → `{job_id}` 반환 (`username` 선택 인자 지원) |
 | `GET /jobs/{job_id}/status` | **진행 상태/진행률**(경량, 태스크 제외) |
 | `GET /jobs/{job_id}` | 전체 상태(태스크 목록 포함) |
 | `GET /jobs/{job_id}/result` | 적재 결과 요약 |
@@ -286,6 +286,8 @@ curl -s -X POST localhost:8000/jobs/$JOB/cancel
 | `task_history` (`history.task_table`) | **각 Executor** | task N건 (job_id+task_id) | 상태 전이마다(QUEUED/READING/WRITING/DONE/FAILED) |
 
 - coordinator의 `run(job)` 은 `job_id` 를 반환하고 job 단위 이력을 남긴다.
+- 제출 시 `username` 을 넘기면 executor까지 전달되어 **두 이력 테이블 모두 `username` 컬럼**에
+  기록된다(대시보드에도 "사용자" 컬럼으로 표시).
 - 각 executor 는 자신이 처리하는 task 의 상태 전이를 `task_history` 에 append 한다
   (`executor_id` 컬럼으로 어느 executor 인지 식별). **따라서 executor 호스트에도 PG
   자격증명이 필요**하다.

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     id                 BIGSERIAL PRIMARY KEY,
     recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     job_id             TEXT NOT NULL,
+    username           TEXT,
     status             TEXT NOT NULL,
     partition_column   TEXT,
     target_table       TEXT,
@@ -34,10 +35,10 @@ CREATE TABLE IF NOT EXISTS {table} (
 
 _INSERT = """
 INSERT INTO {table}
-    (job_id, status, partition_column, target_table, parallelism,
+    (job_id, username, status, partition_column, target_table, parallelism,
      total_tasks, completed_tasks, total_rows_written, error,
      created_at, started_at, finished_at, original_sql)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -74,8 +75,8 @@ class JobHistoryRepository:
                 cur.execute(f"SELECT count(*) FROM {self.table}")
                 total = cur.fetchone()[0]
                 cur.execute(
-                    "SELECT recorded_at, job_id, status, partition_column, target_table, "
-                    "completed_tasks, total_tasks, total_rows_written, error "
+                    "SELECT recorded_at, job_id, username, status, partition_column, "
+                    "target_table, completed_tasks, total_tasks, total_rows_written, error "
                     f"FROM {self.table} ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
                     (limit, offset),
                 )
@@ -84,9 +85,10 @@ class JobHistoryRepository:
         out = [
             {
                 "recorded_at": r[0].isoformat() if r[0] is not None else None,
-                "job_id": r[1], "status": r[2], "partition_column": r[3],
-                "target_table": r[4], "completed_tasks": r[5], "total_tasks": r[6],
-                "total_rows_written": r[7], "error": r[8],
+                "job_id": r[1], "username": r[2], "status": r[3],
+                "partition_column": r[4], "target_table": r[5],
+                "completed_tasks": r[6], "total_tasks": r[7],
+                "total_rows_written": r[8], "error": r[9],
             }
             for r in rows
         ]
@@ -97,6 +99,7 @@ class JobHistoryRepository:
 
         row = (
             job.job_id,
+            job.username,
             job.status.value,
             job.partition_column,
             job.target_table,

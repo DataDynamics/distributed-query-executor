@@ -208,6 +208,7 @@ def create_app(
             parallelism=req.parallelism,
             split_strategy=req.split_strategy,
             failure_policy=req.failure_policy,
+            username=req.username,
             exec_mode=req.exec_mode,
             staging_table=req.staging_table,
             staging_ddl=req.staging_ddl,
@@ -392,6 +393,7 @@ def create_app(
         rows = [
             {
                 "job_id": j.job_id, "status": j.status.value,
+                "username": j.username,
                 "progress_percent": j.progress_percent,
                 "completed": j.completed, "total": len(j.tasks),
                 "total_rows_written": j.total_rows_written,

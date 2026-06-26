@@ -151,6 +151,7 @@ def create_app(
             write_mode=req.write_mode,
             partition_column=req.partition_column,
             partition_values=req.partition_values,
+            username=req.username,
             exec_mode=req.exec_mode,
             staging_table=req.staging_table,
             staging_ddl=req.staging_ddl,

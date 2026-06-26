@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS job_history (
     id                 BIGSERIAL PRIMARY KEY,
     recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     job_id             TEXT NOT NULL,
+    username           TEXT,
     status             TEXT NOT NULL,
     partition_column   TEXT,
     target_table       TEXT,

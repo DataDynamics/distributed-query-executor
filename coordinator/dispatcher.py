@@ -119,6 +119,7 @@ class HttpDispatcher:
                         "staging_table": job.staging_table,
                         "staging_ddl": job.staging_ddl,
                         "insert_sql": job.insert_sql,
+                        "username": job.username,
                     },
                 )
                 await self._poll(client, job, task)
