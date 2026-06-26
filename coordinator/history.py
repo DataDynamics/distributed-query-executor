@@ -76,7 +76,8 @@ class JobHistoryRepository:
                 total = cur.fetchone()[0]
                 cur.execute(
                     "SELECT recorded_at, job_id, username, status, partition_column, "
-                    "target_table, completed_tasks, total_tasks, total_rows_written, error "
+                    "target_table, completed_tasks, total_tasks, total_rows_written, error, "
+                    "started_at, finished_at, original_sql "
                     f"FROM {self.table} ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
                     (limit, offset),
                 )
@@ -89,6 +90,9 @@ class JobHistoryRepository:
                 "partition_column": r[4], "target_table": r[5],
                 "completed_tasks": r[6], "total_tasks": r[7],
                 "total_rows_written": r[8], "error": r[9],
+                "started_at": r[10].isoformat() if r[10] is not None else None,
+                "finished_at": r[11].isoformat() if r[11] is not None else None,
+                "original_sql": r[12],
             }
             for r in rows
         ]

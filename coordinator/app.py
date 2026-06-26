@@ -401,6 +401,7 @@ def create_app(
                 "target_table": j.target_table,
                 "created_at": j.created_at, "started_at": j.started_at,
                 "finished_at": j.finished_at,
+                "original_sql": j.original_sql,
             }
             for j in jobs[:limit]
         ]

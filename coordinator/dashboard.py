@@ -111,6 +111,18 @@ DASHBOARD_HTML = """<!doctype html>
   .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
                   padding:6px 12px; border-radius:6px; cursor:pointer; }
   .pager button:disabled { color:var(--mut); cursor:default; opacity:.5; }
+  .lnk { color:var(--acc); cursor:pointer; text-decoration:none; }
+  .lnk:hover { text-decoration:underline; }
+  .modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.4);
+           align-items:center; justify-content:center; z-index:50; }
+  .modal-box { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+               width:min(900px,90%); max-height:80%; overflow:auto; padding:16px; }
+  .modal-head { display:flex; justify-content:space-between; align-items:center;
+                gap:20px; margin-bottom:10px; }
+  .modal-head button { background:none; border:none; color:var(--mut); font-size:18px; cursor:pointer; }
+  #modal-sql { white-space:pre-wrap; word-break:break-all; background:#f6f8fa;
+               border:1px solid var(--line); border-radius:6px; padding:12px;
+               font:13px/1.55 ui-monospace,Menlo,Consolas,monospace; color:var(--fg); }
 </style>
 </head>
 <body>
@@ -133,11 +145,41 @@ DASHBOARD_HTML = """<!doctype html>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
 </main>
+<div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box">
+    <div class="modal-head"><b id="modal-title"></b><button onclick="closeModal()">✕</button></div>
+    <pre id="modal-sql"></pre>
+  </div>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 let active = "jobs";
 const fmt = v => (v===null||v===undefined||v==="") ? '<span class="mut">-</span>' : v;
 const pill = s => `<span class="pill s-${s}">${s}</span>`;
+const pad = n => String(n).padStart(2,'0');
+function fmtDate(s){
+  if(!s) return '<span class="mut">-</span>';
+  const d = new Date(s); if(isNaN(d)) return s;
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} `+
+         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+function dur(start, end){
+  if(!start) return '<span class="mut">-</span>';
+  const s = new Date(start), e = end ? new Date(end) : new Date();
+  let ms = e - s; if(isNaN(ms)||ms<0) return '<span class="mut">-</span>';
+  const sec = Math.floor(ms/1000), h=Math.floor(sec/3600),
+        m=Math.floor((sec%3600)/60), ss=sec%60;
+  return (h?h+'h ':'')+(m||h?m+'m ':'')+ss+'s';
+}
+// 작업 ID → 쿼리문 매핑/모달
+const sqlMap = {};
+function showSql(id){
+  $("#modal-title").textContent = id;
+  $("#modal-sql").textContent = sqlMap[id] || '(쿼리문 없음)';
+  $("#modal").style.display = 'flex';
+}
+function closeModal(){ $("#modal").style.display = 'none'; }
+const jobLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${id}</a>`;
 const bar = p => `<span class="bar"><i style="width:${p||0}%"></i></span> ${p||0}%`;
 function concBar(active, max){
   if(active===null||active===undefined) return '<span class="mut">-</span>';
@@ -156,8 +198,9 @@ async function getJSON(u){ const r = await fetch(u); return r.json(); }
 
 async function loadJobs(){
   const d = await getJSON("/jobs?limit=200");
+  (d.jobs||[]).forEach(r=>{ if(r.original_sql) sqlMap[r.job_id]=r.original_sql; });
   const cols = [
-    {t:"작업 ID", k:"job_id", f:r=>`<code>${r.job_id}</code>`},
+    {t:"작업 ID", f:r=>jobLink(r.job_id)},
     {t:"사용자", k:"username"},
     {t:"상태", f:r=>pill(r.status)},
     {t:"진행률", f:r=>bar(r.progress_percent)},
@@ -166,7 +209,9 @@ async function loadJobs(){
     {t:"실행 방식", k:"exec_mode"},
     {t:"파티션 컬럼", k:"partition_column"},
     {t:"대상 테이블", k:"target_table"},
-    {t:"시작 시각", f:r=>`<span class="mut">${fmt(r.started_at)}</span>`},
+    {t:"시작 시각", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
+    {t:"종료 시각", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
+    {t:"소요 시간", f:r=>dur(r.started_at, r.finished_at)},
   ];
   $("#p-jobs").innerHTML =
     `<div class="cards">
@@ -184,15 +229,18 @@ async function loadHist(){
     return;
   }
   histTotal = d.total || 0;
+  (d.rows||[]).forEach(r=>{ if(r.original_sql) sqlMap[r.job_id]=r.original_sql; });
   const cols = [
-    {t:"기록 시각", f:r=>`<span class="mut">${fmt(r.recorded_at)}</span>`},
-    {t:"작업 ID", f:r=>`<code>${r.job_id}</code>`},
+    {t:"기록 시각", f:r=>`<span class="mut">${fmtDate(r.recorded_at)}</span>`},
+    {t:"작업 ID", f:r=>jobLink(r.job_id)},
     {t:"사용자", k:"username"},
     {t:"상태", f:r=>pill(r.status)},
     {t:"파티션 컬럼", k:"partition_column"},
     {t:"대상 테이블", k:"target_table"},
     {t:"완료/전체", f:r=>`${fmt(r.completed_tasks)}/${fmt(r.total_tasks)}`},
     {t:"적재 행수", k:"total_rows_written"},
+    {t:"종료 시각", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
+    {t:"소요 시간", f:r=>dur(r.started_at, r.finished_at)},
     {t:"에러", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
   ];
   const n = d.rows ? d.rows.length : 0;
@@ -224,7 +272,7 @@ async function loadExec(){
     {t:"MEM%", k:"memory_percent"},
     {t:"DISK%", k:"disk_percent"},
     {t:"동시 처리", f:r=>concBar(r.active_tasks, r.max_concurrent_tasks)},
-    {t:"Last Seen", f:r=>`<span class="mut">${fmt(r.updated_at||r.last_checked)}</span>`},
+    {t:"Last Seen", f:r=>`<span class="mut">${fmtDate(r.updated_at||r.last_checked)}</span>`},
     {t:"Error", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
   ];
   $("#p-exec").innerHTML = cards + table(cols, d.executors);
@@ -243,7 +291,8 @@ async function loadInfo(){
   const rows = Object.entries(d).filter(([k,v])=>typeof v!=="object")
     .map(([k,v])=>({key:k,value:v}));
   const byStatus = Object.entries(d.jobs_by_status||{}).map(([k,v])=>({key:"jobs."+k,value:v}));
-  const cols = [{t:"key",k:"key"},{t:"value",f:r=>fmt(String(r.value))}];
+  const cols = [{t:"key",k:"key"},
+    {t:"value", f:r=> r.key.endsWith("_at") ? fmtDate(r.value) : fmt(String(r.value))}];
   $("#p-info").innerHTML = table(cols, rows.concat(byStatus));
 }
 const loaders = {jobs:loadJobs, hist:loadHist, exec:loadExec, conf:loadConf, info:loadInfo};

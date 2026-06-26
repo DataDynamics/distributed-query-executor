@@ -34,6 +34,15 @@ class FakeRunner:
         job.status = JobStatus.CANCELLED
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_settings(monkeypatch):
+    """테스트를 머신의 /etc/query-executor(실 DB) 설정과 무관하게 유지한다."""
+    from coordinator.config import settings
+    monkeypatch.setattr(settings, "history_db_dsn", "", raising=False)
+    monkeypatch.setattr(settings, "store_backend", "memory", raising=False)
+    monkeypatch.setattr(settings, "executor_self_report", False, raising=False)
+
+
 @pytest.fixture
 def runner() -> FakeRunner:
     return FakeRunner()
