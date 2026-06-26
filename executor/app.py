@@ -35,7 +35,7 @@ def create_app(
     # 동시 task 상한(admission control). 0 이면 무제한.
     _max = settings.executor_max_concurrent_tasks
     sem = asyncio.Semaphore(_max) if _max and _max > 0 else None
-    reporter = ExecutorStatusReporter(settings)
+    reporter = ExecutorStatusReporter(settings, tasks_provider=lambda: _task_counts())
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -200,9 +200,20 @@ def create_app(
     def healthz():
         return {"status": "ok"}
 
-    @app.get("/metrics", tags=["Monitoring"], summary="시스템 메트릭(CPU/메모리/디스크)")
+    def _task_counts() -> tuple[int, int, int]:
+        active = sum(
+            1 for t in tasks.values()
+            if t.status in (TaskStatus.READING, TaskStatus.WRITING)
+        )
+        queued = sum(1 for t in tasks.values() if t.status == TaskStatus.QUEUED)
+        return active, queued, (_max or 0)
+
+    @app.get("/metrics", tags=["Monitoring"], summary="시스템 메트릭(CPU/메모리/디스크) + 동시 처리")
     def metrics():
-        return collect_system_metrics(settings.monitor_disk_path)
+        m = collect_system_metrics(settings.monitor_disk_path)
+        active, queued, mx = _task_counts()
+        m["tasks"] = {"active": active, "queued": queued, "max": mx}
+        return m
 
     return app
 

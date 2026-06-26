@@ -39,6 +39,9 @@ def test_executor_health_and_metrics():
     assert isinstance(metrics["cpu_percent"], (int, float))
     assert "percent" in metrics["memory"]
     assert "percent" in metrics["disk"]
+    # 동시 처리 현황(active/queued/max)
+    assert "tasks" in metrics
+    assert {"active", "queued", "max"} <= metrics["tasks"].keys()
 
 
 def test_healthz_alias_still_works(client):
@@ -143,6 +146,8 @@ async def test_monitor_polls_executor_health_and_metrics():
     assert rec.disk_percent is not None
     assert rec.disk_used_gb is not None
     assert rec.disk_total_gb is not None
+    assert rec.active_tasks is not None
+    assert rec.max_concurrent_tasks is not None
     assert rec.error is None
 
     # 모니터 스냅샷이 CPU/메모리/디스크 필드를 모두 갖추는지

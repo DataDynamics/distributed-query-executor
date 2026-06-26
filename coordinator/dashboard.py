@@ -117,7 +117,7 @@ DASHBOARD_HTML = """<!doctype html>
 </header>
 <div class="tabs">
   <button data-tab="jobs" class="active">처리중인 Query</button>
-  <button data-tab="exec">Executor 상황</button>
+  <button data-tab="exec">Executor</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
 </div>
@@ -133,6 +133,12 @@ let active = "jobs";
 const fmt = v => (v===null||v===undefined||v==="") ? '<span class="mut">-</span>' : v;
 const pill = s => `<span class="pill s-${s}">${s}</span>`;
 const bar = p => `<span class="bar"><i style="width:${p||0}%"></i></span> ${p||0}%`;
+function concBar(active, max){
+  if(active===null||active===undefined) return '<span class="mut">-</span>';
+  if(!max || max<=0) return `${active} <span class="mut">(무제한)</span>`;
+  const pct = Math.min(100, Math.round(active/max*100));
+  return `<span class="bar"><i style="width:${pct}%"></i></span> ${active}/${max}`;
+}
 
 function table(cols, rows){
   let h = "<table><thead><tr>" + cols.map(c=>`<th>${c.t}</th>`).join("") + "</tr></thead><tbody>";
@@ -177,6 +183,7 @@ async function loadExec(){
     {t:"CPU%", k:"cpu_percent"},
     {t:"MEM%", k:"memory_percent"},
     {t:"DISK%", k:"disk_percent"},
+    {t:"동시 처리", f:r=>concBar(r.active_tasks, r.max_concurrent_tasks)},
     {t:"last_seen", f:r=>`<span class="mut">${fmt(r.updated_at||r.last_checked)}</span>`},
     {t:"error", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
   ];

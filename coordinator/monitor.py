@@ -29,6 +29,8 @@ class ExecutorHealth:
     disk_percent: Optional[float] = None
     disk_used_gb: Optional[float] = None
     disk_total_gb: Optional[float] = None
+    active_tasks: Optional[int] = None
+    max_concurrent_tasks: Optional[int] = None
     error: Optional[str] = None
 
     def as_view(self) -> dict:
@@ -143,6 +145,9 @@ class HealthMonitor:
             rec.disk_percent = disk.get("percent")
             rec.disk_used_gb = disk.get("used_gb")
             rec.disk_total_gb = disk.get("total_gb")
+            tasks = md.get("tasks", {})
+            rec.active_tasks = tasks.get("active")
+            rec.max_concurrent_tasks = tasks.get("max")
             rec.error = None
         except Exception as exc:
             rec.healthy = False

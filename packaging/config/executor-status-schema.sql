@@ -9,8 +9,10 @@ CREATE TABLE IF NOT EXISTS executor_status (
     memory_percent  DOUBLE PRECISION,
     memory_used_mb  DOUBLE PRECISION,
     memory_total_mb DOUBLE PRECISION,
-    disk_percent    DOUBLE PRECISION,
-    disk_used_gb    DOUBLE PRECISION,
-    disk_total_gb   DOUBLE PRECISION,
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    disk_percent         DOUBLE PRECISION,
+    disk_used_gb         DOUBLE PRECISION,
+    disk_total_gb        DOUBLE PRECISION,
+    active_tasks         INTEGER,
+    max_concurrent_tasks INTEGER,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );

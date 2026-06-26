@@ -16,38 +16,43 @@ logger = logging.getLogger(__name__)
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS {table} (
-    executor_id     TEXT PRIMARY KEY,
-    cpu_percent     DOUBLE PRECISION,
-    memory_percent  DOUBLE PRECISION,
-    memory_used_mb  DOUBLE PRECISION,
-    memory_total_mb DOUBLE PRECISION,
-    disk_percent    DOUBLE PRECISION,
-    disk_used_gb    DOUBLE PRECISION,
-    disk_total_gb   DOUBLE PRECISION,
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    executor_id          TEXT PRIMARY KEY,
+    cpu_percent          DOUBLE PRECISION,
+    memory_percent       DOUBLE PRECISION,
+    memory_used_mb       DOUBLE PRECISION,
+    memory_total_mb      DOUBLE PRECISION,
+    disk_percent         DOUBLE PRECISION,
+    disk_used_gb         DOUBLE PRECISION,
+    disk_total_gb        DOUBLE PRECISION,
+    active_tasks         INTEGER,
+    max_concurrent_tasks INTEGER,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 """
 
 _UPSERT = """
 INSERT INTO {table}
     (executor_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
-     disk_percent, disk_used_gb, disk_total_gb, updated_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+     disk_percent, disk_used_gb, disk_total_gb, active_tasks, max_concurrent_tasks, updated_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
 ON CONFLICT (executor_id) DO UPDATE SET
     cpu_percent=EXCLUDED.cpu_percent, memory_percent=EXCLUDED.memory_percent,
     memory_used_mb=EXCLUDED.memory_used_mb, memory_total_mb=EXCLUDED.memory_total_mb,
     disk_percent=EXCLUDED.disk_percent, disk_used_gb=EXCLUDED.disk_used_gb,
-    disk_total_gb=EXCLUDED.disk_total_gb, updated_at=now()
+    disk_total_gb=EXCLUDED.disk_total_gb, active_tasks=EXCLUDED.active_tasks,
+    max_concurrent_tasks=EXCLUDED.max_concurrent_tasks, updated_at=now()
 """
 
 
 class ExecutorStatusReporter:
-    def __init__(self, settings):
+    def __init__(self, settings, tasks_provider=None):
         self.dsn: str = getattr(settings, "history_db_dsn", "") or ""
         self.table: str = getattr(settings, "executor_status_table", "executor_status")
         self.interval: float = float(getattr(settings, "executor_status_interval_s", 10))
         self.disk_path: str = getattr(settings, "monitor_disk_path", "/")
         self.executor_id: str = _executor_id()
+        # () -> (active, queued, max) 동시 처리 현황 제공자
+        self.tasks_provider = tasks_provider
         self.enabled: bool = bool(self.dsn)
         self._task: asyncio.Task | None = None
         self._ddl_ready = False
@@ -83,9 +88,14 @@ class ExecutorStatusReporter:
 
         m = collect_system_metrics(self.disk_path)
         mem, disk = m["memory"], m["disk"]
+        active, mx = 0, 0
+        if self.tasks_provider:
+            counts = self.tasks_provider()
+            active, mx = counts[0], counts[2]
         row = (
             self.executor_id, m["cpu_percent"], mem["percent"], mem["used_mb"],
             mem["total_mb"], disk["percent"], disk["used_gb"], disk["total_gb"],
+            active, mx,
         )
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
