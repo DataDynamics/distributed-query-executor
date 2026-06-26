@@ -3,15 +3,31 @@
 (argus-catalog backend의 logging 구조와 동일한 방식: 파일명_YYYYMMDD.log 롤링)
 """
 
+import contextvars
 import logging
+from contextlib import contextmanager
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from core.config import settings as default_settings
 
+# 현재 처리 중인 job_id (없으면 "-"). 로그에 [job_id] 로 자동 주입된다.
+job_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("job_id", default="-")
+
+
+@contextmanager
+def job_log_context(job_id: str):
+    """이 블록(및 await 체인) 안에서 발생하는 모든 로그에 job_id 를 붙인다."""
+    token = job_id_var.set(job_id)
+    try:
+        yield
+    finally:
+        job_id_var.reset(token)
+
+
 LOG_FORMAT = (
     "%(levelname)s %(asctime)s.%(msecs)03d %(process)d %(programname)s"
-    " %(filename)s:%(funcName)s:%(lineno)d - %(message)s"
+    " %(filename)s:%(funcName)s:%(lineno)d [%(job_id)s] - %(message)s"
 )
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -58,6 +74,16 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
     """
     log_dir = settings.log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
+
+    # 모든 LogRecord 에 job_id 속성을 주입(현재 컨텍스트의 job_id, 없으면 "-")
+    _base_factory = logging.getLogRecordFactory()
+
+    def _record_factory(*args, **kwargs):
+        record = _base_factory(*args, **kwargs)
+        record.job_id = job_id_var.get()
+        return record
+
+    logging.setLogRecordFactory(_record_factory)
 
     log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
     formatter = logging.Formatter(fmt=LOG_FORMAT, datefmt=DATE_FORMAT)

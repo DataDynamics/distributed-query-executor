@@ -11,11 +11,19 @@ from typing import Optional
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .job_store import JobStore
-from .models import CreateJobRequest, CreateJobResponse, Job, JobStatus, Task
+from .models import (
+    CreateJobRequest,
+    CreateJobResponse,
+    Job,
+    JobStatus,
+    Task,
+    new_job_id,
+)
 from .monitor import HealthMonitor
 from .parser import QueryValidationError, is_row_returning, validate_and_parse
 from .splitter import split, wrap
@@ -92,6 +100,16 @@ def create_app(
         "검증 실패 시 422(error_code 포함).",
     )
     def create_job(req: CreateJobRequest, background: BackgroundTasks):
+        # 무조건 job_id 를 먼저 생성하고, 이후 모든 로그에 [job_id] 가 붙도록 컨텍스트 바인딩
+        job_id = new_job_id()
+        with job_log_context(job_id):
+            return _create_job(req, background, job_id)
+
+    def _create_job(req: CreateJobRequest, background: BackgroundTasks, job_id: str):
+        logger.info(
+            "쿼리 실행 요청 수신 (partition=%s, target=%s, exec_mode=%s, dry_run=%s)",
+            req.partition_column, req.target_table, req.exec_mode, req.dry_run,
+        )
         # 동기 검증 + 분할: 오류는 지금 즉시 클라이언트에게 반환한다.
         dialect = req.sql_dialect or settings.query_default_dialect
         parsed = validate_and_parse(
@@ -166,6 +184,7 @@ def create_app(
             )
 
         job = Job(
+            job_id=job_id,
             original_sql=req.sql,
             partition_column=req.partition_column,
             target_table=req.target_table,

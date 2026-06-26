@@ -9,6 +9,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 
 from core.config import settings
+from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from .backend import Backend, build_backend
 from .history import TaskHistoryRepository
@@ -46,6 +47,11 @@ def create_app(
     app.state.backend = backend
     app.state.tasks = tasks
     app.state.task_history = history
+
+    async def _run_with_ctx(task: Task) -> None:
+        # 백그라운드 실행 로그에도 [job_id] 가 붙도록 컨텍스트 바인딩
+        with job_log_context(task.job_id):
+            await _run(task)
 
     async def _run(task: Task) -> None:
         def progress(n: int) -> None:
@@ -130,9 +136,10 @@ def create_app(
             insert_sql=req.insert_sql,
         )
         tasks[task.task_id] = task
-        await history.record(task)  # QUEUED 이력
-        asyncio.create_task(_run(task))
-        logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
+        with job_log_context(task.job_id):
+            await history.record(task)  # QUEUED 이력
+            asyncio.create_task(_run_with_ctx(task))
+            logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
         return {"task_id": task.task_id, "status": task.status.value}
 
     @app.get("/tasks/{task_id}", tags=["Tasks"], summary="태스크 상태 조회")

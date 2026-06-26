@@ -122,7 +122,10 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
 - Impala는 **TLS + Kerberos(GSSAPI)**: `impala.use_ssl`/`impala.ca_cert`,
   `impala.auth_mechanism=GSSAPI`/`impala.kerberos_service_name`. 티켓은 OS 자격증명
   캐시(KRB5CCNAME)를 사용 → systemd kinit 서비스/타이머로 keytab 갱신 ([deploy/README.md](deploy/README.md))
-- 로깅: `/var/log/query-executor/` 에 일 단위 롤링 (`코드/argus 공통 포맷`)
+- 로깅: `/var/log/query-executor/` 에 일 단위 롤링. 작업 요청이 오면 **job_id 를 먼저
+  생성**하고, 이후 모든 로그에 `[job_id]` 가 자동으로 붙는다(coordinator·executor 공통).
+  예: `INFO ... app.py:_create_job:109 [job_531ab6f734ca] - 쿼리 실행 요청 수신 ...`
+  (작업과 무관한 로그는 `[-]`)
 - 모니터링: 두 서비스 모두 `/health`·`/metrics`(CPU·메모리·디스크) 제공. coordinator는
   executor `/health`·`/metrics` 를 주기 폴링(`GET /executors`)하고 `monitor.db_dsn`
   설정 시 CPU/메모리 사용량을 PostgreSQL(`monitor.table`)에 주기 기록

@@ -38,6 +38,10 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+def new_job_id() -> str:
+    return _new_id("job")
+
+
 @dataclass
 class Task:
     job_id: str

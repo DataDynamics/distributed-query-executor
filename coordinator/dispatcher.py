@@ -12,6 +12,7 @@ from typing import Optional, Protocol
 
 import httpx
 
+from core.logging import job_log_context
 from .config import Settings
 from .history import JobHistoryRepository
 from .models import Job, JobStatus, Task, TaskStatus
@@ -54,19 +55,20 @@ class HttpDispatcher:
 
     async def run(self, job: Job) -> str:
         """Job 을 실행하고 job_id 를 반환한다. 시작/종료 이력을 DB에 기록한다."""
-        job.status = JobStatus.RUNNING
-        job.started_at = _now_iso()
-        await self.history.record(job)  # 시작 이력
-        try:
-            async with httpx.AsyncClient(timeout=self.settings.task_timeout_s) as client:
-                await asyncio.gather(
-                    *(self._run_task(client, job, t) for t in job.tasks)
-                )
-        finally:
-            self._finalize(job)
-            job.finished_at = _now_iso()
-            await self.history.record(job)  # 종료 이력
-        return job.job_id
+        with job_log_context(job.job_id):
+            job.status = JobStatus.RUNNING
+            job.started_at = _now_iso()
+            await self.history.record(job)  # 시작 이력
+            try:
+                async with httpx.AsyncClient(timeout=self.settings.task_timeout_s) as client:
+                    await asyncio.gather(
+                        *(self._run_task(client, job, t) for t in job.tasks)
+                    )
+            finally:
+                self._finalize(job)
+                job.finished_at = _now_iso()
+                await self.history.record(job)  # 종료 이력
+            return job.job_id
 
     async def _run_task(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         async with self._sem:
@@ -110,15 +112,16 @@ class HttpDispatcher:
 
     async def cancel(self, job: Job) -> None:
         """취소 요청: 플래그를 세우고 비종료 task의 executor에 취소를 전파한다."""
-        job.cancel_requested = True
-        targets = [
-            t for t in job.tasks if t.executor_url and t.status not in _TERMINAL
-        ]
-        if targets:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await asyncio.gather(
-                    *(self._cancel_task(client, t) for t in targets)
-                )
+        with job_log_context(job.job_id):
+            job.cancel_requested = True
+            targets = [
+                t for t in job.tasks if t.executor_url and t.status not in _TERMINAL
+            ]
+            if targets:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    await asyncio.gather(
+                        *(self._cancel_task(client, t) for t in targets)
+                    )
 
     async def _cancel_task(self, client: httpx.AsyncClient, task: Task) -> None:
         try:
@@ -151,16 +154,17 @@ class LocalDispatcher:
         return self._backend
 
     async def run(self, job: Job) -> str:
-        job.status = JobStatus.RUNNING
-        job.started_at = _now_iso()
-        await self.history.record(job)
-        try:
-            await asyncio.gather(*(self._run_task(job, t) for t in job.tasks))
-        finally:
-            finalize_job(job)
-            job.finished_at = _now_iso()
+        with job_log_context(job.job_id):
+            job.status = JobStatus.RUNNING
+            job.started_at = _now_iso()
             await self.history.record(job)
-        return job.job_id
+            try:
+                await asyncio.gather(*(self._run_task(job, t) for t in job.tasks))
+            finally:
+                finalize_job(job)
+                job.finished_at = _now_iso()
+                await self.history.record(job)
+            return job.job_id
 
     async def _run_task(self, job: Job, task: Task) -> None:
         async with self._sem:
@@ -200,7 +204,8 @@ class LocalDispatcher:
                 task.error = str(exc)
 
     async def cancel(self, job: Job) -> None:
-        job.cancel_requested = True
-        for t in job.tasks:
-            if t.status not in _TERMINAL:
-                t.status = TaskStatus.CANCELLED
+        with job_log_context(job.job_id):
+            job.cancel_requested = True
+            for t in job.tasks:
+                if t.status not in _TERMINAL:
+                    t.status = TaskStatus.CANCELLED
