@@ -10,6 +10,8 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.6",
     "PyYAML>=6.0",
+    "psutil>=5.9",
+    "psycopg[binary]>=3.2",
 ]
 
 [project.optional-dependencies]

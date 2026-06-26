@@ -21,6 +21,14 @@ coordinator:
   poll_interval_s: ${coordinator.poll_interval_s:1.0}
   task_timeout_s: ${coordinator.task_timeout_s:3600}
 
+monitor:
+  enabled: ${monitor.enabled:true}
+  health_interval_s: ${monitor.health_interval_s:10}
+  record_interval_s: ${monitor.record_interval_s:60}
+  db_dsn: ${monitor.db_dsn:}
+  table: ${monitor.table:executor_health_metrics}
+  disk_path: ${monitor.disk_path:/}
+
 executor:
   host: ${executor.host:0.0.0.0}
   impala:

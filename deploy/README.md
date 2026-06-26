@@ -136,8 +136,13 @@ sudo systemctl restart query-coordinator
 ## 동작 확인
 
 ```bash
-curl -s localhost:8000/healthz
-curl -s localhost:8001/healthz
+# 헬스 / 메트릭(CPU·메모리·디스크)
+curl -s localhost:8000/health
+curl -s localhost:8000/metrics
+curl -s localhost:8001/health
+curl -s localhost:8001/metrics
+# coordinator가 보유한 executor 헬스/메트릭 상태
+curl -s localhost:8000/executors
 
 curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('\''2026-01-01'\'','\''2026-01-02'\'') AND region='\''KR'\''",
@@ -157,6 +162,36 @@ sudo firewall-cmd --reload
 ```
 
 executor 포트(8001, 8002 ...)는 보통 coordinator와 같은 호스트 내부 통신이므로 외부 개방이 불필요하다.
+
+## 헬스/메트릭 모니터링
+
+- 두 서비스 모두 `/health`(liveness), `/metrics`(CPU·메모리·디스크) 를 제공한다.
+- coordinator는 `monitor.health_interval_s` 마다 모든 executor의 `/health`·`/metrics` 를
+  폴링해 상태를 보유하고(`GET /executors` 로 조회), `monitor.record_interval_s` 마다
+  PostgreSQL 테이블(`monitor.table`)에 CPU/메모리/디스크 사용량을 기록한다.
+
+설정(config.properties):
+
+```properties
+monitor.enabled=true
+monitor.health_interval_s=10
+monitor.record_interval_s=60
+# 기록 대상 PostgreSQL DSN. 비어 있으면 폴링만 하고 DB 기록은 하지 않는다.
+monitor.db_dsn=postgresql://user:pass@pg-host:5432/monitoring
+monitor.table=executor_health_metrics
+monitor.disk_path=/
+```
+
+테이블은 앱이 `CREATE TABLE IF NOT EXISTS` 로 자동 생성한다. 사전 생성/권한 관리를
+원하면 `packaging/config/monitor-schema.sql` 을 사용한다:
+
+```bash
+psql "postgresql://user:pass@pg-host:5432/monitoring" -f /opt/query-executor/packaging/config/monitor-schema.sql
+
+# 최근 기록 조회
+psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_percent
+             FROM executor_health_metrics ORDER BY recorded_at DESC LIMIT 20;"
+```
 
 ## 참고
 

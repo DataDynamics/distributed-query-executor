@@ -5,3 +5,7 @@ sqlglot>=30,<31
 httpx>=0.28,<1.0
 pydantic>=2.13,<3.0
 PyYAML>=6.0
+# /metrics 의 CPU/메모리/디스크 수집
+psutil>=5.9
+# coordinator 의 executor 메트릭을 PostgreSQL 에 기록(monitor.db_dsn 설정 시)
+psycopg[binary]>=3.2

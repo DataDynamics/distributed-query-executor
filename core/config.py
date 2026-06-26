@@ -87,6 +87,22 @@ class Settings:
             _get("coordinator", "task_timeout_s", 3600)
         )
 
+        # ───────── Coordinator - executor 헬스 모니터링 & 메트릭 기록 ─────────
+        self.monitor_enabled: bool = _to_bool(_get("monitor", "enabled", True))
+        # executor /health·/metrics 폴링 간격(초)
+        self.monitor_health_interval_s: float = float(
+            _get("monitor", "health_interval_s", 10)
+        )
+        # PostgreSQL 기록 간격(초)
+        self.monitor_record_interval_s: float = float(
+            _get("monitor", "record_interval_s", 60)
+        )
+        # 기록 대상 PostgreSQL DSN(비어 있으면 DB 기록 비활성, 폴링만 수행)
+        self.monitor_db_dsn: str = _get("monitor", "db_dsn", "")
+        self.monitor_table: str = _get("monitor", "table", "executor_health_metrics")
+        # /metrics 에서 사용량을 측정할 디스크 경로
+        self.monitor_disk_path: str = _get("monitor", "disk_path", "/")
+
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")
         # Impala (source) — TLS + Kerberos(GSSAPI) 환경

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import itertools
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from core.metrics import collect_system_metrics
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner
 from .job_store import JobStore
 from .models import CreateJobRequest, CreateJobResponse, Job, JobStatus, Task
+from .monitor import HealthMonitor
 from .parser import QueryValidationError, validate_and_parse
 from .splitter import split
 
@@ -35,11 +38,21 @@ def create_app(
     settings = settings or default_settings
     store = store or JobStore()
     runner = runner or HttpDispatcher(settings)
+    monitor = HealthMonitor(settings)
 
-    app = FastAPI(title="Query Coordinator", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        await monitor.start()
+        try:
+            yield
+        finally:
+            await monitor.stop()
+
+    app = FastAPI(title="Query Coordinator", version="0.1.0", lifespan=lifespan)
     app.state.store = store
     app.state.runner = runner
     app.state.settings = settings
+    app.state.monitor = monitor
 
     @app.exception_handler(QueryValidationError)
     async def _validation_handler(_: Request, exc: QueryValidationError):
@@ -110,9 +123,22 @@ def create_app(
                 return task.detail()  # sub_query 전문 포함
         raise HTTPException(status_code=404, detail="task not found")
 
-    @app.get("/healthz")
+    @app.get("/executors")
+    def list_executor_health():
+        """모니터가 보유한 executor 헬스/메트릭 상태."""
+        return {"executors": monitor.snapshot()}
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok", "service": "coordinator", "version": "0.1.0"}
+
+    @app.get("/healthz")  # 하위 호환 별칭
     def healthz():
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    def metrics():
+        return collect_system_metrics(settings.monitor_disk_path)
 
     return app
 

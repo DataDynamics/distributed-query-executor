@@ -15,11 +15,12 @@ coordinator/   # FastAPI: 검증 → 분할 → 디스패치 → 상태 추적
   parser.py      1단계 검증 + IN 절 탐지 (sqlglot, hive 방언)
   splitter.py    IN 목록을 N개의 완전한 sub-query로 분할
   dispatcher.py  executor 비동기 디스패치 + 상태 polling (httpx)
-  app.py         REST API (POST /jobs, GET /jobs/{id}, .../result, .../tasks/{id})
+  monitor.py     executor /health·/metrics 폴링 + PostgreSQL 메트릭 기록
+  app.py         REST API (POST /jobs, .../result, /executors, /health, /metrics)
   __main__.py    실행 진입점 (python -m coordinator)
 executor/      # FastAPI: Impala 읽기 → Greenplum COPY 적재, task 상태 노출
   backend.py     ImpalaToGreenplumBackend (impyla + psycopg) + MockBackend
-  app.py         REST API (POST /tasks, GET /tasks/{id}, .../result)
+  app.py         REST API (POST /tasks, GET /tasks/{id}, /health, /metrics)
   __main__.py    실행 진입점 (EXECUTOR_PORT=8001 python -m executor)
 packaging/config/  # config.properties + config.yml 기본값
 tests/         # coordinator 검증 + 라이프사이클 테스트
@@ -39,6 +40,9 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
   `impala.auth_mechanism=GSSAPI`/`impala.kerberos_service_name`. 티켓은 OS 자격증명
   캐시(KRB5CCNAME)를 사용 → systemd kinit 서비스/타이머로 keytab 갱신 ([deploy/README.md](deploy/README.md))
 - 로깅: `/var/log/query-executor/` 에 일 단위 롤링 (`코드/argus 공통 포맷`)
+- 모니터링: 두 서비스 모두 `/health`·`/metrics`(CPU·메모리·디스크) 제공. coordinator는
+  executor `/health`·`/metrics` 를 주기 폴링(`GET /executors`)하고 `monitor.db_dsn`
+  설정 시 CPU/메모리 사용량을 PostgreSQL(`monitor.table`)에 주기 기록
 
 ## 실행 환경 (RHEL 9.2)
 

@@ -9,6 +9,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 
 from core.config import settings
+from core.metrics import collect_system_metrics
 from .backend import Backend, ImpalaToGreenplumBackend, MockBackend
 from .models import CreateTaskRequest, Task, TaskStatus
 
@@ -124,9 +125,17 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="task not found")
         return {"rows_written": task.rows_written}
 
-    @app.get("/healthz")
+    @app.get("/health")
+    def health():
+        return {"status": "ok", "service": "executor", "version": "0.1.0"}
+
+    @app.get("/healthz")  # 하위 호환 별칭
     def healthz():
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    def metrics():
+        return collect_system_metrics(settings.monitor_disk_path)
 
     return app
 
