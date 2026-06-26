@@ -4,6 +4,89 @@ Coordinator + N Executor 구조의 API. 하나의 Impala `SELECT` 쿼리를 파�
 `IN` 목록 기준으로 분할하여, 각 부분집합을 병렬로 읽어 Greenplum에 적재한다.
 자세한 설계는 [DESIGN.md](DESIGN.md) 참고.
 
+## 아키텍처
+
+```mermaid
+flowchart TB
+    Client([Client])
+    Impala[(Impala<br/>source)]
+    GP[(Greenplum<br/>target)]
+    PG[(PostgreSQL<br/>이력·메트릭)]
+
+    subgraph Coordinator["Coordinator (FastAPI)"]
+        direction TB
+        API["REST API<br/>POST /jobs · GET /jobs/{id}/status<br/>/executors · /health · /metrics"]
+        Parser["Parser (sqlglot)<br/>검증 + 파티션 IN 탐지"]
+        Splitter["Splitter<br/>IN 목록 N분할 + wrapper"]
+        Dispatcher["Dispatcher<br/>run(job)→job_id, 비동기 디스패치/polling"]
+        Monitor["HealthMonitor<br/>executor /health·/metrics 폴링"]
+        JobStore[("JobStore<br/>in-memory")]
+    end
+
+    subgraph Executors["Executor Pool (N개, 독립 서비스)"]
+        direction LR
+        E1["Executor :8001<br/>/tasks · /health · /metrics"]
+        E2["Executor :8002"]
+        E3["Executor :800N"]
+    end
+
+    Client -- "① SELECT + partition_column" --> API
+    API --> Parser --> Splitter --> Dispatcher
+    Dispatcher <--> JobStore
+    Dispatcher -- "② POST /tasks (sub-query)" --> E1 & E2 & E3
+    Monitor -- "주기 폴링" --> E1 & E2 & E3
+
+    E1 & E2 & E3 -- "③ read (TLS+Kerberos)" --> Impala
+    E1 & E2 & E3 -- "④ COPY 적재" --> GP
+
+    Dispatcher -- "job_history (job 단위)" --> PG
+    Monitor -- "executor_health_metrics" --> PG
+    E1 & E2 & E3 -- "task_history (task 단위)" --> PG
+    Client -- "⑤ GET /jobs/{id}/status" --> API
+```
+
+## 동작 흐름
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant CO as Coordinator
+    participant JS as JobStore
+    participant EX as Executor k (N개)
+    participant IM as Impala
+    participant GP as Greenplum
+    participant PG as PostgreSQL
+
+    C->>CO: POST /jobs {sql, partition_column, target_table, ...}
+    CO->>CO: 검증(parser) + 분할(splitter) + wrapper 적용
+    CO->>JS: Job 생성(SPLITTING) · sub-query 전문 저장
+    CO-->>C: 202 {job_id}
+
+    Note over CO,PG: 백그라운드 run(job) — job_id 반환
+    CO->>PG: job_history 기록 (RUNNING)
+
+    par 각 executor 병렬 디스패치
+        CO->>EX: POST /tasks {task_id, sub_query}
+        EX->>PG: task_history (QUEUED→READING→WRITING)
+        EX->>IM: sub-query 실행(읽기)
+        IM-->>EX: rows
+        EX->>GP: COPY 적재
+        EX->>PG: task_history (DONE, rows_written)
+        EX-->>CO: 상태/행수 (polling)
+    end
+
+    CO->>JS: 모든 task 종료 → Job 상태 집계(DONE/PARTIAL/FAILED)
+    CO->>PG: job_history 기록 (최종 상태)
+
+    C->>CO: GET /jobs/{job_id}/status
+    CO-->>C: {status, progress_percent, completed/total, ...}
+```
+
+> 모니터: Coordinator는 위와 별개로 `monitor.health_interval_s` 마다 각 executor의
+> `/health`·`/metrics`(CPU/메모리/디스크)를 폴링해 보유하고(`GET /executors`),
+> `monitor.record_interval_s` 마다 PostgreSQL(`executor_health_metrics`)에 기록한다.
+
 ## 디렉터리 구조
 
 ```
