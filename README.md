@@ -357,6 +357,29 @@ curl -s localhost:8000/jobs/<job_id>/status   # {"status":"DONE", ...}
 > 쿼리만 확인하려면 [dry-run](#작업-상태-확인--이력), 실제 적재 동작까지 로컬에서 보려면
 > local 모드를 쓴다(둘은 독립적으로 조합 가능).
 
+## 모니터링 대시보드 (`/`)
+
+`/` 에 접속하면 coordinator 전용 모니터링 화면이 뜬다(순수 Python/FastAPI 서빙, npm·빌드
+없음). 단일 HTML(인라인 CSS/JS)이 JSON API를 3초마다 폴링해 탭을 갱신한다.
+
+| 탭 | 데이터 | 내용 |
+|---|---|---|
+| 처리중인 Query | `GET /jobs` | 작업 목록(상태/진행률/완료수/rows/exec_mode/partition/target) + 총/실행/활성 카드 |
+| Executor 상황 | `GET /cluster` | coordinator CPU/메모리/디스크 카드 + executor별 health·CPU/MEM/DISK·last_seen |
+| 환경설정 | `GET /config` | 설정 key/value 표(**비밀값 마스킹**: DSN 비밀번호 `user:***@`, impala 비밀번호 `***`) |
+| 그외 정보 | `GET /info` | 버전·coordinator_id·executor_mode·store backend·self_report·uptime·상태별 job 수 |
+
+```bash
+# 브라우저에서 http://<host>:8000/
+curl -s localhost:8000/jobs        # 작업 목록(JSON)
+curl -s localhost:8000/config      # 설정(마스킹)
+curl -s localhost:8000/info        # 요약
+```
+
+- 읽기 전용이며 `/config` 의 비밀값은 마스킹된다. 노출이 우려되면 `dashboard.enabled=false`
+  로 끈다(`/`·`/config`·`/info` 비활성, `/jobs` 는 유지).
+- 멀티 coordinator + 공유 store면 어느 coordinator의 `/` 에서도 전체 작업이 보인다.
+
 ## API 문서 (Swagger)
 
 두 서비스 모두 FastAPI 기반 대화형 문서를 제공한다.

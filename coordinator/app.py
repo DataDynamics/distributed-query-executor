@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
+from .dashboard import DASHBOARD_HTML, masked_config
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .executor_status import ExecutorStatusRepository
@@ -54,6 +57,8 @@ def create_app(
             else HttpDispatcher(settings, store=store)
         )
     monitor = HealthMonitor(settings)
+    started_at = datetime.now(timezone.utc)
+    start_monotonic = time.monotonic()
     # self-report 모드면 executor 상태를 공유 테이블에서 읽는다(coordinator 폴링/기록 안 함)
     status_repo = (
         ExecutorStatusRepository(settings.history_db_dsn, settings.executor_status_table)
@@ -365,6 +370,69 @@ def create_app(
     )
     def metrics():
         return collect_system_metrics(settings.monitor_disk_path)
+
+    # ───────── 모니터링 대시보드 & 데이터 API ─────────
+
+    _active_set = {JobStatus.RUNNING, JobStatus.SPLITTING, JobStatus.PENDING}
+
+    @app.get("/jobs", tags=["Jobs"], summary="작업 목록")
+    def list_jobs(status: Optional[str] = None, limit: int = 100):
+        all_jobs = store.list()
+        total_all = len(all_jobs)
+        running = sum(1 for j in all_jobs if j.status == JobStatus.RUNNING)
+        active = sum(1 for j in all_jobs if j.status in _active_set)
+        jobs = sorted(all_jobs, key=lambda j: j.created_at or "", reverse=True)
+        if status:
+            s = status.lower()
+            if s in ("running", "active"):
+                jobs = [j for j in jobs if j.status in _active_set]
+            else:
+                jobs = [j for j in jobs if j.status.value.lower() == s]
+        rows = [
+            {
+                "job_id": j.job_id, "status": j.status.value,
+                "progress_percent": j.progress_percent,
+                "completed": j.completed, "total": len(j.tasks),
+                "total_rows_written": j.total_rows_written,
+                "exec_mode": j.exec_mode, "partition_column": j.partition_column,
+                "target_table": j.target_table,
+                "created_at": j.created_at, "started_at": j.started_at,
+                "finished_at": j.finished_at,
+            }
+            for j in jobs[:limit]
+        ]
+        return {"jobs": rows, "total": total_all, "running": running, "active": active}
+
+    if settings.dashboard_enabled:
+
+        @app.get("/", include_in_schema=False)
+        def dashboard():
+            return HTMLResponse(DASHBOARD_HTML)
+
+        @app.get("/config", tags=["Monitoring"], summary="환경설정(비밀값 마스킹)")
+        def get_config():
+            return {"config": masked_config(settings)}
+
+        @app.get("/info", tags=["Monitoring"], summary="기타 정보")
+        def get_info():
+            all_jobs = store.list()
+            by_status: dict[str, int] = {}
+            for j in all_jobs:
+                by_status[j.status.value] = by_status.get(j.status.value, 0) + 1
+            return {
+                "version": "0.1.0",
+                "coordinator_id": settings.coordinator_id,
+                "executor_mode": settings.executor_mode,
+                "store_backend": settings.store_backend,
+                "executor_self_report": settings.executor_self_report,
+                "started_at": started_at.isoformat(),
+                "uptime_seconds": round(time.monotonic() - start_monotonic, 1),
+                "jobs_total": len(all_jobs),
+                "executors_configured": len(settings.executors),
+                "max_concurrent_jobs": settings.max_concurrent_jobs,
+                "max_dispatch_concurrency": settings.max_dispatch_concurrency,
+                "jobs_by_status": by_status,
+            }
 
     return app
 

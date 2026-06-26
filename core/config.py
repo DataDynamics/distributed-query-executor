@@ -96,6 +96,8 @@ class Settings:
             os.getenv("STORE_BACKEND") or _get("store", "backend", "memory")
         ).lower()
         self.store_table: str = _get("store", "table", "jobs")
+        # / 모니터링 대시보드(읽기 전용). 비밀값은 마스킹되지만 운영 정보 노출에 주의.
+        self.dashboard_enabled: bool = _to_bool(_get("dashboard", "enabled", True))
         # dispatcher/app 에서 사용하는 속성명과 호환되도록 별칭 유지
         self.executors: list[str] = _csv_list(_get("coordinator", "executors", ""))
         self.max_concurrent_jobs: int = int(
