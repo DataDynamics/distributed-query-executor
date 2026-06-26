@@ -101,6 +101,20 @@ QUERY_EXECUTOR_CONFIG_DIR=packaging/config \
   .venv/bin/python -m coordinator
 ```
 
+## API 문서 (Swagger)
+
+두 서비스 모두 FastAPI 기반 대화형 문서를 제공한다.
+
+| 경로 | 설명 |
+|---|---|
+| `/docs` | Swagger UI (대화형 API 문서) |
+| `/redoc` | ReDoc 문서 |
+| `/openapi.json` | OpenAPI 3 스키마 |
+
+```bash
+# 브라우저에서 http://localhost:8000/docs (coordinator), http://localhost:8001/docs (executor)
+```
+
 ```bash
 curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('\''2026-01-01'\'','\''2026-01-02'\'') AND region='\''KR'\''",

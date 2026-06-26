@@ -63,7 +63,19 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
     backend = backend or _build_backend()
     tasks: dict[str, Task] = {}
 
-    app = FastAPI(title="Query Executor", version="0.1.0")
+    app = FastAPI(
+        title="Distributed Query Executor",
+        version="0.1.0",
+        description=(
+            "coordinator가 분할한 Impala sub-query를 받아 실행하고, 결과를 Greenplum에 "
+            "적재한다. 자신의 task 상태와 시스템 메트릭을 노출한다.\n\n"
+            "- Swagger UI: `/docs`, ReDoc: `/redoc`, OpenAPI 스키마: `/openapi.json`"
+        ),
+        openapi_tags=[
+            {"name": "Tasks", "description": "sub-query 태스크 접수·상태·결과"},
+            {"name": "Monitoring", "description": "헬스 체크, 시스템 메트릭"},
+        ],
+    )
     app.state.backend = backend
     app.state.tasks = tasks
 
@@ -95,7 +107,13 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
             task.error = str(exc)
             logger.exception("task %s 실패", task.task_id)
 
-    @app.post("/tasks", status_code=202)
+    @app.post(
+        "/tasks",
+        status_code=202,
+        tags=["Tasks"],
+        summary="sub-query 태스크 접수",
+        description="sub-query를 받아 Impala 읽기 → Greenplum 적재를 비동기로 시작한다.",
+    )
     async def create_task(req: CreateTaskRequest):
         task = Task(
             task_id=req.task_id,
@@ -111,29 +129,29 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
         logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
         return {"task_id": task.task_id, "status": task.status.value}
 
-    @app.get("/tasks/{task_id}")
+    @app.get("/tasks/{task_id}", tags=["Tasks"], summary="태스크 상태 조회")
     def get_task(task_id: str):
         task = tasks.get(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         return task.view()
 
-    @app.get("/tasks/{task_id}/result")
+    @app.get("/tasks/{task_id}/result", tags=["Tasks"], summary="태스크 결과(적재 행수) 조회")
     def get_task_result(task_id: str):
         task = tasks.get(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         return {"rows_written": task.rows_written}
 
-    @app.get("/health")
+    @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
         return {"status": "ok", "service": "executor", "version": "0.1.0"}
 
-    @app.get("/healthz")  # 하위 호환 별칭
+    @app.get("/healthz", tags=["Monitoring"], summary="헬스 체크 별칭(하위 호환)")
     def healthz():
         return {"status": "ok"}
 
-    @app.get("/metrics")
+    @app.get("/metrics", tags=["Monitoring"], summary="시스템 메트릭(CPU/메모리/디스크)")
     def metrics():
         return collect_system_metrics(settings.monitor_disk_path)
 

@@ -144,6 +144,10 @@ curl -s localhost:8001/metrics
 # coordinator가 보유한 executor 헬스/메트릭 상태
 curl -s localhost:8000/executors
 
+# Swagger UI / OpenAPI 스키마
+#   http://<host>:8000/docs , http://<host>:8001/docs
+curl -s localhost:8000/openapi.json | head -c 200
+
 curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('\''2026-01-01'\'','\''2026-01-02'\'') AND region='\''KR'\''",
   "partition_column": "dt",

@@ -48,7 +48,21 @@ def create_app(
         finally:
             await monitor.stop()
 
-    app = FastAPI(title="Query Coordinator", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Distributed Query Coordinator",
+        version="0.1.0",
+        description=(
+            "Impala `SELECT` 쿼리를 파티션 컬럼의 `IN` 목록 기준으로 N분할하여 여러 "
+            "executor에 분배하고, 각 executor가 Greenplum에 병렬 적재하도록 조율한다.\n\n"
+            "- 검증/분할/디스패치/상태추적, executor 헬스 모니터링\n"
+            "- Swagger UI: `/docs`, ReDoc: `/redoc`, OpenAPI 스키마: `/openapi.json`"
+        ),
+        openapi_tags=[
+            {"name": "Jobs", "description": "쿼리 작업 생성·조회·결과·태스크 상세"},
+            {"name": "Monitoring", "description": "헬스 체크, 시스템 메트릭, executor 상태"},
+        ],
+        lifespan=lifespan,
+    )
     app.state.store = store
     app.state.runner = runner
     app.state.settings = settings
@@ -61,7 +75,15 @@ def create_app(
             content={"error_code": exc.code, "message": exc.message},
         )
 
-    @app.post("/jobs", response_model=CreateJobResponse, status_code=202)
+    @app.post(
+        "/jobs",
+        response_model=CreateJobResponse,
+        status_code=202,
+        tags=["Jobs"],
+        summary="쿼리 작업 생성",
+        description="SQL을 검증·분할하여 작업을 생성하고 비동기로 디스패치한다. "
+        "검증 실패 시 422(error_code 포함)를 반환한다.",
+    )
     def create_job(req: CreateJobRequest, background: BackgroundTasks):
         # 동기 검증 + 분할: 오류는 지금 즉시 클라이언트에게 반환한다.
         parsed = validate_and_parse(req.sql, req.partition_column)
@@ -99,21 +121,25 @@ def create_app(
         background.add_task(runner.run, job)
         return CreateJobResponse(job_id=job.job_id)
 
-    @app.get("/jobs/{job_id}")
+    @app.get("/jobs/{job_id}", tags=["Jobs"], summary="작업 상태 조회")
     def get_job(job_id: str):
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         return job.status_view()
 
-    @app.get("/jobs/{job_id}/result")
+    @app.get("/jobs/{job_id}/result", tags=["Jobs"], summary="작업 결과(적재 요약) 조회")
     def get_job_result(job_id: str):
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         return job.result_view()
 
-    @app.get("/jobs/{job_id}/tasks/{task_id}")
+    @app.get(
+        "/jobs/{job_id}/tasks/{task_id}",
+        tags=["Jobs"],
+        summary="태스크 상세 조회(sub-query 전문 포함)",
+    )
     def get_task_detail(job_id: str, task_id: str):
         job = store.get(job_id)
         if job is None:
@@ -123,20 +149,28 @@ def create_app(
                 return task.detail()  # sub_query 전문 포함
         raise HTTPException(status_code=404, detail="task not found")
 
-    @app.get("/executors")
+    @app.get(
+        "/executors",
+        tags=["Monitoring"],
+        summary="executor 헬스/메트릭 상태",
+        description="모니터가 주기 폴링으로 보유한 executor별 CPU/메모리/디스크 상태.",
+    )
     def list_executor_health():
-        """모니터가 보유한 executor 헬스/메트릭 상태."""
         return {"executors": monitor.snapshot()}
 
-    @app.get("/health")
+    @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
         return {"status": "ok", "service": "coordinator", "version": "0.1.0"}
 
-    @app.get("/healthz")  # 하위 호환 별칭
+    @app.get("/healthz", tags=["Monitoring"], summary="헬스 체크 별칭(하위 호환)")
     def healthz():
         return {"status": "ok"}
 
-    @app.get("/metrics")
+    @app.get(
+        "/metrics",
+        tags=["Monitoring"],
+        summary="시스템 메트릭(CPU/메모리/디스크)",
+    )
     def metrics():
         return collect_system_metrics(settings.monitor_disk_path)
 

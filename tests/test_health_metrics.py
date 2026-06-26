@@ -45,6 +45,31 @@ def test_healthz_alias_still_works(client):
     assert client.get("/healthz").json() == {"status": "ok"}
 
 
+# ----------------------------- Swagger / OpenAPI -----------------------------
+
+
+def test_coordinator_swagger_and_openapi(client):
+    assert client.get("/docs").status_code == 200          # Swagger UI
+    assert client.get("/redoc").status_code == 200          # ReDoc
+    schema = client.get("/openapi.json").json()
+    assert schema["info"]["title"] == "Distributed Query Coordinator"
+    # 주요 경로가 스키마에 포함되는지
+    assert "/jobs" in schema["paths"]
+    assert "/metrics" in schema["paths"]
+    # 태그가 부여되었는지
+    assert "Jobs" in {t for p in schema["paths"].values()
+                      for op in p.values() for t in op.get("tags", [])}
+
+
+def test_executor_swagger_and_openapi():
+    ex = TestClient(create_executor_app())
+    assert ex.get("/docs").status_code == 200
+    schema = ex.get("/openapi.json").json()
+    assert schema["info"]["title"] == "Distributed Query Executor"
+    assert "/tasks" in schema["paths"]
+    assert "/metrics" in schema["paths"]
+
+
 class _MonitorSettings:
     """모니터 단위 테스트용 최소 설정."""
 
