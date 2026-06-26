@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
 from contextlib import asynccontextmanager
@@ -185,6 +186,48 @@ def create_app(
     )
     def list_executor_health():
         return {"executors": monitor.snapshot()}
+
+    @app.get(
+        "/cluster",
+        tags=["Monitoring"],
+        summary="클러스터 전체 상태(coordinator+executor health/metrics + 실행 중 job 수)",
+        description="coordinator와 모든 executor의 health 및 CPU/메모리/디스크, 그리고 "
+        "실행 중인 job 수를 한 번에 반환한다. refresh=true(기본)면 executor를 즉시 폴링한다.",
+    )
+    async def cluster(refresh: bool = True):
+        executors = await monitor.poll_now() if refresh else monitor.snapshot()
+        coord_metrics = await asyncio.to_thread(
+            collect_system_metrics, settings.monitor_disk_path
+        )
+
+        by_status: dict[str, int] = {}
+        for job in store.list():
+            by_status[job.status.value] = by_status.get(job.status.value, 0) + 1
+        running = by_status.get(JobStatus.RUNNING.value, 0)
+        active = running + by_status.get(JobStatus.SPLITTING.value, 0) + by_status.get(
+            JobStatus.PENDING.value, 0
+        )
+        healthy = sum(1 for e in executors if e.get("healthy"))
+
+        return {
+            "coordinator": {
+                "service": "coordinator",
+                "status": "ok",
+                "metrics": coord_metrics,
+            },
+            "executors": executors,
+            "executors_summary": {
+                "total": len(executors),
+                "healthy": healthy,
+                "unhealthy": len(executors) - healthy,
+            },
+            "jobs": {
+                "running": running,
+                "active": active,  # RUNNING + SPLITTING + PENDING
+                "total": len(store.list()),
+                "by_status": by_status,
+            },
+        }
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():

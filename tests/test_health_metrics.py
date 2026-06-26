@@ -81,6 +81,53 @@ class _MonitorSettings:
     monitor_table = "executor_health_metrics"
 
 
+# ----------------------------- /cluster 통합 상태 -----------------------------
+
+
+def test_cluster_returns_coordinator_executors_and_jobs(client):
+    body = client.get("/cluster").json()
+    # coordinator health + 메트릭
+    assert body["coordinator"]["status"] == "ok"
+    cm = body["coordinator"]["metrics"]
+    assert isinstance(cm["cpu_percent"], (int, float))
+    assert "percent" in cm["memory"] and "percent" in cm["disk"]
+    # executor 요약(기본 설정엔 executor 없음)
+    assert body["executors"] == []
+    assert body["executors_summary"] == {"total": 0, "healthy": 0, "unhealthy": 0}
+    # job 요약
+    assert "running" in body["jobs"] and "active" in body["jobs"]
+    assert "by_status" in body["jobs"]
+
+
+def test_cluster_counts_running_jobs(client, store):
+    from coordinator.models import Job, JobStatus
+
+    # 실행 중 job 2개, 완료 1개를 직접 적재
+    for st in (JobStatus.RUNNING, JobStatus.RUNNING, JobStatus.DONE):
+        store.add(
+            Job(
+                original_sql="SELECT 1 FROM t WHERE dt IN ('1')",
+                partition_column="dt",
+                target_table="public.t",
+                write_mode="append",
+                parallelism=1,
+                split_strategy="contiguous",
+                failure_policy="fail_fast",
+                status=st,
+            )
+        )
+    body = client.get("/cluster").json()
+    assert body["jobs"]["running"] == 2
+    assert body["jobs"]["total"] == 3
+    assert body["jobs"]["by_status"]["RUNNING"] == 2
+    assert body["jobs"]["by_status"]["DONE"] == 1
+
+
+def test_cluster_refresh_false_uses_cache(client):
+    body = client.get("/cluster?refresh=false").json()
+    assert body["executors"] == []  # 캐시 스냅샷(설정된 executor 없음)
+
+
 async def test_monitor_polls_executor_health_and_metrics():
     # coordinator가 executor의 /health·/metrics를 호출해 CPU/메모리 상태를 보유하는지 검증
     transport = httpx.ASGITransport(app=create_executor_app())
@@ -93,9 +140,15 @@ async def test_monitor_polls_executor_health_and_metrics():
     assert rec.cpu_percent is not None
     assert rec.memory_percent is not None
     assert rec.memory_used_mb is not None
+    assert rec.disk_percent is not None
+    assert rec.disk_used_gb is not None
+    assert rec.disk_total_gb is not None
     assert rec.error is None
 
-    # 모니터 스냅샷이 PG 기록용 필드를 모두 갖추는지
+    # 모니터 스냅샷이 CPU/메모리/디스크 필드를 모두 갖추는지
     snap = monitor.snapshot()[0]
     assert snap["executor_url"] == "http://exec"
-    assert {"cpu_percent", "memory_percent", "disk_percent"} <= snap.keys()
+    assert {
+        "cpu_percent", "memory_percent", "disk_percent",
+        "disk_used_gb", "disk_total_gb",
+    } <= snap.keys()

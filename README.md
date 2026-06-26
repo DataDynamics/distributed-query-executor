@@ -126,6 +126,36 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
 - 모니터링: 두 서비스 모두 `/health`·`/metrics`(CPU·메모리·디스크) 제공. coordinator는
   executor `/health`·`/metrics` 를 주기 폴링(`GET /executors`)하고 `monitor.db_dsn`
   설정 시 CPU/메모리 사용량을 PostgreSQL(`monitor.table`)에 주기 기록
+- 통합 상태: `GET /cluster` — coordinator + 모든 executor 의 health/CPU/메모리/디스크와
+  실행 중 job 수를 **한 번에** 반환 (아래 참고)
+
+## 클러스터 통합 상태 (`GET /cluster`)
+
+coordinator·executor 의 health 와 CPU/메모리/디스크, 실행 중 job 수를 한 번에 조회한다.
+`refresh=true`(기본)면 executor 를 즉시 폴링하고, `refresh=false`면 모니터 캐시를 쓴다.
+
+```bash
+curl -s localhost:8000/cluster            # 즉시 폴링
+curl -s 'localhost:8000/cluster?refresh=false'   # 캐시 사용
+```
+
+```json
+{
+  "coordinator": {
+    "service": "coordinator", "status": "ok",
+    "metrics": { "cpu_percent": 9.5,
+      "memory": {"total_mb": 385552.7, "used_mb": 54083.0, "percent": 14.0},
+      "disk":   {"path": "/", "total_gb": 823.96, "used_gb": 566.25, "percent": 72.4} }
+  },
+  "executors": [
+    { "executor_url": "http://127.0.0.1:8001", "healthy": true,
+      "cpu_percent": 3.1, "memory_percent": 22.5, "memory_used_mb": 4096.0,
+      "disk_percent": 61.0, "disk_used_gb": 120.5, "disk_total_gb": 200.0 }
+  ],
+  "executors_summary": { "total": 1, "healthy": 1, "unhealthy": 0 },
+  "jobs": { "running": 1, "active": 1, "total": 1, "by_status": {"RUNNING": 1} }
+}
+```
 
 ## 실행 환경 (RHEL 9.2)
 

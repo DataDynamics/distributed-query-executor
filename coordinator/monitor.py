@@ -27,6 +27,8 @@ class ExecutorHealth:
     memory_used_mb: Optional[float] = None
     memory_total_mb: Optional[float] = None
     disk_percent: Optional[float] = None
+    disk_used_gb: Optional[float] = None
+    disk_total_gb: Optional[float] = None
     error: Optional[str] = None
 
     def as_view(self) -> dict:
@@ -102,6 +104,16 @@ class HealthMonitor:
     def snapshot(self) -> list[dict]:
         return [h.as_view() for h in self.executors.values()]
 
+    async def poll_now(self) -> list[dict]:
+        """등록된 모든 executor를 즉시 1회 폴링하고 최신 스냅샷을 반환한다(on-demand)."""
+        if not self.executors:
+            return []
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await asyncio.gather(
+                *(self._poll_one(client, url) for url in self.executors)
+            )
+        return self.snapshot()
+
     # ───────── 폴링 루프 ─────────
 
     async def _health_loop(self) -> None:
@@ -122,12 +134,15 @@ class HealthMonitor:
             metrics.raise_for_status()
             md = metrics.json()
             mem = md.get("memory", {})
+            disk = md.get("disk", {})
             rec.healthy = True
             rec.cpu_percent = md.get("cpu_percent")
             rec.memory_percent = mem.get("percent")
             rec.memory_used_mb = mem.get("used_mb")
             rec.memory_total_mb = mem.get("total_mb")
-            rec.disk_percent = md.get("disk", {}).get("percent")
+            rec.disk_percent = disk.get("percent")
+            rec.disk_used_gb = disk.get("used_gb")
+            rec.disk_total_gb = disk.get("total_gb")
             rec.error = None
         except Exception as exc:
             rec.healthy = False
