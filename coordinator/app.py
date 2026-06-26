@@ -17,7 +17,7 @@ from .job_store import JobStore
 from .models import CreateJobRequest, CreateJobResponse, Job, JobStatus, Task
 from .monitor import HealthMonitor
 from .parser import QueryValidationError, validate_and_parse
-from .splitter import split
+from .splitter import split, wrap
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,16 @@ def create_app(
             strict=req.strict_validation,
         )
         sub_queries = split(parsed, req.parallelism, req.split_strategy)
+
+        # 감싸는 쿼리가 있으면 각 sub-query를 placeholder 자리에 끼워 넣는다.
+        if req.wrapper_query:
+            if req.wrapper_placeholder not in req.wrapper_query:
+                raise QueryValidationError(
+                    "WRAPPER_PLACEHOLDER_MISSING",
+                    f"wrapper_query 에 placeholder '{req.wrapper_placeholder}' 가 없습니다.",
+                )
+            for sq in sub_queries:
+                sq.sql = wrap(sq.sql, req.wrapper_query, req.wrapper_placeholder)
 
         job = Job(
             original_sql=req.sql,

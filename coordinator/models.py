@@ -126,6 +126,15 @@ class CreateJobRequest(BaseModel):
         description="True면 단순 SELECT만 허용. 복합 쿼리(중첩 서브쿼리/JOIN/GROUP BY 등)는 "
         "False로 설정하면 파티션 IN 절을 트리 어디서든 찾아 분할한다.",
     )
+    wrapper_query: Optional[str] = Field(
+        default=None,
+        description="분할된 sub-query를 감싸는 쿼리. placeholder 자리에 각 sub-query가 치환된다. "
+        "예: 'SELECT * FROM ({{SUBQUERY}}) t'",
+    )
+    wrapper_placeholder: str = Field(
+        default="{{SUBQUERY}}",
+        description="wrapper_query 안에서 sub-query가 들어갈 자리표시자(기본 {{SUBQUERY}}).",
+    )
 
 
 class CreateJobResponse(BaseModel):

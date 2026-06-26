@@ -13,10 +13,21 @@ from dataclasses import dataclass
 from .parser import ParsedQuery, find_partition_in
 
 
+DEFAULT_WRAPPER_PLACEHOLDER = "{{SUBQUERY}}"
+
+
 @dataclass
 class SubQuery:
     sql: str
     partition_values: list[str]
+
+
+def wrap(sub_sql: str, wrapper: str, placeholder: str = DEFAULT_WRAPPER_PLACEHOLDER) -> str:
+    """감싸는 쿼리(wrapper)의 placeholder 자리에 분할된 sub-query를 끼워 넣는다.
+
+    placeholder가 여러 번 나오면 모두 치환한다. (괄호 등은 wrapper 작성자가 직접 둔다.)
+    """
+    return wrapper.replace(placeholder, sub_sql)
 
 
 def _chunk(values: list, n: int, strategy: str) -> list[list]:
