@@ -18,6 +18,7 @@ logging:
 coordinator:
   host: ${coordinator.host:0.0.0.0}
   port: ${coordinator.port:8000}
+  executor_mode: ${coordinator.executor_mode:remote}
   executors: ${coordinator.executors:}
   max_concurrent_jobs: ${coordinator.max_concurrent_jobs:16}
   max_dispatch_concurrency: ${coordinator.max_dispatch_concurrency:32}

@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Iterator, Protocol
+
+logger = logging.getLogger(__name__)
 
 
 class Backend(Protocol):
@@ -168,3 +171,42 @@ def _batches(cursor, size: int) -> Iterator[list]:
         if not rows:
             break
         yield rows
+
+
+def build_backend(settings) -> Backend:
+    """설정에 따라 실제 백엔드 또는 MockBackend를 선택한다(coordinator·executor 공용).
+
+    greenplum.dsn 이 설정되면 실제 백엔드(statement/stage_insert 가능, copy 는 impala.host 도 필요),
+    아무 것도 없으면 MockBackend(실제 I/O 없음 — 로컬 검증용).
+    """
+    if settings.greenplum_dsn:
+        impala_dsn: dict = {}
+        if settings.impala_host:
+            impala_dsn = {
+                "host": settings.impala_host,
+                "port": settings.impala_port,
+                "database": settings.impala_database,
+                "auth_mechanism": settings.impala_auth_mechanism,
+                "use_ssl": settings.impala_use_ssl,
+            }
+            if settings.impala_ca_cert:
+                impala_dsn["ca_cert"] = settings.impala_ca_cert
+            if settings.impala_auth_mechanism.upper() == "GSSAPI":
+                impala_dsn["kerberos_service_name"] = settings.impala_kerberos_service_name
+            else:
+                if settings.impala_user:
+                    impala_dsn["user"] = settings.impala_user
+                if settings.impala_password:
+                    impala_dsn["password"] = settings.impala_password
+        logger.info(
+            "ImpalaToGreenplumBackend 사용 (impala=%s, batch=%s)",
+            settings.impala_host or "(미설정 → statement 모드만)",
+            settings.copy_batch_size,
+        )
+        return ImpalaToGreenplumBackend(
+            impala_dsn=impala_dsn,
+            greenplum_dsn=settings.greenplum_dsn,
+            batch_size=settings.copy_batch_size,
+        )
+    logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
+    return MockBackend()

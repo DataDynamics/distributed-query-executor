@@ -75,6 +75,12 @@ class Settings:
         # ───────── Coordinator ─────────
         self.coordinator_host: str = _get("coordinator", "host", "0.0.0.0")
         self.coordinator_port: int = int(_get("coordinator", "port", 8000))
+        # executor 실행 방식: remote(HTTP 디스패치) | local(in-process 직접 실행)
+        # 환경변수 COORDINATOR_EXECUTOR_MODE 로 즉시 토글 가능(로컬 검증용)
+        self.executor_mode: str = (
+            os.getenv("COORDINATOR_EXECUTOR_MODE")
+            or _get("coordinator", "executor_mode", "remote")
+        ).lower()
         # dispatcher/app 에서 사용하는 속성명과 호환되도록 별칭 유지
         self.executors: list[str] = _csv_list(_get("coordinator", "executors", ""))
         self.max_concurrent_jobs: int = int(

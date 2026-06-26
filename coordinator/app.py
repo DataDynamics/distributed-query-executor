@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from core.metrics import collect_system_metrics
 from .config import Settings, settings as default_settings
-from .dispatcher import HttpDispatcher, JobRunner
+from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .job_store import JobStore
 from .models import CreateJobRequest, CreateJobResponse, Job, JobStatus, Task
 from .monitor import HealthMonitor
@@ -38,7 +38,12 @@ def create_app(
 ) -> FastAPI:
     settings = settings or default_settings
     store = store or JobStore()
-    runner = runner or HttpDispatcher(settings)
+    if runner is None:
+        runner = (
+            LocalDispatcher(settings)
+            if settings.executor_mode == "local"
+            else HttpDispatcher(settings)
+        )
     monitor = HealthMonitor(settings)
 
     @asynccontextmanager

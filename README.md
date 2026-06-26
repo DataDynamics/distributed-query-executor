@@ -295,6 +295,30 @@ SELECT recorded_at, task_id, executor_id, status, rows_written
 FROM task_history WHERE job_id = '<job_id>' ORDER BY recorded_at;
 ```
 
+## 로컬 모드 (local mode)
+
+executor를 별도로 띄우지 않고 **coordinator 안에서 in-process로 직접 실행**한다. HTTP
+디스패치 대신 executor 백엔드를 바로 호출하므로, executor 프로세스/원격 없이 동작 검증이
+쉽다. 기본 백엔드는 `greenplum.dsn` 미설정 시 `MockBackend`(실제 I/O 없음).
+
+```bash
+# 환경변수로 즉시 토글 (config 의 coordinator.executor_mode=local 과 동일)
+COORDINATOR_EXECUTOR_MODE=local .venv/bin/python -m coordinator
+
+# 제출 → executor 없이 즉시 실행됨 → 상태 DONE
+curl -s localhost:8000/jobs -H 'content-type: application/json' \
+  -d '{"sql":"SELECT a, dt FROM t WHERE dt IN ('\''1'\'','\''2'\'')","partition_column":"dt","target_table":"public.t","parallelism":2}'
+curl -s localhost:8000/jobs/<job_id>/status   # {"status":"DONE", ...}
+```
+
+| `coordinator.executor_mode` | 동작 |
+|---|---|
+| `remote` (기본) | executor 서비스에 HTTP(`POST /tasks`)로 디스패치 |
+| `local` | coordinator 프로세스 안에서 백엔드를 직접 호출(원격/HTTP 없음) |
+
+> 쿼리만 확인하려면 [dry-run](#작업-상태-확인--이력), 실제 적재 동작까지 로컬에서 보려면
+> local 모드를 쓴다(둘은 독립적으로 조합 가능).
+
 ## API 문서 (Swagger)
 
 두 서비스 모두 FastAPI 기반 대화형 문서를 제공한다.
