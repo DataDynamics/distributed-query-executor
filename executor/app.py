@@ -49,8 +49,8 @@ def create_app(
     app.state.task_history = history
 
     async def _run_with_ctx(task: Task) -> None:
-        # 백그라운드 실행 로그에도 [job_id] 가 붙도록 컨텍스트 바인딩
-        with job_log_context(task.job_id):
+        # 백그라운드 실행 로그에도 [job_id][task_id] 가 붙도록 컨텍스트 바인딩
+        with job_log_context(task.job_id, task.task_id):
             await _run(task)
 
     async def _run(task: Task) -> None:
@@ -136,7 +136,7 @@ def create_app(
             insert_sql=req.insert_sql,
         )
         tasks[task.task_id] = task
-        with job_log_context(task.job_id):
+        with job_log_context(task.job_id, task.task_id):
             await history.record(task)  # QUEUED 이력
             asyncio.create_task(_run_with_ctx(task))
             logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)

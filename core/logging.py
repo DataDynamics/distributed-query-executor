@@ -11,23 +11,27 @@ from pathlib import Path
 
 from core.config import settings as default_settings
 
-# 현재 처리 중인 job_id (없으면 "-"). 로그에 [job_id] 로 자동 주입된다.
+# 현재 처리 중인 job_id / task_id (없으면 "-"). 로그에 [job_id][task_id] 로 자동 주입된다.
 job_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("job_id", default="-")
+task_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("task_id", default="-")
 
 
 @contextmanager
-def job_log_context(job_id: str):
-    """이 블록(및 await 체인) 안에서 발생하는 모든 로그에 job_id 를 붙인다."""
-    token = job_id_var.set(job_id)
+def job_log_context(job_id: str, task_id: str | None = None):
+    """이 블록(및 await 체인) 안의 모든 로그에 job_id(및 task_id)를 붙인다."""
+    jtok = job_id_var.set(job_id)
+    ttok = task_id_var.set(task_id) if task_id is not None else None
     try:
         yield
     finally:
-        job_id_var.reset(token)
+        if ttok is not None:
+            task_id_var.reset(ttok)
+        job_id_var.reset(jtok)
 
 
 LOG_FORMAT = (
     "%(levelname)s %(asctime)s.%(msecs)03d %(process)d %(programname)s"
-    " %(filename)s:%(funcName)s:%(lineno)d [%(job_id)s] - %(message)s"
+    " %(filename)s:%(funcName)s:%(lineno)d [%(job_id)s][%(task_id)s] - %(message)s"
 )
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -81,6 +85,7 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
     def _record_factory(*args, **kwargs):
         record = _base_factory(*args, **kwargs)
         record.job_id = job_id_var.get()
+        record.task_id = task_id_var.get()
         return record
 
     logging.setLogRecordFactory(_record_factory)
