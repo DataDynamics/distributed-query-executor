@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import logging
 from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -14,6 +15,8 @@ from .job_store import JobStore
 from .models import CreateJobRequest, CreateJobResponse, Job, JobStatus, Task
 from .parser import QueryValidationError, validate_and_parse
 from .splitter import split
+
+logger = logging.getLogger(__name__)
 
 
 def _assign_executors(count: int, executors: list[str]) -> list[Optional[str]]:
@@ -73,6 +76,13 @@ def create_app(
         ]
         store.add(job)
 
+        logger.info(
+            "job %s 생성: %d개 sub-query로 분할 (partition=%s, target=%s)",
+            job.job_id,
+            len(job.tasks),
+            req.partition_column,
+            req.target_table,
+        )
         background.add_task(runner.run, job)
         return CreateJobResponse(job_id=job.job_id)
 

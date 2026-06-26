@@ -9,11 +9,12 @@ Type=simple
 User=queryexec
 Group=queryexec
 WorkingDirectory=/opt/query-executor
-EnvironmentFile=/etc/query-executor/coordinator.env
-# 인메모리 Job 저장소를 사용하므로 단일 워커로 실행한다(상태 일관성 유지).
-# 다중 워커/다중 인스턴스가 필요하면 Job 저장소를 Redis로 교체할 것.
-ExecStart=/opt/query-executor/.venv/bin/uvicorn coordinator.app:app \
-    --host ${HOST} --port ${PORT} --workers 1
+Environment=QUERY_EXECUTOR_CONFIG_DIR=/etc/query-executor
+# /var/log/query-executor 를 생성하고 서비스 계정 소유로 만든다(config.yml 기본 로그 경로).
+LogsDirectory=query-executor
+# host/port 등은 /etc/query-executor/config.{properties,yml} 에서 읽는다.
+# 인메모리 Job 저장소이므로 단일 워커로 실행한다.
+ExecStart=/opt/query-executor/.venv/bin/python -m coordinator
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30

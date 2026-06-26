@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # RHEL 9.2용 설치 스크립트.
-# 애플리케이션을 /opt/query-executor 에 배치하고, 전용 사용자/venv/systemd 유닛을 구성한다.
+# 애플리케이션을 /opt/query-executor 에 배치하고, 전용 사용자/venv/설정/systemd 유닛을 구성한다.
 # 사용법:  sudo ./deploy/install.sh
 set -euo pipefail
 
 APP_USER="queryexec"
 APP_DIR="/opt/query-executor"
 CONF_DIR="/etc/query-executor"
+LOG_DIR="/var/log/query-executor"
 PYTHON="${PYTHON:-python3.11}"
 
 # 저장소 루트(이 스크립트의 상위 디렉터리)
@@ -19,7 +20,7 @@ fi
 
 echo "==> Python 3.11 확인"
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
-    echo "$PYTHON 가 없습니다. 먼저 설치하세요: sudo dnf install -y python3.11 python3.11-pip python3.11-devel" >&2
+    echo "$PYTHON 가 없습니다. 먼저 설치하세요: sudo dnf install -y python3.11 python3.11-pip python3.11-devel rsync" >&2
     exit 1
 fi
 
@@ -32,7 +33,7 @@ echo "==> 애플리케이션 복사 -> $APP_DIR"
 mkdir -p "$APP_DIR"
 rsync -a --delete \
     --exclude '.venv' --exclude '.git' --exclude '__pycache__' \
-    --exclude '.pytest_cache' --exclude '*.egg-info' \
+    --exclude '.pytest_cache' --exclude '*.egg-info' --exclude 'logs' \
     "$SRC_DIR"/ "$APP_DIR"/
 
 echo "==> 가상환경 및 의존성 설치"
@@ -44,14 +45,20 @@ echo "==> 가상환경 및 의존성 설치"
 
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
-echo "==> 환경설정 파일 배치 -> $CONF_DIR"
+echo "==> 설정 파일 배치 -> $CONF_DIR (config.properties + config.yml)"
 mkdir -p "$CONF_DIR"
-[[ -f "$CONF_DIR/coordinator.env" ]] || \
-    cp "$APP_DIR/deploy/systemd/coordinator.env.example" "$CONF_DIR/coordinator.env"
-[[ -f "$CONF_DIR/executor.env" ]] || \
-    cp "$APP_DIR/deploy/systemd/executor.env.example" "$CONF_DIR/executor.env"
-chmod 640 "$CONF_DIR"/*.env
-chown root:"$APP_USER" "$CONF_DIR"/*.env
+if [[ ! -f "$CONF_DIR/config.properties" ]]; then
+    cp "$APP_DIR/packaging/config/config.properties" "$CONF_DIR/config.properties"
+    # 운영 로그 경로를 절대 경로로 설정(개발 기본값 logs -> /var/log/query-executor)
+    sed -i "s|^log.dir=.*|log.dir=$LOG_DIR|" "$CONF_DIR/config.properties"
+fi
+[[ -f "$CONF_DIR/config.yml" ]] || cp "$APP_DIR/packaging/config/config.yml" "$CONF_DIR/config.yml"
+chmod 640 "$CONF_DIR"/config.properties "$CONF_DIR"/config.yml
+chown root:"$APP_USER" "$CONF_DIR"/config.properties "$CONF_DIR"/config.yml
+
+echo "==> 로그 디렉터리 준비 -> $LOG_DIR"
+mkdir -p "$LOG_DIR"
+chown "$APP_USER:$APP_USER" "$LOG_DIR"
 
 echo "==> systemd 유닛 설치"
 cp "$APP_DIR/deploy/systemd/query-coordinator.service" /etc/systemd/system/
@@ -59,8 +66,9 @@ cp "$APP_DIR/deploy/systemd/query-executor@.service" /etc/systemd/system/
 systemctl daemon-reload
 
 echo
-echo "설치 완료. 다음 명령으로 기동하세요:"
+echo "설치 완료. 설정을 확인/수정하세요:"
+echo "  $CONF_DIR/config.properties , $CONF_DIR/config.yml"
+echo
+echo "기동:"
 echo "  sudo systemctl enable --now query-executor@8001 query-executor@8002"
 echo "  sudo systemctl enable --now query-coordinator"
-echo
-echo "설정 변경: $CONF_DIR/coordinator.env, $CONF_DIR/executor.env"

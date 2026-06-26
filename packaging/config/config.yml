@@ -1,0 +1,37 @@
+app:
+  name: ${app.name:distributed-query-executor}
+  debug: ${app.debug:false}
+
+logging:
+  level: ${log.level:INFO}
+  dir: ${log.dir:/var/log/query-executor}
+  rolling:
+    type: daily
+    backup_count: ${log.backup_count:30}
+  filename:
+    coordinator: ${log.filename.coordinator:query-coordinator-server.log}
+    executor: ${log.filename.executor:query-executor-server.log}
+
+coordinator:
+  host: ${coordinator.host:0.0.0.0}
+  port: ${coordinator.port:8000}
+  executors: ${coordinator.executors:}
+  max_concurrent_jobs: ${coordinator.max_concurrent_jobs:16}
+  max_dispatch_concurrency: ${coordinator.max_dispatch_concurrency:32}
+  poll_interval_s: ${coordinator.poll_interval_s:1.0}
+  task_timeout_s: ${coordinator.task_timeout_s:3600}
+
+executor:
+  host: ${executor.host:0.0.0.0}
+  impala:
+    host: ${impala.host:}
+    port: ${impala.port:21050}
+    database: ${impala.database:default}
+    user: ${impala.user:}
+    password: ${impala.password:}
+    auth_mechanism: ${impala.auth_mechanism:PLAIN}
+    use_ssl: ${impala.use_ssl:false}
+  greenplum:
+    dsn: ${greenplum.dsn:}
+  copy:
+    batch_size: ${copy.batch_size:10000}

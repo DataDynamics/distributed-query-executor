@@ -9,6 +9,7 @@ dependencies = [
     "sqlglot>=23",
     "httpx>=0.27",
     "pydantic>=2.6",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -31,4 +32,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["coordinator", "executor"]
+packages = ["core", "coordinator", "executor"]

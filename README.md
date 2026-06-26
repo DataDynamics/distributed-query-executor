@@ -7,16 +7,35 @@ Coordinator + N Executor 구조의 API. 하나의 Impala `SELECT` 쿼리를 파�
 ## 디렉터리 구조
 
 ```
+core/          # 공용: 설정 로더 + 설정 + 로깅 (coordinator·executor 공유)
+  config_loader.py  config.properties + config.yml(${변수:기본값}) 치환 로더
+  config.py         Settings (config 파일 기반 전역 설정)
+  logging.py        일 단위 롤링 파일 로깅 (파일명_YYYYMMDD.log)
 coordinator/   # FastAPI: 검증 → 분할 → 디스패치 → 상태 추적
   parser.py      1단계 검증 + IN 절 탐지 (sqlglot, hive 방언)
   splitter.py    IN 목록을 N개의 완전한 sub-query로 분할
   dispatcher.py  executor 비동기 디스패치 + 상태 polling (httpx)
   app.py         REST API (POST /jobs, GET /jobs/{id}, .../result, .../tasks/{id})
+  __main__.py    실행 진입점 (python -m coordinator)
 executor/      # FastAPI: Impala 읽기 → Greenplum COPY 적재, task 상태 노출
   backend.py     ImpalaToGreenplumBackend (impyla + psycopg) + MockBackend
   app.py         REST API (POST /tasks, GET /tasks/{id}, .../result)
+  __main__.py    실행 진입점 (EXECUTOR_PORT=8001 python -m executor)
+packaging/config/  # config.properties + config.yml 기본값
 tests/         # coordinator 검증 + 라이프사이클 테스트
 ```
+
+## 설정 (config.properties + config.yml)
+
+argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타일 key=value)의
+값으로 `config.yml`의 `${변수:기본값}` 자리표시자를 치환해 로드한다.
+
+- 설정 디렉터리: `/etc/query-executor/` (환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경)
+- 로컬 개발 시: `QUERY_EXECUTOR_CONFIG_DIR=packaging/config` 로 저장소 기본값 사용
+- 핵심 항목: `coordinator.executors`, `impala.*`, `greenplum.dsn`, `copy.batch_size`
+- `impala.host` 와 `greenplum.dsn` 이 모두 설정되면 실제 `ImpalaToGreenplumBackend`,
+  아니면 `MockBackend`(실제 I/O 없음)로 폴백
+- 로깅: `/var/log/query-executor/` 에 일 단위 롤링 (`코드/argus 공통 포맷`)
 
 ## 실행 환경 (RHEL 9.2)
 
@@ -60,13 +79,18 @@ executor를 실제 클러스터에 연결하려면 드라이버를 추가 설치
 
 ## 로컬 실행
 
-```bash
-# executor 기동 (여러 개 가능). coordinator는 EXECUTORS 환경변수로 이들을 가리킨다.
-.venv/bin/uvicorn executor.app:app --port 8001
-.venv/bin/uvicorn executor.app:app --port 8002
+설정은 `packaging/config/` 의 기본값을 사용한다(`coordinator.executors`, 포트 등).
 
-EXECUTORS="http://localhost:8001,http://localhost:8002" \
-  .venv/bin/uvicorn coordinator.app:app --port 8000
+```bash
+# executor 기동 (포트는 EXECUTOR_PORT 로 지정). 여러 개 띄울 수 있다.
+QUERY_EXECUTOR_CONFIG_DIR=packaging/config EXECUTOR_PORT=8001 \
+  .venv/bin/python -m executor &
+QUERY_EXECUTOR_CONFIG_DIR=packaging/config EXECUTOR_PORT=8002 \
+  .venv/bin/python -m executor &
+
+# coordinator 기동 (host/port/executors 는 config 에서 읽음)
+QUERY_EXECUTOR_CONFIG_DIR=packaging/config \
+  .venv/bin/python -m coordinator
 ```
 
 ```bash
