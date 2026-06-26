@@ -55,6 +55,19 @@ def find_partition_in(select: exp.Expression, partition_column: str) -> exp.In |
     return None
 
 
+def is_row_returning(sql: str, dialect: str = DIALECT) -> bool:
+    """sql 의 최상위 문이 행을 반환하는지(SELECT/UNION/서브쿼리) 여부.
+
+    copy(STDIN) 모드는 결과셋이 필요하므로, 래퍼가 행을 반환하는지 검사하는 데 쓴다.
+    파싱 실패 시 False.
+    """
+    try:
+        stmt = sqlglot.parse_one(sql, read=dialect)
+    except Exception:
+        return False
+    return isinstance(stmt, (exp.Select, exp.Union, exp.Subquery))
+
+
 def validate_and_parse(
     sql: str,
     partition_column: str,

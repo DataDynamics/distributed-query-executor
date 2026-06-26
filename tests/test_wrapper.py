@@ -51,6 +51,7 @@ def test_api_custom_placeholder(client):
     payload = _payload(
         wrapper_query="INSERT INTO t SELECT * FROM (@@Q@@) x",
         wrapper_placeholder="@@Q@@",
+        exec_mode="statement",  # INSERT 래퍼는 statement 모드
     )
     job_id = client.post("/jobs", json=payload).json()["job_id"]
     body = client.get(f"/jobs/{job_id}").json()
@@ -64,6 +65,33 @@ def test_api_missing_placeholder_rejected(client):
     resp = client.post("/jobs", json=payload)
     assert resp.status_code == 422
     assert resp.json()["error_code"] == "WRAPPER_PLACEHOLDER_MISSING"
+
+
+def test_copy_mode_rejects_insert_wrapper(client):
+    # copy(STDIN) 모드 + INSERT 래퍼 → 422 (statement 모드 안내)
+    payload = _payload(
+        exec_mode="copy",
+        wrapper_query="INSERT INTO public.mirror SELECT * FROM ({{SUBQUERY}}) s",
+    )
+    resp = client.post("/jobs", json=payload)
+    assert resp.status_code == 422
+    assert resp.json()["error_code"] == "COPY_WRAPPER_NOT_SELECT"
+
+
+def test_copy_mode_allows_select_wrapper(client):
+    payload = _payload(
+        exec_mode="copy",
+        wrapper_query="SELECT * FROM ({{SUBQUERY}}) s",
+    )
+    assert client.post("/jobs", json=payload).status_code == 202
+
+
+def test_statement_mode_allows_insert_wrapper(client):
+    payload = _payload(
+        exec_mode="statement",
+        wrapper_query="INSERT INTO public.mirror SELECT * FROM ({{SUBQUERY}}) s",
+    )
+    assert client.post("/jobs", json=payload).status_code == 202
 
 
 def test_api_no_wrapper_keeps_plain_subquery(client):
