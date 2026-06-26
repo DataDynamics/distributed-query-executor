@@ -124,6 +124,27 @@ def test_subquery_roundtrip_reparses_to_same_values():
         assert re.partition_values == s.partition_values
 
 
+def test_only_in_clause_changes_rest_byte_identical():
+    # 원문 보존: IN 목록만 바뀌고 나머지는 원문과 바이트 단위로 동일해야 한다
+    subs = split(_parse(), parallelism=2, strategy="contiguous")
+    expected = [["'R1'", "'R2'"], ["'R3'", "'R4'"]]
+    for s, vals in zip(subs, expected):
+        restored = s.sql.replace(
+            f"A.REGION_NO IN ({', '.join(vals)})",
+            "A.REGION_NO IN ('R1', 'R2', 'R3', 'R4')",
+        )
+        assert restored == BASE_SQL  # IN 절 외 전부 원형 보존
+
+
+def test_original_formatting_preserved():
+    # AST 재직렬화 시 사라지던 원문 포맷(소문자 함수/들여쓰기)이 유지되어야 한다
+    s = split(_parse(), parallelism=2)[0].sql
+    assert "unnest(A.ITEM_NAME)" in s          # 소문자 unnest 보존
+    assert "date_trunc('day'," in s            # 소문자 date_trunc 보존
+    assert "LEFT OUTER JOIN" in s
+    assert "\n" in s                            # 줄바꿈/들여쓰기 보존
+
+
 # ───────────────────── 한정자/대소문자 ─────────────────────
 
 
