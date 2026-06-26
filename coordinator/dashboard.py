@@ -220,7 +220,7 @@ async function loadJobs(){
        <div class="card"><div class="k">활성(대기+실행)</div><div class="v">${d.active}</div></div>
      </div>` + table(cols, d.jobs);
 }
-let histOffset = 0; const HIST_LIMIT = 20; let histTotal = 0;
+let histOffset = 0; const HIST_LIMIT = 50; let histTotal = 0;
 async function loadHist(){
   const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}`);
   if(!d.enabled){
