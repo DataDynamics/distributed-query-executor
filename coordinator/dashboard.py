@@ -178,14 +178,14 @@ async function loadExec(){
     <div class="card"><div class="k">Executor</div><div class="v">${d.executors_summary.healthy}/${d.executors_summary.total}</div></div>
    </div>`;
   const cols = [
-    {t:"executor", f:r=>`<code>${fmt(r.executor_id||r.executor_url)}</code>`},
-    {t:"healthy", f:r=>r.healthy?'<span class="ok">● UP</span>':'<span class="bad">● DOWN</span>'},
+    {t:"Executor", f:r=>`<code>${fmt(r.executor_id||r.executor_url)}</code>`},
+    {t:"Healthy", f:r=>r.healthy?'<span class="ok">● UP</span>':'<span class="bad">● DOWN</span>'},
     {t:"CPU%", k:"cpu_percent"},
     {t:"MEM%", k:"memory_percent"},
     {t:"DISK%", k:"disk_percent"},
     {t:"동시 처리", f:r=>concBar(r.active_tasks, r.max_concurrent_tasks)},
-    {t:"last_seen", f:r=>`<span class="mut">${fmt(r.updated_at||r.last_checked)}</span>`},
-    {t:"error", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"Last Seen", f:r=>`<span class="mut">${fmt(r.updated_at||r.last_checked)}</span>`},
+    {t:"Error", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
   ];
   $("#p-exec").innerHTML = cards + table(cols, d.executors);
 }
