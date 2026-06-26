@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlglot import exp
-
-from .parser import DIALECT, ParsedQuery, find_partition_in
+from .parser import ParsedQuery, find_partition_in
 
 
 @dataclass
@@ -41,8 +39,10 @@ def split(
     """각각 값 부분집합을 스캔하는 완전한 sub-query SQL 문자열 N개를 생성한다.
 
     ``parallelism`` 은 IN 값 개수로 클램핑된다(빈 sub-query 생성 안 함).
+    파티션 IN 절은 트리 어디에 있든(중첩 서브쿼리 포함) 정확히 찾아 대체한다.
     """
-    value_exprs = list(parsed.expression.find(exp.In).expressions)
+    src_in = find_partition_in(parsed.expression, parsed.partition_column)
+    value_exprs = list(src_in.expressions)
     buckets = _chunk(value_exprs, parallelism, strategy)
 
     sub_queries: list[SubQuery] = []
@@ -54,8 +54,8 @@ def split(
         target_in.set("expressions", [b.copy() for b in bucket])
         sub_queries.append(
             SubQuery(
-                sql=cloned.sql(dialect=DIALECT),
-                partition_values=[b.sql(dialect=DIALECT) for b in bucket],
+                sql=cloned.sql(dialect=parsed.dialect),
+                partition_values=[b.sql(dialect=parsed.dialect) for b in bucket],
             )
         )
     return sub_queries

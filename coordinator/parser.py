@@ -34,6 +34,7 @@ class ParsedQuery:
     partition_column: str
     expression: exp.Select
     partition_values: list[str]
+    dialect: str = DIALECT
 
 
 def _column_name(node: exp.Expression | None) -> str | None:
@@ -54,8 +55,22 @@ def find_partition_in(select: exp.Expression, partition_column: str) -> exp.In |
     return None
 
 
-def validate_and_parse(sql: str, partition_column: str) -> ParsedQuery:
-    """1단계 지원 여부를 검증하고 :class:`ParsedQuery` 를 반환한다.
+def validate_and_parse(
+    sql: str,
+    partition_column: str,
+    dialect: str = DIALECT,
+    strict: bool = True,
+) -> ParsedQuery:
+    """쿼리를 검증/파싱하고 :class:`ParsedQuery` 를 반환한다.
+
+    strict=True (1단계 기본): 단순 SELECT만 허용한다. GROUP BY/집계/DISTINCT/JOIN을
+        거부하고, 파티션 IN이 최상위 WHERE에 있어야 한다.
+    strict=False (lenient): 복합 쿼리(중첩 서브쿼리/JOIN/GROUP BY/unnest 등)를 허용하며,
+        파티션 컬럼의 IN 절을 트리 어디에 있든 찾아 분할한다. IN 절 자체에 대한
+        제약(리터럴·비부정·비어있지 않음)만 검사한다.
+        ※ 결과 보존 가정: 분할 기준 컬럼이 출력 행을 분할하는 위치(주로 소스 스캔의
+          필터)에 있어야 한다. 분할 기준 컬럼 위에서 집계/DISTINCT 하는 쿼리는 결과가
+          달라질 수 있으므로 호출자가 책임진다.
 
     위반 시 안정적인 ``code`` 를 가진 :class:`QueryValidationError` 를 발생시킨다.
     """
@@ -65,7 +80,7 @@ def validate_and_parse(sql: str, partition_column: str) -> ParsedQuery:
         raise QueryValidationError("MISSING_PARTITION_COLUMN", "partition_column이 필요합니다.")
 
     try:
-        statements = [s for s in sqlglot.parse(sql, read=DIALECT) if s is not None]
+        statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
     except Exception as exc:  # sqlglot은 ParseError / TokenError 를 발생시킴
         raise QueryValidationError("PARSE_ERROR", f"SQL 파싱 실패: {exc}") from exc
 
@@ -80,26 +95,27 @@ def validate_and_parse(sql: str, partition_column: str) -> ParsedQuery:
     if not isinstance(stmt, exp.Select):
         raise QueryValidationError("NOT_A_SELECT", "SELECT 문만 지원합니다.")
 
-    if stmt.args.get("distinct"):
-        raise QueryValidationError("UNSUPPORTED_DISTINCT", "DISTINCT는 1단계에서 지원하지 않습니다.")
-    if stmt.args.get("group"):
-        raise QueryValidationError("UNSUPPORTED_GROUP_BY", "GROUP BY는 1단계에서 지원하지 않습니다.")
-    if stmt.args.get("having"):
-        raise QueryValidationError("UNSUPPORTED_HAVING", "HAVING은 1단계에서 지원하지 않습니다.")
-    if stmt.args.get("joins"):
-        raise QueryValidationError("UNSUPPORTED_JOIN", "JOIN은 1단계에서 지원하지 않습니다.")
+    if strict:
+        if stmt.args.get("distinct"):
+            raise QueryValidationError("UNSUPPORTED_DISTINCT", "DISTINCT는 1단계에서 지원하지 않습니다.")
+        if stmt.args.get("group"):
+            raise QueryValidationError("UNSUPPORTED_GROUP_BY", "GROUP BY는 1단계에서 지원하지 않습니다.")
+        if stmt.args.get("having"):
+            raise QueryValidationError("UNSUPPORTED_HAVING", "HAVING은 1단계에서 지원하지 않습니다.")
+        if stmt.args.get("joins"):
+            raise QueryValidationError("UNSUPPORTED_JOIN", "JOIN은 1단계에서 지원하지 않습니다.")
 
-    agg = stmt.find(exp.AggFunc)
-    if agg is not None:
-        raise QueryValidationError(
-            "UNSUPPORTED_AGGREGATE",
-            f"집계 함수({agg.sql(dialect=DIALECT)})는 1단계에서 지원하지 않습니다.",
-        )
+        agg = stmt.find(exp.AggFunc)
+        if agg is not None:
+            raise QueryValidationError(
+                "UNSUPPORTED_AGGREGATE",
+                f"집계 함수({agg.sql(dialect=dialect)})는 1단계에서 지원하지 않습니다.",
+            )
 
-    if stmt.args.get("where") is None:
-        raise QueryValidationError(
-            "NO_PARTITION_IN_CLAUSE", "WHERE 절에 파티션 IN 조건이 필요합니다."
-        )
+        if stmt.args.get("where") is None:
+            raise QueryValidationError(
+                "NO_PARTITION_IN_CLAUSE", "WHERE 절에 파티션 IN 조건이 필요합니다."
+            )
 
     in_node = find_partition_in(stmt, partition_column)
     if in_node is None:
@@ -122,10 +138,11 @@ def validate_and_parse(sql: str, partition_column: str) -> ParsedQuery:
     if not values:
         raise QueryValidationError("EMPTY_IN_LIST", "IN 값 목록이 비어 있습니다.")
 
-    partition_values = [v.sql(dialect=DIALECT) for v in values]
+    partition_values = [v.sql(dialect=dialect) for v in values]
     return ParsedQuery(
         sql=sql,
         partition_column=partition_column,
         expression=stmt,
         partition_values=partition_values,
+        dialect=dialect,
     )

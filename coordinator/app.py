@@ -86,7 +86,13 @@ def create_app(
     )
     def create_job(req: CreateJobRequest, background: BackgroundTasks):
         # 동기 검증 + 분할: 오류는 지금 즉시 클라이언트에게 반환한다.
-        parsed = validate_and_parse(req.sql, req.partition_column)
+        dialect = req.sql_dialect or settings.query_default_dialect
+        parsed = validate_and_parse(
+            req.sql,
+            req.partition_column,
+            dialect=dialect,
+            strict=req.strict_validation,
+        )
         sub_queries = split(parsed, req.parallelism, req.split_strategy)
 
         job = Job(

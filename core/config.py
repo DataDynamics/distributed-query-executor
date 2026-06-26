@@ -51,6 +51,9 @@ class Settings:
         self.app_name: str = _get("app", "name", "distributed-query-executor")
         self.debug: bool = _to_bool(_get("app", "debug", False))
 
+        # 쿼리 파싱 기본 방언(요청에서 sql_dialect 로 재정의 가능)
+        self.query_default_dialect: str = _get("query", "sql_dialect", "hive")
+
         # ───────── 로깅 (공통) ─────────
         self.log_level: str = _get("logging", "level", "INFO")
         self.log_dir: Path = Path(_get("logging", "dir", "logs"))

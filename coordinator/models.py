@@ -117,6 +117,15 @@ class CreateJobRequest(BaseModel):
     parallelism: int = Field(default=4, ge=1, le=128)
     split_strategy: Literal["contiguous", "round_robin"] = "contiguous"
     failure_policy: Literal["fail_fast", "best_effort"] = "fail_fast"
+    sql_dialect: Optional[str] = Field(
+        default=None,
+        description="SQL 방언(미지정 시 서버 기본값). 예: hive, impala, postgres",
+    )
+    strict_validation: bool = Field(
+        default=True,
+        description="True면 단순 SELECT만 허용. 복합 쿼리(중첩 서브쿼리/JOIN/GROUP BY 등)는 "
+        "False로 설정하면 파티션 IN 절을 트리 어디서든 찾아 분할한다.",
+    )
 
 
 class CreateJobResponse(BaseModel):

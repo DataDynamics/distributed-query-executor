@@ -2,6 +2,9 @@ app:
   name: ${app.name:distributed-query-executor}
   debug: ${app.debug:false}
 
+query:
+  sql_dialect: ${query.sql_dialect:hive}
+
 logging:
   level: ${log.level:INFO}
   dir: ${log.dir:/var/log/query-executor}

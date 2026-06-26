@@ -136,8 +136,36 @@ sudo systemctl enable --now query-executor@8001 query-executor@8002
 sudo systemctl enable --now query-coordinator
 ```
 
-## 1단계(Stage 1) 지원 범위
+## 쿼리 분할 모드
 
-단순 `SELECT`(+ `ORDER BY` / `LIMIT`)만 지원한다. 파서는 GROUP BY, 집계 함수,
-DISTINCT, JOIN, NOT IN, 서브쿼리 IN, 파티션 `IN` 누락을 안정적인 에러 코드로 거부한다.
+요청(`POST /jobs`)에서 두 옵션으로 분할 동작을 제어한다.
+
+| 필드 | 기본 | 설명 |
+|---|---|---|
+| `strict_validation` | `true` | `true`: 단순 SELECT만 허용(아래 1단계 규칙). `false`: **복합 쿼리**(중첩 서브쿼리/JOIN/GROUP BY/`unnest` 등)를 허용하고 파티션 컬럼의 `IN` 절을 트리 어디서든 찾아 분할 |
+| `sql_dialect` | 서버 기본(`query.sql_dialect`, 기본 `hive`) | 파싱 방언. 예: `hive`, `impala`, `postgres`(Greenplum) |
+
+### 1단계(strict=true) 범위
+단순 `SELECT`(+ `ORDER BY` / `LIMIT`)만 지원. GROUP BY, 집계 함수, DISTINCT, JOIN,
+NOT IN, 서브쿼리 IN, 파티션 `IN` 누락을 안정적인 에러 코드로 거부한다.
+
+### 복합 쿼리(strict=false)
+중첩 서브쿼리의 WHERE에 있는 파티션 `IN`(예: `A.REGION_NO IN ('R1','R2','R3')`)을
+기준으로 분할한다. 분할 시 **해당 IN 절만** 부분집합으로 교체되고 다른 조건
+(예: `A.STORE_ID IN (...)`, `BETWEEN ...`)은 그대로 보존된다.
+
+```bash
+curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+  "sql": "SELECT ... WHERE ... A.REGION_NO IN ('R1','R2','R3') ...",
+  "partition_column": "A.REGION_NO",
+  "target_table": "public.orders_mirror",
+  "parallelism": 3,
+  "sql_dialect": "postgres",
+  "strict_validation": false
+}'
+```
+
+> ⚠️ 결과 보존 가정: 분할 기준 컬럼이 **출력 행을 분할하는 위치**(주로 소스 스캔 필터)에
+> 있어야 한다. 분할 기준 컬럼 위에서 집계/DISTINCT 하는 쿼리는 결과가 달라질 수 있다.
+
 executor는 기본값이 `MockBackend` 라서 실제 DB 없이도 API를 구동할 수 있다.
