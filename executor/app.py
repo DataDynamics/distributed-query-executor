@@ -106,6 +106,18 @@ def create_app(
                 rows = await loop.run_in_executor(
                     None, lambda: app.state.backend.execute(task.sub_query)
                 )
+            elif task.exec_mode == "stage_insert":
+                # Impala 결과를 Greenplum staging(TEMP)에 COPY → staging→target INSERT
+                rows = await loop.run_in_executor(
+                    None,
+                    lambda: app.state.backend.stage_and_insert(
+                        task.sub_query,
+                        task.staging_table,
+                        task.staging_ddl,
+                        task.insert_sql,
+                        progress,
+                    ),
+                )
             else:
                 # copy 모드: Impala read → Greenplum COPY
                 rows = await loop.run_in_executor(
@@ -152,6 +164,9 @@ def create_app(
             partition_column=req.partition_column,
             partition_values=req.partition_values,
             exec_mode=req.exec_mode,
+            staging_table=req.staging_table,
+            staging_ddl=req.staging_ddl,
+            insert_sql=req.insert_sql,
         )
         tasks[task.task_id] = task
         await history.record(task)  # QUEUED 이력

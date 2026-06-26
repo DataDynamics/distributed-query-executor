@@ -27,6 +27,18 @@ class Backend(Protocol):
         """[statement 모드] 대상 DB에서 sql(예: INSERT ... SELECT)을 실행, 영향받은 행 수 반환."""
         ...
 
+    def stage_and_insert(
+        self,
+        impala_select: str,
+        staging_table: str,
+        staging_ddl: str,
+        insert_sql: str,
+        on_progress=None,
+    ) -> int:
+        """[stage_insert 모드] Impala 결과를 Greenplum staging 테이블에 COPY 적재 후,
+        staging 을 소스로 하는 INSERT 를 실행한다. INSERT 영향 행 수를 반환."""
+        ...
+
 
 class MockBackend:
     """결정적인 행 수를 반환하고 실제 I/O는 하지 않음. 개발/테스트용."""
@@ -41,6 +53,11 @@ class MockBackend:
         return total
 
     def execute(self, sql: str) -> int:
+        return self.rows_per_value
+
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None) -> int:
+        if on_progress:
+            on_progress(self.rows_per_value)
         return self.rows_per_value
 
 
@@ -74,6 +91,42 @@ class ImpalaToGreenplumBackend:
                 affected = cur.rowcount
             conn.commit()
         return affected if affected and affected > 0 else 0
+
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None) -> int:
+        """Impala SELECT → Greenplum staging(TEMP) COPY 적재 → staging→target INSERT.
+
+        한 Greenplum 세션(연결) 안에서 CREATE TEMP TABLE → COPY → INSERT 를 수행하므로
+        TEMP 테이블이 INSERT 시점까지 보이며, 세션 종료 시 자동 정리된다.
+        SELECT(Impala)과 INSERT(Greenplum)이 서로 다른 엔진일 때의 표준 패턴.
+        반환: INSERT 영향 행 수(미지원 시 적재 행 수).
+        """
+        from impala.dbapi import connect as impala_connect  # 지연 임포트
+        import psycopg  # 지연 임포트
+
+        loaded = 0
+        impala_conn = impala_connect(**self.impala_dsn)
+        try:
+            cur = impala_conn.cursor()
+            cur.execute(impala_select)
+            columns = [d[0] for d in cur.description]
+
+            with psycopg.connect(self.greenplum_dsn) as gp:
+                with gp.cursor() as gp_cur:
+                    gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
+                    copy_sql = f"COPY {staging_table} ({', '.join(columns)}) FROM STDIN"
+                    with gp_cur.copy(copy_sql) as copy:
+                        for batch in _batches(cur, self.batch_size):
+                            for row in batch:
+                                copy.write_row(row)
+                            loaded += len(batch)
+                            if on_progress:
+                                on_progress(loaded)
+                    gp_cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM staging
+                    affected = gp_cur.rowcount
+                gp.commit()
+            return affected if affected and affected > 0 else loaded
+        finally:
+            impala_conn.close()
 
     def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None) -> int:
         from impala.dbapi import connect as impala_connect  # 지연 임포트

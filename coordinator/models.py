@@ -75,6 +75,9 @@ class Job:
     split_strategy: str
     failure_policy: str
     exec_mode: str = "copy"
+    staging_table: Optional[str] = None
+    staging_ddl: Optional[str] = None
+    insert_sql: Optional[str] = None
     job_id: str = field(default_factory=lambda: _new_id("job"))
     status: JobStatus = JobStatus.PENDING
     tasks: list[Task] = field(default_factory=list)
@@ -153,10 +156,19 @@ class CreateJobRequest(BaseModel):
     parallelism: int = Field(default=4, ge=1, le=128)
     split_strategy: Literal["contiguous", "round_robin"] = "contiguous"
     failure_policy: Literal["fail_fast", "best_effort"] = "fail_fast"
-    exec_mode: Literal["copy", "statement"] = Field(
+    exec_mode: Literal["copy", "statement", "stage_insert"] = Field(
         default="copy",
-        description="copy: Impala read→Greenplum COPY. statement: wrapper로 감싼 "
-        "INSERT 등 SQL을 대상 DB에서 직접 실행(COPY 미사용).",
+        description="copy: Impala read→Greenplum COPY. statement: SQL을 대상 DB에서 "
+        "직접 실행. stage_insert: Impala 결과를 Greenplum staging(TEMP)에 COPY 후 "
+        "staging→target INSERT 실행(서로 다른 엔진일 때).",
+    )
+    staging_table: Optional[str] = Field(
+        default=None,
+        description="stage_insert 모드: COPY 적재할 staging 테이블명(staging_ddl/INSERT가 참조).",
+    )
+    staging_ddl: Optional[str] = Field(
+        default=None,
+        description="stage_insert 모드: staging 테이블 생성 DDL(예: CREATE TEMP TABLE ...).",
     )
     sql_dialect: Optional[str] = Field(
         default=None,

@@ -72,6 +72,9 @@ class HttpDispatcher:
                         "partition_column": job.partition_column,
                         "partition_values": task.partition_values,
                         "exec_mode": job.exec_mode,
+                        "staging_table": job.staging_table,
+                        "staging_ddl": job.staging_ddl,
+                        "insert_sql": job.insert_sql,
                     },
                 )
                 await self._poll(client, job, task)

@@ -96,22 +96,31 @@ def create_app(
         )
         sub_queries = split(parsed, req.parallelism, req.split_strategy)
 
-        # 감싸는 쿼리가 있으면 각 sub-query를 placeholder 자리에 끼워 넣는다.
-        if req.wrapper_query:
+        if req.exec_mode == "stage_insert":
+            # Impala SELECT 결과를 Greenplum staging 에 적재 후 INSERT.
+            # sub-query(분할된 SELECT)는 그대로 두고, staging/INSERT 정보를 함께 보낸다.
+            if not (req.staging_table and req.staging_ddl and req.wrapper_query):
+                raise QueryValidationError(
+                    "STAGE_INSERT_REQUIRES_FIELDS",
+                    "stage_insert 모드는 staging_table, staging_ddl, wrapper_query(INSERT) "
+                    "가 모두 필요합니다.",
+                )
+        elif req.wrapper_query:
+            # 감싸는 쿼리가 있으면 각 sub-query를 placeholder 자리에 끼워 넣는다.
             if req.wrapper_placeholder not in req.wrapper_query:
                 raise QueryValidationError(
                     "WRAPPER_PLACEHOLDER_MISSING",
                     f"wrapper_query 에 placeholder '{req.wrapper_placeholder}' 가 없습니다.",
                 )
             # copy(STDIN) 모드는 결과 행을 fetch→COPY 하므로 래퍼가 SELECT(행 반환)여야 한다.
-            # INSERT 등 비-SELECT 래퍼는 statement 모드를 써야 한다.
+            # INSERT 등 비-SELECT 래퍼는 statement/stage_insert 모드를 써야 한다.
             if req.exec_mode == "copy":
                 probe = wrap("(SELECT 1)", req.wrapper_query, req.wrapper_placeholder)
                 if not is_row_returning(probe, dialect):
                     raise QueryValidationError(
                         "COPY_WRAPPER_NOT_SELECT",
                         "copy 모드의 wrapper_query 는 행을 반환하는 SELECT 여야 합니다. "
-                        "INSERT 등으로 감싸려면 exec_mode=statement 를 사용하세요.",
+                        "INSERT 등으로 감싸려면 exec_mode=statement 또는 stage_insert 를 사용하세요.",
                     )
             for sq in sub_queries:
                 sq.sql = wrap(sq.sql, req.wrapper_query, req.wrapper_placeholder)
@@ -125,6 +134,9 @@ def create_app(
             split_strategy=req.split_strategy,
             failure_policy=req.failure_policy,
             exec_mode=req.exec_mode,
+            staging_table=req.staging_table,
+            staging_ddl=req.staging_ddl,
+            insert_sql=req.wrapper_query if req.exec_mode == "stage_insert" else None,
             status=JobStatus.SPLITTING,
         )
         executor_urls = _assign_executors(len(sub_queries), settings.executors)

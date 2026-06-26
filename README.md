@@ -353,6 +353,40 @@ executor가 분할/감싼 쿼리를 실행하는 방식을 고른다.
 |---|---|---|
 | `copy` (기본) | Impala 에서 sub-query 를 **읽어** Greenplum 에 `COPY` 적재 | 소스(Impala)와 타깃(Greenplum)이 다른 엔진. 단, COPY는 SQL이 아니라 STDIN 벌크 로드라 **대상 테이블 컬럼과 정확히 일치**해야 한다. 래퍼는 **행을 반환하는 SELECT** 여야 하며(적재는 COPY가 수행), INSERT 래퍼를 주면 422(`COPY_WRAPPER_NOT_SELECT`) |
 | `statement` | wrapper 로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB(`greenplum.dsn`)에서 **그대로 실행** | `INSERT INTO ... SELECT (분할쿼리)` 처럼 한 DB 안에서 INSERT 로 적재. 컬럼 매핑은 INSERT 컬럼 목록/SELECT 가 담당하므로 COPY 의 엄격한 컬럼 일치 제약이 없다 |
+| `stage_insert` | Impala SELECT 결과를 Greenplum **staging(TEMP) 테이블에 COPY** 적재 → staging 을 `FROM` 으로 하는 **INSERT 실행** | **SELECT은 Impala, INSERT은 Greenplum** 처럼 서로 다른 엔진. Greenplum INSERT 가 읽을 `FROM` 소스가 없으므로 임시 테이블을 경유한다 |
+
+### stage_insert 모드 (서로 다른 엔진)
+
+SELECT(Impala)과 INSERT(Greenplum)이 다른 엔진이면, Greenplum INSERT 가 직접 읽을 소스가
+없다. 그래서 **Impala 결과를 Greenplum 임시 테이블에 적재한 뒤 그 테이블에서 INSERT** 한다.
+executor 는 한 Greenplum 세션 안에서 다음을 수행한다(TEMP 라 세션 종료 시 자동 정리):
+
+```
+CREATE TEMP TABLE <staging>  ─ staging_ddl
+   → COPY <staging> FROM STDIN  ─ Impala SELECT(분할) 결과 적재
+   → INSERT INTO <target> ... SELECT ... FROM <staging>  ─ wrapper_query
+```
+
+필요한 필드: `staging_table`, `staging_ddl`(staging 생성 DDL), `wrapper_query`(staging 을
+`FROM` 으로 하는 INSERT). 이때 `wrapper_query` 는 `{{SUBQUERY}}` 가 아니라 **staging 테이블명**
+을 참조한다(분할된 SELECT 는 staging 으로 적재되므로).
+
+```bash
+curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+  "sql": "SELECT a, dt FROM imp WHERE dt IN ('\''1'\'','\''2'\'','\''3'\'')",
+  "partition_column": "dt",
+  "target_table": "public.target",
+  "parallelism": 3,
+  "exec_mode": "stage_insert",
+  "staging_table": "stg_t",
+  "staging_ddl": "CREATE TEMP TABLE stg_t (a int, dt text)",
+  "wrapper_query": "INSERT INTO public.target (a, dt) SELECT a, dt FROM stg_t"
+}'
+```
+
+> 필수 필드(`staging_table`/`staging_ddl`/`wrapper_query`)가 빠지면 422
+> (`STAGE_INSERT_REQUIRES_FIELDS`). staging 은 `CREATE TEMP TABLE` 권장(세션별 격리 →
+> 병렬 task 간 이름 충돌 없음, 자동 정리).
 
 ```bash
 # INSERT 래퍼를 대상 DB에서 직접 실행 (COPY 미사용)
