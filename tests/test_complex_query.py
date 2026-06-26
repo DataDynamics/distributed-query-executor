@@ -45,6 +45,15 @@ def test_lenient_mode_finds_nested_partition_column():
     assert parsed.partition_values == ["'R1'", "'R2'", "'R3'"]
 
 
+@pytest.mark.parametrize("pcol", ["A.REGION_NO", "REGION_NO", "region_no"])
+def test_partition_column_with_or_without_qualifier(pcol):
+    # 테이블 한정자(A.) 유무·대소문자와 무관하게 동일하게 매칭되어야 한다
+    parsed = validate_and_parse(COMPLEX_SQL, pcol, dialect="postgres", strict=False)
+    assert parsed.partition_values == ["'R1'", "'R2'", "'R3'"]
+    subs = split(parsed, parallelism=3)
+    assert [s.partition_values for s in subs] == [["'R1'"], ["'R2'"], ["'R3'"]]
+
+
 def test_lenient_split_targets_partition_column_only():
     parsed = validate_and_parse(
         COMPLEX_SQL, "A.REGION_NO", dialect="postgres", strict=False

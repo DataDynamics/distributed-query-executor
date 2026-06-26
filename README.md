@@ -154,10 +154,14 @@ NOT IN, 서브쿼리 IN, 파티션 `IN` 누락을 안정적인 에러 코드로 
 기준으로 분할한다. 분할 시 **해당 IN 절만** 부분집합으로 교체되고 다른 조건
 (예: `A.STORE_ID IN (...)`, `BETWEEN ...`)은 그대로 보존된다.
 
+`partition_column` 은 테이블 한정자 유무와 무관하게 매칭된다. 즉 `REGION_NO` 로 지정해도
+SQL의 `A.REGION_NO` 에 매칭된다(대소문자도 무관). 단, 서로 다른 테이블에 같은 이름의
+`IN` 절이 여러 개 있으면 먼저 발견된 것이 선택되므로 그럴 땐 컬럼명이 유일해야 한다.
+
 ```bash
 curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT ... WHERE ... A.REGION_NO IN ('R1','R2','R3') ...",
-  "partition_column": "A.REGION_NO",
+  "partition_column": "REGION_NO",
   "target_table": "public.orders_mirror",
   "parallelism": 3,
   "sql_dialect": "postgres",
