@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 from core.config import settings
 from core.metrics import collect_system_metrics
 from .backend import Backend, ImpalaToGreenplumBackend, MockBackend
+from .history import TaskHistoryRepository
 from .models import CreateTaskRequest, Task, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,12 @@ def _build_backend() -> Backend:
     return MockBackend()
 
 
-def create_app(backend: Optional[Backend] = None) -> FastAPI:
+def create_app(
+    backend: Optional[Backend] = None,
+    task_history: Optional[TaskHistoryRepository] = None,
+) -> FastAPI:
     backend = backend or _build_backend()
+    history = task_history or TaskHistoryRepository(settings)
     tasks: dict[str, Task] = {}
 
     app = FastAPI(
@@ -78,6 +83,7 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
     )
     app.state.backend = backend
     app.state.tasks = tasks
+    app.state.task_history = history
 
     async def _run(task: Task) -> None:
         def progress(n: int) -> None:
@@ -85,9 +91,11 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
 
         try:
             task.status = TaskStatus.READING
+            await history.record(task)  # READING 이력
             loop = asyncio.get_running_loop()
             # impyla/psycopg는 블로킹이므로 스레드에서 실행해 이벤트 루프를 막지 않는다.
             task.status = TaskStatus.WRITING
+            await history.record(task)  # WRITING 이력
             rows = await loop.run_in_executor(
                 None,
                 lambda: app.state.backend.move(
@@ -102,10 +110,12 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
             task.rows_written = rows
             task.status = TaskStatus.DONE
             logger.info("task %s 완료: %s행 적재", task.task_id, rows)
+            await history.record(task)  # DONE 이력
         except Exception as exc:
             task.status = TaskStatus.FAILED
             task.error = str(exc)
             logger.exception("task %s 실패", task.task_id)
+            await history.record(task)  # FAILED 이력
 
     @app.post(
         "/tasks",
@@ -125,6 +135,7 @@ def create_app(backend: Optional[Backend] = None) -> FastAPI:
             partition_values=req.partition_values,
         )
         tasks[task.task_id] = task
+        await history.record(task)  # QUEUED 이력
         asyncio.create_task(_run(task))
         logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
         return {"task_id": task.task_id, "status": task.status.value}

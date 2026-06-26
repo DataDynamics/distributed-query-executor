@@ -126,10 +126,28 @@ curl -s localhost:8000/jobs/$JOB
 | `GET /jobs/{job_id}` | 전체 상태(태스크 목록 포함) |
 | `GET /jobs/{job_id}/result` | 적재 결과 요약 |
 
-- 디스패처의 `run(job)` 은 실행 후 `job_id` 를 반환하며, **실행 시작/종료마다 PostgreSQL
-  이력 테이블(`history.table`, 기본 `job_history`)에 한 행씩 기록**한다.
-- 기록 대상 DB는 `history.db_dsn`(미설정 시 `monitor.db_dsn`)을 사용한다. 둘 다 없으면
-  이력 기록은 비활성(경고 로그)된다. 스키마: `packaging/config/history-schema.sql`.
+### 실행 이력(PostgreSQL) — 2계층
+
+하나의 `job_id` 아래 N개의 executor task 가 생기므로, 이력도 두 계층으로 기록된다.
+
+| 테이블 | 기록 주체 | 단위 | 기록 시점 |
+|---|---|---|---|
+| `job_history` (`history.table`) | **Coordinator** | job 1건 | `run()` 시작(RUNNING)·종료(DONE/PARTIAL/FAILED) |
+| `task_history` (`history.task_table`) | **각 Executor** | task N건 (job_id+task_id) | 상태 전이마다(QUEUED/READING/WRITING/DONE/FAILED) |
+
+- coordinator의 `run(job)` 은 `job_id` 를 반환하고 job 단위 이력을 남긴다.
+- 각 executor 는 자신이 처리하는 task 의 상태 전이를 `task_history` 에 append 한다
+  (`executor_id` 컬럼으로 어느 executor 인지 식별). **따라서 executor 호스트에도 PG
+  자격증명이 필요**하다.
+- 기록 대상 DB는 `history.db_dsn`(미설정 시 `monitor.db_dsn`) 공유. 둘 다 없으면 비활성
+  (경고 로그). 스키마: `packaging/config/history-schema.sql`,
+  `packaging/config/task-history-schema.sql`.
+
+```sql
+-- 특정 job 의 executor task 진행 이력 추적
+SELECT recorded_at, task_id, executor_id, status, rows_written
+FROM task_history WHERE job_id = '<job_id>' ORDER BY recorded_at;
+```
 
 ## API 문서 (Swagger)
 

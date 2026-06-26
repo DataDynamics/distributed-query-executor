@@ -35,6 +35,7 @@ monitor:
 history:
   db_dsn: ${history.db_dsn:}
   table: ${history.table:job_history}
+  task_table: ${history.task_table:task_history}
 
 executor:
   host: ${executor.host:0.0.0.0}

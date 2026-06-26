@@ -110,6 +110,8 @@ class Settings:
         # 비어 있으면 monitor.db_dsn 을 재사용. 둘 다 없으면 이력 기록 비활성.
         self.history_db_dsn: str = _get("history", "db_dsn", "") or self.monitor_db_dsn
         self.history_table: str = _get("history", "table", "job_history")
+        # executor 가 기록하는 task 단위 이력 테이블(history_db_dsn 공유)
+        self.task_history_table: str = _get("history", "task_table", "task_history")
 
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")
