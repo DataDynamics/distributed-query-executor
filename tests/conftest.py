@@ -15,6 +15,7 @@ class FakeRunner:
 
     def __init__(self) -> None:
         self.runs: list[Job] = []
+        self.cancels: list[Job] = []
 
     async def run(self, job: Job) -> str:
         self.runs.append(job)
@@ -23,6 +24,14 @@ class FakeRunner:
             task.rows_written = 10
         job.status = JobStatus.DONE
         return job.job_id
+
+    async def cancel(self, job: Job) -> None:
+        self.cancels.append(job)
+        job.cancel_requested = True
+        for task in job.tasks:
+            if task.status not in (TaskStatus.DONE, TaskStatus.FAILED):
+                task.status = TaskStatus.CANCELLED
+        job.status = JobStatus.CANCELLED
 
 
 @pytest.fixture

@@ -157,6 +157,26 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found")
         return job.progress_view()
 
+    @app.post(
+        "/jobs/{job_id}/cancel",
+        tags=["Jobs"],
+        summary="작업 취소",
+        description="진행 중인 작업을 취소한다. 각 executor에 취소를 전파하고 job을 "
+        "CANCELLED 로 표시한다. 이미 종료된 작업은 409.",
+    )
+    async def cancel_job(job_id: str):
+        job = store.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        if job.status in (JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED):
+            raise HTTPException(
+                status_code=409,
+                detail=f"이미 종료된 작업입니다(status={job.status.value}).",
+            )
+        await runner.cancel(job)
+        job.status = JobStatus.CANCELLED
+        return job.progress_view()
+
     @app.get("/jobs/{job_id}/result", tags=["Jobs"], summary="작업 결과(적재 요약) 조회")
     def get_job_result(job_id: str):
         job = store.get(job_id)

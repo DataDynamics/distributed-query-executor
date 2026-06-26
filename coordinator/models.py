@@ -81,6 +81,7 @@ class Job:
     created_at: str = field(default_factory=_now_iso)
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
+    cancel_requested: bool = False
 
     @property
     def total_rows_written(self) -> int:
@@ -105,6 +106,7 @@ class Job:
             "progress_percent": self.progress_percent,
             "total_rows_written": self.total_rows_written,
             "error": self.error,
+            "cancel_requested": self.cancel_requested,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -121,6 +123,7 @@ class Job:
             "total": len(self.tasks),
             "total_rows_written": self.total_rows_written,
             "error": self.error,
+            "cancel_requested": self.cancel_requested,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,

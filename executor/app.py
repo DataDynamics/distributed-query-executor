@@ -90,6 +90,10 @@ def create_app(
             task.rows_written = n
 
         try:
+            if task.cancel_requested:
+                task.status = TaskStatus.CANCELLED
+                await history.record(task)  # CANCELLED 이력
+                return
             task.status = TaskStatus.READING
             await history.record(task)  # READING 이력
             loop = asyncio.get_running_loop()
@@ -108,6 +112,12 @@ def create_app(
                 ),
             )
             task.rows_written = rows
+            # 실행 중 취소 요청이 들어왔으면 DONE 대신 CANCELLED 처리
+            if task.cancel_requested:
+                task.status = TaskStatus.CANCELLED
+                logger.info("task %s 취소됨", task.task_id)
+                await history.record(task)
+                return
             task.status = TaskStatus.DONE
             logger.info("task %s 완료: %s행 적재", task.task_id, rows)
             await history.record(task)  # DONE 이력
@@ -153,6 +163,21 @@ def create_app(
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         return {"rows_written": task.rows_written}
+
+    @app.post("/tasks/{task_id}/cancel", tags=["Tasks"], summary="태스크 취소")
+    async def cancel_task(task_id: str):
+        task = tasks.get(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        terminal = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        if task.status in terminal:
+            return task.view()  # 이미 종료 — 변경 없음
+        task.cancel_requested = True
+        # 아직 시작 전이면 즉시 취소 확정, 실행 중이면 _run 이 완료 후 CANCELLED 처리
+        if task.status == TaskStatus.QUEUED:
+            task.status = TaskStatus.CANCELLED
+            await history.record(task)
+        return task.view()
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():

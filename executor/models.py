@@ -30,6 +30,7 @@ class Task:
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
     error: Optional[str] = None
+    cancel_requested: bool = False
 
     def view(self) -> dict:
         return {
@@ -38,6 +39,7 @@ class Task:
             "status": self.status.value,
             "rows_written": self.rows_written,
             "error": self.error,
+            "cancel_requested": self.cancel_requested,
         }
 
 

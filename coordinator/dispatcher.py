@@ -21,8 +21,13 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
+
+
 class JobRunner(Protocol):
     async def run(self, job: Job) -> str: ...
+
+    async def cancel(self, job: Job) -> None: ...
 
 
 class HttpDispatcher:
@@ -51,6 +56,9 @@ class HttpDispatcher:
 
     async def _run_task(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         async with self._sem:
+            if job.cancel_requested:
+                task.status = TaskStatus.CANCELLED
+                return
             task.attempt += 1
             try:
                 await client.post(
@@ -65,14 +73,16 @@ class HttpDispatcher:
                         "partition_values": task.partition_values,
                     },
                 )
-                await self._poll(client, task)
+                await self._poll(client, job, task)
             except Exception as exc:  # 네트워크 / 타임아웃 / executor 오류
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
 
-    async def _poll(self, client: httpx.AsyncClient, task: Task) -> None:
-        terminal = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
-        while task.status not in terminal:
+    async def _poll(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
+        while task.status not in _TERMINAL:
+            if job.cancel_requested:
+                task.status = TaskStatus.CANCELLED
+                return
             await asyncio.sleep(self.settings.poll_interval_s)
             resp = await client.get(f"{task.executor_url}/tasks/{task.task_id}")
             data = resp.json()
@@ -80,9 +90,30 @@ class HttpDispatcher:
             task.rows_written = data.get("rows_written", task.rows_written)
             task.error = data.get("error")
 
+    async def cancel(self, job: Job) -> None:
+        """취소 요청: 플래그를 세우고 비종료 task의 executor에 취소를 전파한다."""
+        job.cancel_requested = True
+        targets = [
+            t for t in job.tasks if t.executor_url and t.status not in _TERMINAL
+        ]
+        if targets:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await asyncio.gather(
+                    *(self._cancel_task(client, t) for t in targets)
+                )
+
+    async def _cancel_task(self, client: httpx.AsyncClient, task: Task) -> None:
+        try:
+            await client.post(f"{task.executor_url}/tasks/{task.task_id}/cancel")
+        except Exception as exc:
+            task.error = task.error or str(exc)
+        task.status = TaskStatus.CANCELLED
+
     def _finalize(self, job: Job) -> None:
         failed = [t for t in job.tasks if t.status == TaskStatus.FAILED]
-        if not failed:
+        if job.cancel_requested:
+            job.status = JobStatus.CANCELLED
+        elif not failed:
             job.status = JobStatus.DONE
         elif job.failure_policy == "best_effort":
             job.status = JobStatus.PARTIAL

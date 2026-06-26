@@ -238,6 +238,20 @@ curl -s localhost:8000/jobs/$JOB
 | `GET /jobs/{job_id}/status` | **진행 상태/진행률**(경량, 태스크 제외) |
 | `GET /jobs/{job_id}` | 전체 상태(태스크 목록 포함) |
 | `GET /jobs/{job_id}/result` | 적재 결과 요약 |
+| `POST /jobs/{job_id}/cancel` | 작업 취소(각 executor에 전파). 이미 종료면 409 |
+
+### 작업 취소
+
+```bash
+curl -s -X POST localhost:8000/jobs/$JOB/cancel
+# {"job_id":"...","status":"CANCELLED","cancel_requested":true, ...}
+```
+
+- coordinator가 취소 플래그를 세우고 비종료 task의 executor에 `POST /tasks/{task_id}/cancel`
+  을 전파한다. job/ task 상태는 `CANCELLED` 로 바뀐다.
+- **협조적 취소**: 대기(QUEUED) 중인 task는 즉시 취소되고, 실행 중인 task는 현재 작업이
+  끝난 뒤 `CANCELLED` 로 마감된다(이력에도 기록). 실행 중인 Impala/COPY를 즉시 중단하려면
+  백엔드 커서 취소(`cursor.cancel()`)가 추가로 필요하다(향후 확장).
 
 ### 실행 이력(PostgreSQL) — 2계층
 
