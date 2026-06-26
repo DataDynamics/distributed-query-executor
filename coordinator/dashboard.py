@@ -145,15 +145,15 @@ async function getJSON(u){ const r = await fetch(u); return r.json(); }
 async function loadJobs(){
   const d = await getJSON("/jobs?limit=200");
   const cols = [
-    {t:"job_id", k:"job_id", f:r=>`<code>${r.job_id}</code>`},
-    {t:"status", f:r=>pill(r.status)},
+    {t:"작업 ID", k:"job_id", f:r=>`<code>${r.job_id}</code>`},
+    {t:"상태", f:r=>pill(r.status)},
     {t:"진행률", f:r=>bar(r.progress_percent)},
     {t:"완료/전체", f:r=>`${r.completed}/${r.total}`},
-    {t:"rows", k:"total_rows_written"},
-    {t:"exec_mode", k:"exec_mode"},
-    {t:"partition", k:"partition_column"},
-    {t:"target", k:"target_table"},
-    {t:"started_at", f:r=>`<span class="mut">${fmt(r.started_at)}</span>`},
+    {t:"적재 행수", k:"total_rows_written"},
+    {t:"실행 방식", k:"exec_mode"},
+    {t:"파티션 컬럼", k:"partition_column"},
+    {t:"대상 테이블", k:"target_table"},
+    {t:"시작 시각", f:r=>`<span class="mut">${fmt(r.started_at)}</span>`},
   ];
   $("#p-jobs").innerHTML =
     `<div class="cards">
