@@ -1,12 +1,21 @@
-"""Job 저장소.
+"""Job 저장소 구현 모듈.
 
-- InMemoryJobStore: 단일 coordinator(기본). 프로세스 메모리.
-- SqlJobStore: 여러 coordinator 가 공유(PostgreSQL). 어느 coordinator로 요청이 가도
-  조회/취소가 가능하도록 Job 스냅샷을 영속한다.
+Job(작업) 객체를 보관·조회·갱신하고 취소 플래그를 관리하는 저장소를 제공한다.
+두 가지 백엔드가 동일한 인터페이스(덕 타이핑)를 구현하므로 호출부는 구현을 모른 채
+교체할 수 있다.
+
+- InMemoryJobStore : 단일 coordinator용 기본 구현. 프로세스 메모리(dict)에만 보관하며
+                     프로세스가 죽으면 사라진다. Job 객체 참조를 그대로 들고 있어
+                     별도 영속 단계가 필요 없다(가장 빠름).
+- SqlJobStore      : 여러 coordinator가 공유하는 PostgreSQL 기반 구현. 로드밸런서 뒤에
+                     여러 coordinator가 떠 있어도 어느 인스턴스로 요청이 가든
+                     조회/취소가 가능하도록 Job 스냅샷(JSONB)을 영속한다.
 
 공통 인터페이스:
   add(job), get(job_id), list(), save(job),
   request_cancel(job_id), is_cancel_requested(job_id)
+
+어떤 백엔드를 쓸지는 설정에 따라 :func:`build_job_store` 가 결정한다.
 """
 
 from __future__ import annotations
@@ -21,23 +30,44 @@ logger = logging.getLogger(__name__)
 
 
 class InMemoryJobStore:
+    """프로세스 메모리에 Job을 보관하는 단일 coordinator용 저장소.
+
+    ``job_id → Job`` dict로 객체 참조를 그대로 들고 있으므로, 호출부가 Job을 수정하면
+    저장소 안의 객체도 곧바로 바뀐다. 그래서 ``save`` 는 사실상 no-op에 가깝다.
+    프로세스 재시작 시 모든 상태가 사라진다(영속성 없음).
+    """
+
     def __init__(self) -> None:
+        # job_id를 키로 Job 객체 참조를 보관한다.
         self._jobs: dict[str, Job] = {}
 
     def add(self, job: Job) -> None:
+        """새 Job을 등록한다(같은 id면 덮어쓴다)."""
         self._jobs[job.job_id] = job
 
     def save(self, job: Job) -> None:
+        """변경된 Job을 반영한다.
+
+        객체 참조를 그대로 들고 있어 사실상 갱신이 이미 끝난 상태지만, SqlJobStore와
+        동일한 인터페이스를 맞추기 위해 다시 매핑해 둔다(별도 영속 불필요).
+        """
         # 객체를 그대로 들고 있으므로 별도 영속 불필요
         self._jobs[job.job_id] = job
 
     def get(self, job_id: str) -> Optional[Job]:
+        """job_id로 Job을 조회한다(없으면 None)."""
         return self._jobs.get(job_id)
 
     def list(self) -> list[Job]:
+        """보관 중인 모든 Job을 리스트로 반환한다."""
         return list(self._jobs.values())
 
     def request_cancel(self, job_id: str) -> bool:
+        """해당 Job에 취소를 요청한다. 성공 시 True, 없는 id면 False.
+
+        실행 루프가 ``is_cancel_requested`` 를 폴링해 실제 중단을 수행하므로, 여기서는
+        플래그만 세운다.
+        """
         job = self._jobs.get(job_id)
         if job is None:
             return False
@@ -45,10 +75,13 @@ class InMemoryJobStore:
         return True
 
     def is_cancel_requested(self, job_id: str) -> bool:
+        """해당 Job에 취소가 요청되었는지 여부를 반환한다(없는 id면 False)."""
         job = self._jobs.get(job_id)
         return bool(job and job.cancel_requested)
 
 
+# 공유 저장소 테이블 DDL. data(JSONB)에 Job 전체 스냅샷을 넣고, 자주 조회/갱신하는
+# status·cancel_requested는 별도 컬럼으로 빼 두어 인덱싱·빠른 갱신이 가능하게 한다.
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS {table} (
     job_id           TEXT PRIMARY KEY,
@@ -62,15 +95,31 @@ CREATE TABLE IF NOT EXISTS {table} (
 
 
 class SqlJobStore:
-    """PostgreSQL 공유 Job 저장소(멀티 coordinator). psycopg 는 지연 임포트."""
+    """여러 coordinator가 공유하는 PostgreSQL 기반 Job 저장소.
+
+    Job을 ``to_record``/``from_record`` 로 JSONB 직렬화해 한 테이블에 영속한다.
+    매 작업마다 연결을 새로 열고 닫는 단순한 방식이며, ``psycopg`` 는 무거운
+    의존성이라 선택 설치/지연 임포트로 둔다(메모리 백엔드만 쓰는 배포에서는 불필요).
+
+    인자:
+        dsn            : PostgreSQL 접속 문자열.
+        table          : 사용할 테이블명(기본 "jobs").
+        coordinator_id : 이 레코드를 마지막으로 기록한 coordinator 식별자(추적용).
+    """
 
     def __init__(self, dsn: str, table: str = "jobs", coordinator_id: str = "-"):
         self.dsn = dsn
         self.table = table
         self.coordinator_id = coordinator_id
+        # 테이블 DDL을 이미 보장했는지 여부(프로세스 생애 동안 1회만 실행하기 위함).
         self._ddl_ready = False
 
     def _conn(self):
+        """새 DB 연결을 열고, 최초 1회에 한해 테이블 DDL을 보장한 뒤 반환한다.
+
+        ``_ddl_ready`` 플래그로 ``CREATE TABLE IF NOT EXISTS`` 를 프로세스당 한 번만
+        실행한다. psycopg는 여기서 지연 임포트한다(모듈 로드 비용·선택 의존성 처리).
+        """
         import psycopg  # 지연 임포트
 
         conn = psycopg.connect(self.dsn)
@@ -82,9 +131,15 @@ class SqlJobStore:
         return conn
 
     def add(self, job: Job) -> None:
+        """새 Job을 저장한다(내부적으로 ``save`` 와 동일한 UPSERT)."""
         self.save(job)
 
     def save(self, job: Job) -> None:
+        """Job 스냅샷을 UPSERT한다(같은 job_id면 갱신).
+
+        ``ON CONFLICT (job_id) DO UPDATE`` 로 신규 삽입과 갱신을 한 문장으로 처리한다.
+        status·cancel_requested는 별도 컬럼에도 함께 기록해 빠른 조회/취소에 대비한다.
+        """
         data = json.dumps(job.to_record())
         sql = (
             f"INSERT INTO {self.table} "
@@ -104,6 +159,12 @@ class SqlJobStore:
             conn.commit()
 
     def get(self, job_id: str) -> Optional[Job]:
+        """job_id로 Job 스냅샷을 읽어 객체로 복원한다(없으면 None).
+
+        data 컬럼은 JSONB이므로 드라이버가 dict로 줄 수도, 문자열로 줄 수도 있어
+        둘 다 처리한다. 별도 컬럼의 cancel_requested로 취소 플래그를 최신값으로
+        덮어써, data 스냅샷이 갱신되기 전이라도 취소가 즉시 반영되게 한다.
+        """
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -119,6 +180,10 @@ class SqlJobStore:
         return job
 
     def list(self) -> list[Job]:
+        """저장된 모든 Job을 복원해 리스트로 반환한다.
+
+        get과 마찬가지로 JSONB가 dict/문자열 어느 쪽으로 와도 처리한다.
+        """
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT data FROM {self.table}")
@@ -130,6 +195,12 @@ class SqlJobStore:
         return jobs
 
     def request_cancel(self, job_id: str) -> bool:
+        """취소 플래그 컬럼만 직접 UPDATE한다. 한 행이라도 갱신되면 True.
+
+        무거운 data 스냅샷을 다시 쓰지 않고 cancel_requested 컬럼만 갱신하므로,
+        다른 coordinator에서 실행 중인 Job도 즉시 취소 신호를 받을 수 있다.
+        rowcount로 대상 존재 여부를 판단한다.
+        """
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -142,6 +213,10 @@ class SqlJobStore:
         return updated > 0
 
     def is_cancel_requested(self, job_id: str) -> bool:
+        """취소 플래그 컬럼만 가볍게 조회한다(실행 루프가 폴링하는 용도).
+
+        전체 Job을 복원하지 않고 boolean 한 컬럼만 읽어 폴링 비용을 줄인다.
+        """
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -157,7 +232,15 @@ JobStore = InMemoryJobStore
 
 
 def build_job_store(settings) -> InMemoryJobStore | SqlJobStore:
-    """설정에 따라 Job 저장소를 만든다(기본 memory)."""
+    """설정에 따라 알맞은 Job 저장소를 생성하는 팩토리(기본은 메모리).
+
+    ``store_backend`` 가 "postgres"이고 DSN이 설정돼 있으면 SqlJobStore를,
+    그 외에는 InMemoryJobStore를 만든다. postgres로 지정됐지만 DSN이 비어 있으면
+    경고 로그를 남기고 안전하게 메모리 백엔드로 폴백한다.
+
+    설정 객체에서 ``getattr`` 로 안전하게 값을 읽어, 해당 속성이 없는 설정과도
+    호환되게 한다.
+    """
     backend = getattr(settings, "store_backend", "memory")
     dsn = getattr(settings, "history_db_dsn", "")
     if backend == "postgres" and dsn:

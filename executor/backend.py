@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 class Backend(Protocol):
+    """executor 가 사용하는 적재 백엔드의 구조적 인터페이스(덕 타이핑).
+
+    세 가지 실행 모드를 메서드로 노출한다: ``move``(copy), ``execute``(statement),
+    ``stage_and_insert``(stage_insert). 실제 구현(ImpalaToGreenplumBackend)과 테스트용
+    가짜 구현(MockBackend)이 이 시그니처를 만족하면 ``app`` 에 주입할 수 있다.
+    """
+
     def move(
         self,
         sub_query: str,
@@ -44,21 +51,31 @@ class Backend(Protocol):
 
 
 class MockBackend:
-    """결정적인 행 수를 반환하고 실제 I/O는 하지 않음. 개발/테스트용."""
+    """결정적인 행 수를 반환하고 실제 I/O는 하지 않음. 개발/테스트용.
+
+    DB 드라이버(impyla/psycopg)나 라이브 클러스터 없이 coordinator·executor 의 흐름을
+    검증할 수 있게, 입력에 따라 예측 가능한 행 수만 만들어 낸다.
+
+    인자:
+        rows_per_value: 파티션 값 1개당 가짜로 만들어 낼 행 수(기본 100).
+    """
 
     def __init__(self, rows_per_value: int = 100):
         self.rows_per_value = rows_per_value
 
     def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None) -> int:
+        # 파티션 값 개수 × rows_per_value 를 적재한 것으로 가정(값이 없으면 최소 1로 간주).
         total = max(1, len(partition_values)) * self.rows_per_value
         if on_progress:
             on_progress(total)
         return total
 
     def execute(self, sql: str) -> int:
+        # statement 모드: 항상 rows_per_value 행이 영향받은 것으로 가정.
         return self.rows_per_value
 
     def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None) -> int:
+        # stage_insert 모드: rows_per_value 행을 staging→target 으로 옮긴 것으로 가정.
         if on_progress:
             on_progress(self.rows_per_value)
         return self.rows_per_value
@@ -132,6 +149,19 @@ class ImpalaToGreenplumBackend:
             impala_conn.close()
 
     def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None) -> int:
+        """copy 모드: Impala 에서 sub_query 결과를 스트리밍해 Greenplum 에 COPY 적재한다.
+
+        Impala 커서를 batch_size 단위로 fetch 하며 psycopg COPY(STDIN)로 흘려보내므로,
+        전체 결과를 메모리에 모으지 않는다. COPY 컬럼 목록은 Impala 커서 description 에서
+        얻은 컬럼 순서를 그대로 사용한다.
+
+        write_mode 가 "overwrite_partitions" 이고 partition_values 가 있으면, 적재 전에
+        해당 파티션 값들을 ``DELETE ... WHERE col IN (...)`` 로 먼저 지운다. 이 선삭제 덕분에
+        같은 task 를 재실행해도 중복 적재되지 않아 멱등(idempotent)하다 — DELETE+COPY 가
+        한 트랜잭션에서 commit 되므로, 재시도 시 이전 결과를 덮어쓰는 효과가 난다.
+
+        반환: COPY 로 적재한 총 행 수.
+        """
         from impala.dbapi import connect as impala_connect  # 지연 임포트
         import psycopg  # 지연 임포트
 
@@ -145,6 +175,8 @@ class ImpalaToGreenplumBackend:
             with psycopg.connect(self.greenplum_dsn) as gp:
                 with gp.cursor() as gp_cur:
                     if write_mode == "overwrite_partitions" and partition_values:
+                        # 멱등성: 적재 대상 파티션을 먼저 삭제 → DELETE+COPY 가 같은 트랜잭션에
+                        # 묶여 commit 되므로 재실행해도 중복 없이 해당 파티션만 새 데이터로 교체.
                         placeholders = ", ".join(["%s"] * len(partition_values))
                         gp_cur.execute(
                             f"DELETE FROM {target_table} "
@@ -166,6 +198,11 @@ class ImpalaToGreenplumBackend:
 
 
 def _batches(cursor, size: int) -> Iterator[list]:
+    """DB 커서를 ``size`` 행씩 묶어 순차적으로 내어주는 제너레이터.
+
+    ``fetchmany`` 로 일정 크기만 가져와 메모리 사용을 일정하게 유지하며(스트리밍),
+    더 가져올 행이 없으면(빈 결과) 중단한다.
+    """
     while True:
         rows = cursor.fetchmany(size)
         if not rows:

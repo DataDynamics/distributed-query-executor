@@ -1,4 +1,19 @@
-"""도메인 모델(Job/Task) 및 API 요청/응답 스키마."""
+"""도메인 모델(Job/Task)과 API 요청/응답 스키마 정의.
+
+이 모듈은 분산 쿼리 실행 시스템의 핵심 도메인 객체를 정의한다.
+
+- ``Job``  : 사용자가 제출한 하나의 큰 쿼리 작업. 파티션 IN 목록을 N등분하여
+             여러 ``Task`` 로 쪼개진 뒤, 여러 executor에 분산 실행된다.
+- ``Task`` : Job을 구성하는 개별 sub-query 단위. 특정 executor가 파티션 값의
+             부분집합 하나를 읽어 대상 테이블로 적재한다.
+
+상태 머신은 두 개의 enum(``JobStatus``, ``TaskStatus``)으로 표현하며,
+Job의 진행률은 종료된(terminal) Task 비율로 계산한다(아래 ``Job.progress_percent`` 참고).
+
+도메인 객체는 ``@dataclass`` 로, 외부에 노출되는 HTTP 요청/응답 스키마는
+``pydantic.BaseModel`` 로 분리되어 있다. dataclass 쪽 ``to_record``/``from_record``
+메서드는 SqlJobStore(여러 coordinator 공유 저장소)용 JSON 직렬화/역직렬화를 담당한다.
+"""
 
 from __future__ import annotations
 
@@ -12,10 +27,29 @@ from pydantic import BaseModel, Field
 
 
 def _now_iso() -> str:
+    """현재 시각을 UTC 기준 ISO-8601 문자열로 반환한다.
+
+    저장/직렬화 시 타임존 모호성을 없애기 위해 항상 UTC(``timezone.utc``)를 쓴다.
+    """
     return datetime.now(timezone.utc).isoformat()
 
 
 class JobStatus(str, enum.Enum):
+    """Job 전체의 생명주기 상태.
+
+    ``str`` 을 함께 상속하므로 enum 멤버가 곧 문자열이며, JSON 직렬화·DB 저장 시
+    ``.value`` 가 그대로 쓰인다.
+
+    상태 전이(개략):
+        PENDING   → 작업 생성 직후, 아직 분할 전 대기 상태.
+        SPLITTING → 쿼리를 파싱하고 파티션 IN 목록을 N등분하여 Task로 쪼개는 중.
+        RUNNING   → Task들을 executor에 분산 실행 중.
+        DONE      → 모든 Task 성공(터미널).
+        PARTIAL   → 일부 Task만 성공(best_effort 정책에서 발생, 터미널).
+        FAILED    → 작업 실패(fail_fast 정책 등, 터미널).
+        CANCELLED → 사용자 취소 요청으로 중단됨(터미널).
+    """
+
     PENDING = "PENDING"
     SPLITTING = "SPLITTING"
     RUNNING = "RUNNING"
@@ -26,6 +60,22 @@ class JobStatus(str, enum.Enum):
 
 
 class TaskStatus(str, enum.Enum):
+    """개별 Task(sub-query)의 생명주기 상태.
+
+    ``JobStatus`` 와 마찬가지로 문자열 enum이다.
+
+    상태 전이(개략):
+        QUEUED    → 실행 대기.
+        READING   → 소스(Impala 등)에서 결과를 읽는 중.
+        WRITING   → 대상(Greenplum 등)에 적재(COPY/INSERT)하는 중.
+        DONE      → 성공(터미널).
+        FAILED    → 실패(터미널).
+        CANCELLED → 취소됨(터미널).
+
+    DONE/FAILED/CANCELLED 세 상태가 '종료(terminal)'로 취급되며,
+    Job 진행률 계산(``Job.completed``)의 기준이 된다.
+    """
+
     QUEUED = "QUEUED"
     READING = "READING"
     WRITING = "WRITING"
@@ -35,15 +85,38 @@ class TaskStatus(str, enum.Enum):
 
 
 def _new_id(prefix: str) -> str:
+    """``<prefix>_<랜덤12자리>`` 형태의 짧은 식별자를 생성한다.
+
+    uuid4의 hex 앞 12자만 사용해 충돌 가능성은 낮추면서 로그·URL에서 다루기 쉬운
+    길이를 유지한다. prefix로 종류(job/task)를 구분한다.
+    """
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
 def new_job_id() -> str:
+    """새 Job 식별자(``job_...``)를 발급한다."""
     return _new_id("job")
 
 
 @dataclass
 class Task:
+    """Job을 구성하는 개별 실행 단위(sub-query 하나).
+
+    파티션 IN 목록의 부분집합(``partition_values``)을 스캔하는 sub-query 한 건을
+    특정 executor에 보내 실행한 결과를 추적한다.
+
+    필드:
+        job_id           : 소속 Job의 식별자.
+        executor_url     : 이 Task를 실행할(또는 실행한) executor 엔드포인트. 미배정 시 None.
+        sub_query        : executor로 전송한 sub-query 전문(재시도·감사 목적으로 원문 보관).
+        partition_values : 이 Task가 담당하는 파티션 값들(분할된 IN 목록의 한 버킷).
+        task_id          : ``t_...`` 형태 식별자(자동 발급).
+        status           : 현재 ``TaskStatus``.
+        rows_written     : 대상 테이블에 적재된 행 수(진행/결과 집계용).
+        attempt          : 시도 횟수(재시도 시 증가).
+        error            : 실패 시 오류 메시지(성공이면 None).
+    """
+
     job_id: str
     executor_url: Optional[str]
     sub_query: str  # executor로 보낸 sub-query 전문(보관)
@@ -55,6 +128,7 @@ class Task:
     error: Optional[str] = None
 
     def summary(self) -> dict:
+        """상태 조회 응답용 경량 요약 dict를 반환한다(무거운 sub_query 전문은 제외)."""
         return {
             "task_id": self.task_id,
             "executor_url": self.executor_url,
@@ -66,10 +140,15 @@ class Task:
         }
 
     def detail(self) -> dict:
+        """요약(summary)에 sub-query 전문을 더한 상세 dict를 반환한다(단건 조회용)."""
         return {**self.summary(), "sub_query": self.sub_query}
 
     def to_record(self) -> dict:
-        """공유 저장용 전체 직렬화."""
+        """SqlJobStore(공유 저장소)에 넣기 위한 전체 직렬화 dict를 반환한다.
+
+        ``summary`` 와 달리 sub_query 등 모든 필드를 포함하므로 ``from_record`` 로
+        손실 없이 복원할 수 있다. enum은 ``.value`` 문자열로 평탄화한다.
+        """
         return {
             "job_id": self.job_id,
             "executor_url": self.executor_url,
@@ -84,6 +163,11 @@ class Task:
 
     @classmethod
     def from_record(cls, d: dict) -> "Task":
+        """``to_record`` 로 만든 dict(주로 DB JSONB)를 다시 Task 객체로 복원한다.
+
+        선택 필드는 ``dict.get`` 으로 안전하게 읽어 과거 스키마와의 호환성을 둔다.
+        문자열로 저장된 상태는 ``TaskStatus(...)`` 로 enum 복원한다.
+        """
         return cls(
             job_id=d["job_id"],
             executor_url=d.get("executor_url"),
@@ -99,6 +183,32 @@ class Task:
 
 @dataclass
 class Job:
+    """사용자가 제출한 하나의 분할 실행 작업 전체를 표현한다.
+
+    원본 SQL을 파티션 컬럼 IN 목록 기준으로 N(``parallelism``)등분하여 ``tasks`` 로
+    쪼갠 뒤, 각 Task를 executor에 분산 실행한다.
+
+    주요 필드:
+        original_sql    : 사용자가 제출한 원본 SELECT 쿼리.
+        partition_column: IN 목록으로 분할할 기준 컬럼.
+        target_table    : 결과를 적재할 대상 테이블.
+        write_mode      : 적재 방식(append / overwrite_partitions).
+        parallelism     : 분할 개수 상한(IN 값 개수로 클램핑됨).
+        split_strategy  : 값 분배 전략(contiguous / round_robin).
+        failure_policy  : 실패 처리 정책(fail_fast / best_effort).
+        username        : 작업을 실행한 사용자(이력 기록용, 선택).
+        exec_mode       : 실행 방식(copy / statement / stage_insert).
+        staging_table   : stage_insert 모드에서 COPY 적재할 staging 테이블명.
+        staging_ddl     : stage_insert 모드에서 staging 테이블 생성 DDL.
+        insert_sql      : stage_insert 모드에서 staging→target 적재 INSERT 문.
+        job_id          : ``job_...`` 형태 식별자(자동 발급).
+        status          : 현재 ``JobStatus``.
+        tasks           : 분할된 Task 목록.
+        error           : 작업 수준 오류 메시지.
+        created_at / started_at / finished_at : ISO-8601(UTC) 타임스탬프.
+        cancel_requested: 취소 요청 플래그(executor 루프가 폴링하여 중단 판단).
+    """
+
     original_sql: str
     partition_column: str
     target_table: str
@@ -122,19 +232,30 @@ class Job:
 
     @property
     def total_rows_written(self) -> int:
+        """모든 Task의 적재 행 수 합계(작업 전체 결과 규모)."""
         return sum(t.rows_written for t in self.tasks)
 
     @property
     def completed(self) -> int:
+        """종료(terminal) 상태에 도달한 Task 수.
+
+        성공·실패·취소를 모두 '완료'로 세는 이유는, 진행률이 '남은 일이 없는' 정도를
+        나타내야 하기 때문이다(실패/취소도 더 진행할 일이 없으므로 완료로 카운트).
+        """
         terminal = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
         return sum(1 for t in self.tasks if t.status in terminal)
 
     @property
     def progress_percent(self) -> float:
+        """완료된 Task 비율(%)을 소수점 1자리로 반환한다.
+
+        Task가 아직 하나도 없으면(분할 전) 0으로 본다(0 나눗셈 방지).
+        """
         total = len(self.tasks)
         return round(100.0 * self.completed / total, 1) if total else 0.0
 
     def status_view(self) -> dict:
+        """상태 조회 API용 전체 뷰(각 Task 요약 목록 포함)를 반환한다."""
         return {
             "job_id": self.job_id,
             "status": self.status.value,
@@ -151,7 +272,11 @@ class Job:
         }
 
     def to_record(self) -> dict:
-        """공유 저장(SqlJobStore)용 전체 직렬화."""
+        """SqlJobStore(공유 저장소)에 영속하기 위한 전체 직렬화 dict를 반환한다.
+
+        하위 Task들도 각자 ``to_record`` 로 직렬화해 중첩 리스트로 포함하므로,
+        이 dict 하나로 Job 전체 스냅샷을 손실 없이 복원할 수 있다(``from_record``).
+        """
         return {
             "job_id": self.job_id,
             "original_sql": self.original_sql,
@@ -177,6 +302,12 @@ class Job:
 
     @classmethod
     def from_record(cls, d: dict) -> "Job":
+        """``to_record`` 로 만든 dict(주로 DB JSONB)를 Job 객체로 복원한다.
+
+        먼저 Job 본문을 복원한 뒤 중첩된 task 레코드들을 ``Task.from_record`` 로
+        역직렬화해 ``tasks`` 에 채운다. 선택 필드는 ``get`` 으로 안전하게 읽고,
+        문자열 상태는 ``JobStatus(...)`` 로 enum 복원한다.
+        """
         job = cls(
             original_sql=d["original_sql"],
             partition_column=d["partition_column"],
@@ -218,6 +349,7 @@ class Job:
         }
 
     def result_view(self) -> dict:
+        """최종 결과 조회용 뷰. 전체 적재 행 수와 Task별 적재 행 수를 반환한다."""
         return {
             "job_id": self.job_id,
             "status": self.status.value,
@@ -233,6 +365,13 @@ class Job:
 
 
 class CreateJobRequest(BaseModel):
+    """작업 생성 API(POST)의 요청 바디 스키마.
+
+    pydantic이 타입·범위·허용값(Literal)을 자동 검증한다. 각 필드의 의미는
+    아래 ``Field`` description을 참고. exec_mode/stage_insert·wrapper 관련 필드는
+    서로 연동되며, 도메인 동작은 parser/splitter/executor 모듈에서 처리한다.
+    """
+
     sql: str = Field(..., description="Impala SELECT 쿼리")
     partition_column: str = Field(..., description="IN 목록으로 분할할 기준 컬럼")
     target_table: str = Field(..., description="Greenplum 적재 대상 테이블")
@@ -280,4 +419,6 @@ class CreateJobRequest(BaseModel):
 
 
 class CreateJobResponse(BaseModel):
+    """작업 생성 API의 응답 스키마. 생성된 Job 식별자를 돌려준다."""
+
     job_id: str

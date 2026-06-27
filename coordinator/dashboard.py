@@ -1,6 +1,14 @@
 """coordinator 모니터링 대시보드(인라인 HTML + vanilla JS, npm/빌드 불필요).
 
-/ 에 단일 HTML 을 서빙하고, 브라우저가 /jobs·/cluster·/config·/info 를 폴링해 탭을 갱신한다.
+이 모듈은 별도 프런트엔드 빌드 없이 단일 HTML 문자열(DASHBOARD_HTML)로 모니터링 UI 를
+제공한다. 서버는 '/' 경로에서 이 HTML 을 그대로 서빙하고, 브라우저의 vanilla JS 가
+/jobs·/cluster·/config·/info·/history 등의 JSON API 를 주기적으로 폴링해 각 탭(처리중인 쿼리,
+실행 이력, Executor, 환경설정, 그외 정보)을 갱신한다.
+
+Python 쪽 코드는 두 가지뿐이다.
+  - mask_dsn(): DSN 문자열의 비밀번호 부분을 가린다.
+  - masked_config(): 환경설정 탭에 뿌릴 (section, key, value) 행 목록을 만들며, 비밀값은 마스킹한다.
+나머지(DASHBOARD_HTML)는 브라우저로 그대로 전달되는 HTML/CSS/JS 코드 문자열이다.
 """
 
 from __future__ import annotations
@@ -9,14 +17,36 @@ import re
 
 
 def mask_dsn(dsn: str | None) -> str:
-    """DSN 의 비밀번호를 마스킹: scheme://user:pass@host → scheme://user:***@host."""
+    """DSN 의 비밀번호를 마스킹한다: scheme://user:pass@host → scheme://user:***@host.
+
+    접속 문자열을 화면/응답에 노출할 때 자격증명이 새지 않도록, 'user:password@' 패턴의
+    비밀번호 부분만 '***' 로 치환한다. 사용자명/호스트 등 나머지는 그대로 둔다. 값이 비어
+    있으면 빈 문자열을 돌려준다.
+
+    Args:
+        dsn: 마스킹할 DSN 문자열(없을 수 있음).
+
+    Returns:
+        비밀번호가 가려진 DSN 문자열(입력이 없으면 "").
+    """
     if not dsn:
         return ""
     return re.sub(r"://([^:/@]+):([^@]+)@", r"://\1:***@", dsn)
 
 
 def masked_config(settings) -> list[dict]:
-    """환경설정 탭용 (section, key, value) 행 목록. 비밀값은 마스킹한다."""
+    """환경설정 탭에 표시할 (section, key, value) 행 목록을 만든다.
+
+    현재 설정값을 섹션별로 평탄화한 행 리스트로 변환한다. DSN/비밀번호처럼 민감한 값은
+    mask_dsn() 또는 '***' 로 가려 노출하지 않는다. 미설정 항목은 사람이 읽기 좋은 안내
+    문자열('(없음)', '(미설정→Mock)' 등)로 대체한다.
+
+    Args:
+        settings: 노출할 설정 속성을 담은 설정 객체.
+
+    Returns:
+        list[dict]: 각 항목이 {"section", "key", "value"} 형태인 행 목록.
+    """
     rows: list[tuple[str, str, object]] = [
         ("app", "name", settings.app_name),
         ("app", "debug", settings.debug),
@@ -65,6 +95,8 @@ def masked_config(settings) -> list[dict]:
     return [{"section": s, "key": k, "value": v} for s, k, v in rows]
 
 
+# 대시보드 페이지 전체(HTML/CSS/JS)를 담은 문자열. '/' 핸들러가 이 값을 그대로 응답으로 내보낸다.
+# 주의: 아래 문자열 내부는 브라우저로 전송되는 코드이므로 Python 주석을 끼워 넣지 말 것.
 DASHBOARD_HTML = """<!doctype html>
 <html lang="ko">
 <head>

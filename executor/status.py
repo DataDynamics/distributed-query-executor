@@ -14,6 +14,8 @@ from .history import _executor_id
 
 logger = logging.getLogger(__name__)
 
+# executor_status 테이블 DDL. executor_id 가 PK 이므로 executor 1대당 1행만 유지되고,
+# heartbeat 마다 같은 행을 갱신(UPSERT)한다. {table} 은 설정값으로 치환된다.
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS {table} (
     executor_id          TEXT PRIMARY KEY,
@@ -30,6 +32,8 @@ CREATE TABLE IF NOT EXISTS {table} (
 )
 """
 
+# self-report UPSERT: 같은 executor_id 행이 있으면(ON CONFLICT) 모든 메트릭과
+# updated_at 을 새 값으로 덮어쓴다. 즉 "마지막으로 본 상태" 한 줄만 항상 유지된다.
 _UPSERT = """
 INSERT INTO {table}
     (executor_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
@@ -45,6 +49,20 @@ ON CONFLICT (executor_id) DO UPDATE SET
 
 
 class ExecutorStatusReporter:
+    """주기적으로 자기 상태(메트릭+동시 처리 현황)를 공유 DB 에 self-report 한다.
+
+    ``start`` 가 백그라운드 asyncio 루프를 띄워 ``interval`` 초마다 ``_report_once`` 를
+    호출하고, executor_status 테이블의 자기 행을 UPSERT 한다. coordinator 는 이 테이블을
+    읽기만 하므로, 여러 coordinator 가 같은 executor 를 중복 폴링/기록하는 문제를 피한다.
+    DSN(history_db_dsn)이 없으면 비활성으로 동작한다(경고만 남기고 아무 것도 안 함).
+
+    인자:
+        settings: history_db_dsn, executor_status_table, executor_status_interval_s,
+            monitor_disk_path 등을 읽어오는 설정 객체.
+        tasks_provider: 호출 시 (active, queued, max) 튜플을 돌려주는 콜러블(선택).
+            동시 처리 현황을 메트릭과 함께 기록하는 데 사용한다.
+    """
+
     def __init__(self, settings, tasks_provider=None):
         self.dsn: str = getattr(settings, "history_db_dsn", "") or ""
         self.table: str = getattr(settings, "executor_status_table", "executor_status")
@@ -58,6 +76,7 @@ class ExecutorStatusReporter:
         self._ddl_ready = False
 
     async def start(self) -> None:
+        """self-report 백그라운드 루프를 시작한다(비활성이면 경고 후 무동작)."""
         if not self.enabled:
             logger.warning("history.db_dsn 미설정 → executor self-report 비활성")
             return
@@ -68,6 +87,10 @@ class ExecutorStatusReporter:
         )
 
     async def stop(self) -> None:
+        """백그라운드 루프를 취소하고 정상 종료를 기다린다(앱 종료 시 호출).
+
+        cancel 후 발생하는 CancelledError 는 정상적인 종료 신호이므로 삼킨다.
+        """
         if self._task:
             self._task.cancel()
             try:
@@ -76,6 +99,12 @@ class ExecutorStatusReporter:
                 pass
 
     async def _loop(self) -> None:
+        """interval 초 간격으로 self-report 를 반복 수행하는 루프.
+
+        한 번의 보고 실패가 루프를 멈추지 않도록 예외를 잡아 로깅만 하고 계속 진행한다.
+        블로킹 DB 작업(``_report_once``)은 ``to_thread`` 로 스레드에서 실행해 이벤트 루프를
+        막지 않는다.
+        """
         while True:
             try:
                 await asyncio.to_thread(self._report_once)
@@ -84,6 +113,10 @@ class ExecutorStatusReporter:
             await asyncio.sleep(self.interval)
 
     def _report_once(self) -> None:
+        """현재 시스템 메트릭과 동시 처리 현황을 한 번 수집해 UPSERT 한다(동기).
+
+        첫 호출에서만 테이블 DDL 을 보장(CREATE IF NOT EXISTS)하고 이후로는 생략한다.
+        """
         import psycopg  # 지연 임포트
 
         m = collect_system_metrics(self.disk_path)

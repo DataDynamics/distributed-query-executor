@@ -1,4 +1,23 @@
-"""Coordinator FastAPI 애플리케이션 팩토리."""
+"""Coordinator FastAPI 애플리케이션 팩토리.
+
+이 모듈은 분산 쿼리 Coordinator의 HTTP API를 구성하는 진입점이다. 핵심 책임은
+다음과 같다.
+
+- **작업 생성 파이프라인**: 클라이언트가 보낸 SQL을 검증·파싱하고(`parser`),
+  파티션 컬럼의 `IN` 목록 기준으로 N개의 sub-query로 분할한 뒤(`splitter`),
+  각 sub-query를 executor에 라운드로빈 배정하여 비동기로 디스패치한다.
+- **Admission control(과부하 보호)**: 동시 실행 슬롯과 대기 큐 용량을 합한 한도를
+  초과하는 요청은 즉시 429로 거부한다(자세한 흐름은 `_create_job` 주석 참고).
+- **상태/결과 조회 및 취소**: job/task 단위 상태·진행률·결과 조회와 취소 API를 제공.
+- **모니터링**: coordinator/executor 헬스·시스템 메트릭, 클러스터 요약, 대시보드.
+
+Coordinator 자신은 쿼리 결과 행을 받지 않는다. 실제 데이터 이동(Impala→Greenplum)은
+executor가 수행하고, 여기서는 분배·상태추적·집계만 담당한다.
+
+`create_app()`은 의존성(runner/store/settings)을 주입받는 팩토리로, 테스트에서
+가짜 구현을 끼워 넣기 쉽게 설계되어 있다. 모듈 마지막 줄에서 기본 설정으로
+싱글턴 `app` 을 생성해 ASGI 서버가 import 할 수 있게 한다.
+"""
 
 from __future__ import annotations
 
@@ -37,8 +56,21 @@ logger = logging.getLogger(__name__)
 
 
 def _assign_executors(count: int, executors: list[str]) -> list[Optional[str]]:
-    """N개의 task에 executor URL을 라운드로빈 배정(설정 없으면 None)."""
+    """`count`개의 task에 executor URL을 라운드로빈으로 배정한다.
+
+    분할된 sub-query를 설정된 executor 목록에 고르게 분산시키기 위한 헬퍼다.
+    executor 수보다 task가 많으면 `itertools.cycle` 로 목록을 순환하며 반복 배정한다.
+
+    Args:
+        count: 배정 대상 task 개수.
+        executors: 후보 executor base URL 목록(설정값).
+
+    Returns:
+        task 순서에 1:1 대응하는 URL 리스트. executor 목록이 비어 있으면
+        (예: local 모드라 원격 호출이 없을 때) 모두 None 을 채워 반환한다.
+    """
     if not executors:
+        # local 모드 등 원격 executor가 없는 경우: 배정할 URL이 없으므로 None 으로 채운다.
         return [None] * count
     cycle = itertools.cycle(executors)
     return [next(cycle) for _ in range(count)]
@@ -49,9 +81,26 @@ def create_app(
     store: Optional[JobStore] = None,
     settings: Optional[Settings] = None,
 ) -> FastAPI:
+    """FastAPI 앱을 조립하여 반환하는 팩토리.
+
+    의존성을 인자로 주입받아 라우트를 등록한 `FastAPI` 인스턴스를 만든다. 인자를
+    생략하면 기본 설정(`default_settings`)을 바탕으로 store와 runner를 자동 구성하므로,
+    운영 기동 시에는 인자 없이 호출하고 테스트에서는 가짜 구현을 주입할 수 있다.
+
+    Args:
+        runner: job을 실제로 실행하는 디스패처(JobRunner). None 이면 executor_mode 에
+            따라 LocalDispatcher / HttpDispatcher 를 자동 선택한다.
+        store: job 상태 저장소. None 이면 설정 기반으로 빌드한다(인메모리/공유 DB 등).
+        settings: 환경설정. None 이면 모듈 전역 기본 설정을 사용한다.
+
+    Returns:
+        라우트·예외 핸들러·lifespan 이 모두 등록된 FastAPI 앱.
+    """
     settings = settings or default_settings
     store = store or build_job_store(settings)
     if runner is None:
+        # executor_mode 에 따라 디스패처 선택: local 은 in-process 직접 실행,
+        # 그 외(http)는 원격 executor에 HTTP로 task를 분배한다.
         runner = (
             LocalDispatcher(settings, store=store)
             if settings.executor_mode == "local"
@@ -69,6 +118,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        # 앱 수명주기 훅: 기동 시 헬스 모니터를 켜고 종료 시 끈다.
+        # status_repo 가 있으면 executor가 스스로 상태를 공유 테이블에 기록하는
+        # self-report 모드이므로, coordinator 측 폴링 모니터는 띄우지 않는다.
         if status_repo is None:
             await monitor.start()
         try:
@@ -92,6 +144,8 @@ def create_app(
         ],
         lifespan=lifespan,
     )
+    # 핸들러들이 클로저로 직접 참조하지만, 미들웨어/디버깅/테스트에서 꺼내 쓸 수
+    # 있도록 핵심 의존성을 app.state 에도 보관해 둔다.
     app.state.store = store
     app.state.runner = runner
     app.state.settings = settings
@@ -100,6 +154,8 @@ def create_app(
 
     @app.exception_handler(QueryValidationError)
     async def _validation_handler(_: Request, exc: QueryValidationError):
+        # 검증/분할 단계에서 던지는 도메인 예외를 일관된 422 JSON 으로 변환한다.
+        # (error_code 를 본문에 실어 클라이언트가 실패 원인을 분기할 수 있게 한다.)
         return JSONResponse(
             status_code=422,
             content={"error_code": exc.code, "message": exc.message},
@@ -116,17 +172,34 @@ def create_app(
         "검증 실패 시 422(error_code 포함).",
     )
     def create_job(req: CreateJobRequest, background: BackgroundTasks):
-        # 무조건 job_id 를 먼저 생성하고, 이후 모든 로그에 [job_id] 가 붙도록 컨텍스트 바인딩
+        # POST /jobs 의 얇은 진입 래퍼.
+        # 실제 처리에 앞서 job_id 를 먼저 발급하고 로깅 컨텍스트에 바인딩하여,
+        # 검증 실패로 작업이 저장되지 않더라도 이 요청에서 찍히는 모든 로그에
+        # [job_id] 가 일관되게 붙도록 한다(요청 추적성 확보).
         job_id = new_job_id()
         with job_log_context(job_id):
             return _create_job(req, background, job_id)
 
     def _create_job(req: CreateJobRequest, background: BackgroundTasks, job_id: str):
+        """작업 생성 본체: 검증 → 분할 → (dry-run 분기) → admission → 디스패치.
+
+        흐름 요약:
+        1. SQL을 동기로 검증·파싱하고 parallelism 만큼 sub-query로 분할한다. 이때의
+           오류(QueryValidationError)는 백그라운드로 넘기기 전에 즉시 클라이언트에
+           422로 반환된다.
+        2. exec_mode 에 따라 필수 필드와 래퍼 쿼리 적용을 검증한다.
+        3. dry_run 이면 executor 호출 없이 생성될 쿼리 계획만 200으로 반환한다(미저장).
+        4. admission control 로 동시 실행/대기 용량을 확인하고, 초과면 429로 거부한다.
+        5. 수용되면 Job/Task 를 store 에 저장하고 background 로 runner.run 을 예약한 뒤
+           202(job_id)를 반환한다.
+        """
         logger.info(
             "쿼리 실행 요청 수신 (partition=%s, target=%s, exec_mode=%s, dry_run=%s)",
             req.partition_column, req.target_table, req.exec_mode, req.dry_run,
         )
-        # 동기 검증 + 분할: 오류는 지금 즉시 클라이언트에게 반환한다.
+        # 동기 검증 + 분할: 비동기 디스패치 전에 마치므로, 여기서 발생하는 오류는
+        # 백그라운드 작업으로 넘어가지 않고 즉시(이 요청-응답 사이클에서) 클라이언트에
+        # 반환된다. dialect 가 지정되지 않으면 설정의 기본 방언으로 파싱한다.
         dialect = req.sql_dialect or settings.query_default_dialect
         parsed = validate_and_parse(
             req.sql,
@@ -134,11 +207,14 @@ def create_app(
             dialect=dialect,
             strict=req.strict_validation,
         )
+        # 파티션 컬럼 기준으로 parallelism 개의 sub-query로 분할(전략에 따라 분배 방식 결정).
         sub_queries = split(parsed, req.parallelism, req.split_strategy)
 
         if req.exec_mode == "stage_insert":
-            # Impala SELECT 결과를 Greenplum staging 에 적재 후 INSERT.
-            # sub-query(분할된 SELECT)는 그대로 두고, staging/INSERT 정보를 함께 보낸다.
+            # stage_insert: Impala SELECT 결과를 Greenplum staging 테이블에 적재한 뒤
+            # INSERT 로 최종 테이블에 반영하는 2단계 모드. 분할된 SELECT(sub-query)는
+            # 변형하지 않고 그대로 두며, staging DDL/테이블/INSERT 문은 task 에 함께 실어
+            # executor 로 전달한다. 세 필드가 모두 있어야 단계가 성립하므로 여기서 강제.
             if not (req.staging_table and req.staging_ddl and req.wrapper_query):
                 raise QueryValidationError(
                     "STAGE_INSERT_REQUIRES_FIELDS",
@@ -146,15 +222,20 @@ def create_app(
                     "가 모두 필요합니다.",
                 )
         elif req.wrapper_query:
-            # 감싸는 쿼리가 있으면 각 sub-query를 placeholder 자리에 끼워 넣는다.
+            # stage_insert 가 아니면서 래퍼 쿼리가 주어진 경우: 분할된 각 sub-query를
+            # 래퍼의 placeholder 자리에 치환해 최종 실행 SQL을 만든다(예: 집계/CTE로 감싸기).
             if req.wrapper_placeholder not in req.wrapper_query:
+                # placeholder 가 없으면 어디에 sub-query를 끼워 넣을지 알 수 없으므로 거부.
                 raise QueryValidationError(
                     "WRAPPER_PLACEHOLDER_MISSING",
                     f"wrapper_query 에 placeholder '{req.wrapper_placeholder}' 가 없습니다.",
                 )
-            # copy(STDIN) 모드는 결과 행을 fetch→COPY 하므로 래퍼가 SELECT(행 반환)여야 한다.
-            # INSERT 등 비-SELECT 래퍼는 statement/stage_insert 모드를 써야 한다.
+            # copy(STDIN) 모드는 결과 행을 fetch 해서 COPY 로 흘려보내므로, 최종 래핑 결과가
+            # 반드시 행을 반환하는 SELECT여야 한다. INSERT 등 비-SELECT 래퍼는 행을 돌려주지
+            # 않으므로 statement/stage_insert 모드를 써야 한다.
             if req.exec_mode == "copy":
+                # 더미 sub-query("(SELECT 1)")로 래핑한 결과를 파싱해 행 반환 여부만 검사한다
+                # (실제 sub-query 내용과 무관하게 래퍼 구조만 검증하면 충분하므로).
                 probe = wrap("(SELECT 1)", req.wrapper_query, req.wrapper_placeholder)
                 if not is_row_returning(probe, dialect):
                     raise QueryValidationError(
@@ -162,12 +243,15 @@ def create_app(
                         "copy 모드의 wrapper_query 는 행을 반환하는 SELECT 여야 합니다. "
                         "INSERT 등으로 감싸려면 exec_mode=statement 또는 stage_insert 를 사용하세요.",
                     )
+            # 검증을 통과하면 모든 sub-query를 래퍼로 감싸 최종 SQL로 교체한다.
             for sq in sub_queries:
                 sq.sql = wrap(sq.sql, req.wrapper_query, req.wrapper_placeholder)
 
+        # 분할된 task 수만큼 executor를 라운드로빈 배정(local 모드면 전부 None).
         executor_urls = _assign_executors(len(sub_queries), settings.executors)
 
-        # dry-run: executor 호출 없이 생성된 쿼리만 로깅/반환(작업 미저장)
+        # dry-run: executor 호출·작업 저장 없이 "이렇게 실행될 것"이라는 계획만 만들어
+        # 200으로 반환한다. 실제 부작용이 없으므로 admission 체크 이전에 빠르게 빠져나간다.
         if req.dry_run:
             plan = []
             for idx, (sq, url) in enumerate(zip(sub_queries, executor_urls), 1):
@@ -199,9 +283,15 @@ def create_app(
                 },
             )
 
-        # 동시 실행 슬롯 + 대기 큐 상한(admission control). 초과 시 429 로 거부한다.
-        # 정상 부하는 PENDING 으로 흡수(runner.run 안에서 슬롯 대기)하고,
-        # 실행+대기 용량을 넘는 폭주만 여기서 막아 메모리/다운스트림을 보호한다.
+        # ── Admission control(과부하 보호) ──
+        # 동시 실행 슬롯 + 대기 큐 상한을 합한 용량을 기준으로 수용 여부를 결정한다.
+        # 의도적으로 "거부는 여기서, 대기는 runner 안에서" 로 역할을 나눈다:
+        #   - 정상 부하: try_admit() 통과 → 작업은 PENDING 으로 저장되고, runner.run 내부의
+        #     슬롯 세마포어에서 자연스럽게 줄을 서다(큐잉) 슬롯이 나면 RUNNING 으로 전이.
+        #   - 폭주: 실행+대기 용량(capacity)을 넘는 요청만 try_admit() 이 False 를 돌려
+        #     아래에서 429 로 즉시 거부 → 무한정 쌓이는 PENDING 으로 인한 메모리/다운스트림
+        #     과부하를 차단한다.
+        # runner가 admission 속성을 갖지 않을 수도 있으므로(테스트용 더미 등) getattr 로 방어.
         admission = getattr(runner, "admission", None)
         if admission is not None and not admission.try_admit():
             logger.warning(
@@ -216,6 +306,9 @@ def create_app(
                 ),
                 headers={"Retry-After": "5"},
             )
+        # try_admit() 이 성공해 in-flight 카운트를 1 점유한 상태다. 이후 background 로
+        # run 이 예약되면 그 안에서 슬롯 반납이 보장되지만, 예약 직전에 예외가 나면
+        # run 이 영영 호출되지 않아 슬롯이 누수되므로 except 에서 직접 반납한다(아래 참고).
         try:
             job = Job(
                 job_id=job_id,
@@ -242,6 +335,7 @@ def create_app(
                 )
                 for sq, url in zip(sub_queries, executor_urls)
             ]
+            # 분할 결과를 Task 목록으로 펼쳐 Job 에 담고 저장소에 등록한다.
             store.add(job)
 
             logger.info(
@@ -251,16 +345,23 @@ def create_app(
                 req.partition_column,
                 req.target_table,
             )
+            # 응답을 막지 않도록 실제 실행은 백그라운드로 예약한다. run 내부에서 PENDING
+            # 대기→RUNNING 전이와 종료 시 슬롯 반납까지 책임진다.
             background.add_task(runner.run, job)
         except Exception:
-            # 수용했지만 스케줄 전에 실패 → in-flight 슬롯 반납(run 이 호출되지 않으므로).
+            # try_admit() 으로 점유한 슬롯을 보상 반납한다. 여기 도달했다는 것은
+            # run 이 예약되지 못했다는 뜻이므로(=정상 경로의 release 가 실행되지 않음),
+            # 직접 반납하지 않으면 in-flight 카운트가 영구히 새어 용량이 줄어든다.
             if admission is not None:
                 admission.release()
             raise
+        # 202 Accepted: 접수만 확정됐을 뿐 실행은 비동기로 진행된다. 진행 상황은
+        # 반환된 job_id 로 /jobs/{job_id} 등에서 폴링한다.
         return CreateJobResponse(job_id=job.job_id)
 
     @app.get("/jobs/{job_id}", tags=["Jobs"], summary="작업 상태 조회(태스크 포함)")
     def get_job(job_id: str):
+        # 단일 job의 상태 + 태스크 목록 요약을 반환. 없으면 404.
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -273,6 +374,7 @@ def create_app(
         description="job_id 로 현재 상태/진행률을 조회한다(태스크 목록 제외, 경량).",
     )
     def get_job_progress(job_id: str):
+        # 폴링에 적합한 경량 응답: 태스크 목록 없이 상태/진행률만 돌려준다.
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -289,21 +391,27 @@ def create_app(
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
+        # 이미 종료(완료/실패/취소)된 작업은 되돌릴 수 없으므로 409로 거절한다.
         if job.status in (JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED):
             raise HTTPException(
                 status_code=409,
                 detail=f"이미 종료된 작업입니다(status={job.status.value}).",
             )
-        # 공유 store 에 취소 플래그(다른 coordinator가 소유한 작업도 감지하도록)
+        # 멀티 coordinator 환경 대비: 공유 store 에 취소 플래그를 남겨,
+        # 이 작업을 실제로 실행 중인(=소유한) 다른 coordinator의 runner도 폴링 중에
+        # 취소를 감지하도록 한다. 로컬 플래그도 함께 세운다.
         store.request_cancel(job_id)
         job.cancel_requested = True
-        await runner.cancel(job)  # 로컬 소유면 즉시 취소 + executor 전파
+        # 이 coordinator가 소유한 경우엔 즉시 취소가 일어나고 진행 중 task의 executor로
+        # 취소가 전파된다(원격 소유면 위 공유 플래그를 통해 비동기로 반영됨).
+        await runner.cancel(job)
         job.status = JobStatus.CANCELLED
         store.save(job)
         return job.progress_view()
 
     @app.get("/jobs/{job_id}/result", tags=["Jobs"], summary="작업 결과(적재 요약) 조회")
     def get_job_result(job_id: str):
+        # 적재 결과 요약(태스크별 row count 등)을 반환.
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -315,12 +423,14 @@ def create_app(
         summary="태스크 상세 조회(sub-query 전문 포함)",
     )
     def get_task_detail(job_id: str, task_id: str):
+        # 특정 job 안의 단일 task 상세를 찾아 반환. job/ task 어느 쪽이 없어도 404.
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         for task in job.tasks:
             if task.task_id == task_id:
-                return task.detail()  # sub_query 전문 포함
+                # detail() 은 목록 뷰와 달리 실행된 sub_query 전문까지 포함한다.
+                return task.detail()
         raise HTTPException(status_code=404, detail="task not found")
 
     @app.get(
@@ -330,6 +440,8 @@ def create_app(
         description="모니터가 주기 폴링으로 보유한 executor별 CPU/메모리/디스크 상태.",
     )
     def list_executor_health():
+        # self-report 모드면 공유 테이블에서 읽고(coordinator는 폴링하지 않음),
+        # 아니면 모니터가 주기 폴링으로 캐시해 둔 스냅샷을 돌려준다.
         if status_repo is not None:
             return {"executors": status_repo.read_all()}
         return {"executors": monitor.snapshot()}
@@ -342,15 +454,20 @@ def create_app(
         "실행 중인 job 수를 한 번에 반환한다. refresh=true(기본)면 executor를 즉시 폴링한다.",
     )
     async def cluster(refresh: bool = True):
+        # executor 상태 수집: self-report 모드면 공유 테이블에서 읽고, 아니면
+        # refresh=true 일 때 즉시 폴링(최신값), false 면 캐시 스냅샷(저비용)을 쓴다.
         if status_repo is not None:
             # 멀티 coordinator: executor self-report 공유 테이블에서 조회
             executors = status_repo.read_all()
         else:
             executors = await monitor.poll_now() if refresh else monitor.snapshot()
+        # coordinator 자신의 시스템 메트릭 수집은 blocking I/O 라 스레드로 오프로드한다.
         coord_metrics = await asyncio.to_thread(
             collect_system_metrics, settings.monitor_disk_path
         )
 
+        # 전체 job을 상태별로 집계한다. running 은 순수 실행 중,
+        # active 는 실행 + 분할 중(SPLITTING) + 대기(PENDING)까지 포함한 "처리 중" 합계.
         by_status: dict[str, int] = {}
         for job in store.list():
             by_status[job.status.value] = by_status.get(job.status.value, 0) + 1
@@ -382,10 +499,12 @@ def create_app(
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
+        # 프로세스가 살아 있는지 확인하는 liveness 프로브용 가벼운 응답.
         return {"status": "ok", "service": "coordinator", "version": "0.1.0"}
 
     @app.get("/healthz", tags=["Monitoring"], summary="헬스 체크 별칭(하위 호환)")
     def healthz():
+        # 쿠버네티스 등에서 흔히 쓰는 /healthz 경로 호환용 별칭.
         return {"status": "ok"}
 
     @app.get(
@@ -394,25 +513,33 @@ def create_app(
         summary="시스템 메트릭(CPU/메모리/디스크)",
     )
     def metrics():
+        # coordinator 호스트의 현재 CPU/메모리/디스크 메트릭(동기 수집).
         return collect_system_metrics(settings.monitor_disk_path)
 
     # ───────── 모니터링 대시보드 & 데이터 API ─────────
 
+    # "처리 중"으로 묶어서 셀 상태 집합: 실행/분할/대기. status 필터의 running·active
+    # 키워드와 active 카운트 계산에 공통으로 쓰인다.
     _active_set = {JobStatus.RUNNING, JobStatus.SPLITTING, JobStatus.PENDING}
 
     @app.get("/jobs", tags=["Jobs"], summary="작업 목록")
     def list_jobs(status: Optional[str] = None, limit: int = 100):
+        # total/running/active 요약 카운트는 필터·페이징과 무관하게 항상 전체 기준으로 센다.
         all_jobs = store.list()
         total_all = len(all_jobs)
         running = sum(1 for j in all_jobs if j.status == JobStatus.RUNNING)
         active = sum(1 for j in all_jobs if j.status in _active_set)
+        # 최신순 정렬(created_at 내림차순). created_at 이 없으면 빈 문자열로 안전 비교.
         jobs = sorted(all_jobs, key=lambda j: j.created_at or "", reverse=True)
         if status:
             s = status.lower()
+            # running/active 는 단일 상태가 아니라 _active_set 집합 필터로 처리하고,
+            # 그 외 키워드는 정확한 상태값 일치로 필터한다.
             if s in ("running", "active"):
                 jobs = [j for j in jobs if j.status in _active_set]
             else:
                 jobs = [j for j in jobs if j.status.value.lower() == s]
+        # limit<=0 이면 전체, 아니면 상위 limit 개만 잘라 행을 구성한다.
         rows = [
             {
                 "job_id": j.job_id, "status": j.status.value,
@@ -434,22 +561,29 @@ def create_app(
 
     @app.get("/history", tags=["Jobs"], summary="과거 실행 이력(페이징)")
     def get_history(limit: int = 20, offset: int = 0):
+        # 외부 입력을 안전 범위로 강제(clamp): limit 은 1~200, offset 은 0 이상.
+        # 과도한 페이지 크기나 음수 입력으로 인한 DB 부하/오류를 방지한다.
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
         return history_reader.read(limit=limit, offset=offset)
 
+    # 대시보드는 설정으로 끌 수 있다(예: 외부 노출 환경에서 비활성화).
+    # 활성화된 경우에만 루트 HTML 및 설정/정보 API 라우트를 등록한다.
     if settings.dashboard_enabled:
 
         @app.get("/", include_in_schema=False)
         def dashboard():
+            # 단일 페이지 모니터링 대시보드 HTML(정적 문자열) 제공.
             return HTMLResponse(DASHBOARD_HTML)
 
         @app.get("/config", tags=["Monitoring"], summary="환경설정(비밀값 마스킹)")
         def get_config():
+            # 현재 설정을 노출하되 DSN/비밀번호 등 민감값은 masked_config 로 가린다.
             return {"config": masked_config(settings)}
 
         @app.get("/info", tags=["Monitoring"], summary="기타 정보")
         def get_info():
+            # 대시보드 상단에 표시할 런타임/구성 요약 정보를 모아 반환한다.
             all_jobs = store.list()
             by_status: dict[str, int] = {}
             for j in all_jobs:
@@ -473,4 +607,5 @@ def create_app(
     return app
 
 
+# ASGI 서버(uvicorn 등)가 import 할 수 있도록 기본 설정으로 앱 싱글턴을 생성한다.
 app = create_app()

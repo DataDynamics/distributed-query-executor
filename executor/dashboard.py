@@ -11,14 +11,36 @@ import re
 
 
 def mask_dsn(dsn: str | None) -> str:
-    """DSN 의 비밀번호를 마스킹: scheme://user:pass@host → scheme://user:***@host."""
+    """DSN 문자열의 비밀번호를 마스킹한다.
+
+    ``scheme://user:pass@host`` 형태의 자격증명 중 비밀번호 부분만 ``***`` 로 치환해
+    ``scheme://user:***@host`` 로 만든다. 대시보드 환경설정 탭처럼 DSN 을 화면에 그대로
+    노출해야 할 때, 비밀번호가 새지 않도록 가린다. dsn 이 비어 있으면 빈 문자열을 반환한다.
+
+    인자:
+        dsn: 마스킹할 DSN(없을 수 있음).
+
+    반환:
+        비밀번호가 가려진 DSN 문자열(자격증명이 없으면 원본 그대로).
+    """
     if not dsn:
         return ""
     return re.sub(r"://([^:/@]+):([^@]+)@", r"://\1:***@", dsn)
 
 
 def masked_config(settings) -> list[dict]:
-    """환경설정 탭용 (section, key, value) 행 목록. 비밀값은 마스킹한다."""
+    """대시보드 환경설정 탭에 표시할 설정 행 목록을 만든다.
+
+    설정을 (section, key, value) 묶음으로 평탄화해 ``{"section", "key", "value"}`` dict
+    리스트로 반환한다. DSN(history/greenplum)은 ``mask_dsn`` 으로, impala 비밀번호는
+    값 존재 여부만 ``***`` 로 노출해 비밀값이 화면에 그대로 드러나지 않게 한다.
+
+    인자:
+        settings: app/executor/history/impala/greenplum/logging 등 설정 속성을 가진 객체.
+
+    반환:
+        ``[{"section": ..., "key": ..., "value": ...}, ...]`` 형태의 행 목록.
+    """
     rows: list[tuple[str, str, object]] = [
         ("app", "name", settings.app_name),
         ("app", "debug", settings.debug),
