@@ -320,6 +320,7 @@ flowchart LR
 - 트랜잭션은 task 단위. 실패 시 해당 task만 rollback, 다른 task 무영향.
 - 각 task가 disjoint한 partition 집합만 다루므로 executor 간 쓰기 충돌 없음.
 - **wrapper_query**: 분할된 각 sub-query를 감싸는 쿼리. `wrapper_placeholder`(기본 `{{SUBQUERY}}`) 자리에 치환. `stage_insert`에서는 placeholder 대신 staging 테이블명을 참조하는 INSERT를 둔다.
+- **Impala 쿼리 옵션(SET)**: 전역 `impala.query_options` + 요청별 `impala_query_options`(전역 위에 병합)를 impyla `configuration`으로 전달한다. copy·stage_insert의 Impala SELECT에만 적용되며, 둘 다 비면 `configuration` 없이 그대로 실행한다.
 
 > 결과 데이터는 coordinator를 통과하지 않으므로 "결과 병합(merge)" 단계가 없다. Coordinator는 `rows_written`만 합산한다.
 
@@ -375,6 +376,7 @@ POST /jobs
   "sql_dialect": "hive",                   // 선택(기본 서버 설정)
   "wrapper_query": null,                   // 선택(분할 sub-query 감싸기)
   "username": null,                        // 선택(이력/대시보드 표시)
+  "impala_query_options": null,            // 선택. Impala SET 옵션, 전역 위에 병합. 예: {"MEM_LIMIT":"2g"}
   "dry_run": false                         // true면 executor 미호출, 생성 쿼리만 반환
 }
 → 202 { "job_id": "a1b2c3" }

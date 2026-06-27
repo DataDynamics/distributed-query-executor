@@ -463,6 +463,24 @@ sudo systemctl enable --now query-coordinator
 | `sql_dialect` | 서버 기본(`query.sql_dialect`, 기본 `hive`) | 파싱 방언. 예: `hive`, `impala`, `postgres`(Greenplum) |
 | `wrapper_query` | (없음) | 분할된 sub-query를 감싸는 쿼리. `wrapper_placeholder` 자리에 각 sub-query가 치환된다 |
 | `wrapper_placeholder` | `{{SUBQUERY}}` | `wrapper_query` 안에서 sub-query가 들어갈 자리표시자 |
+| `impala_query_options` | (없음) | 이 작업의 **Impala 쿼리 옵션(SET)**. 전역 `impala.query_options` 위에 병합. 예: `{"MEM_LIMIT":"2g","REQUEST_POOL":"etl"}` |
+
+### Impala 쿼리 옵션 (SET)
+Impala 실행 시 `MEM_LIMIT`/`REQUEST_POOL`/`MT_DOP` 같은 쿼리 옵션(SET)을 줄 수 있다.
+impyla 의 `configuration` 으로 전달되며 **copy·stage_insert 모드의 Impala SELECT에만** 적용된다
+(statement 모드는 Greenplum 실행이라 무관).
+
+- **전역 기본값**: `config` 의 `impala.query_options=MEM_LIMIT=2g,REQUEST_POOL=etl`
+- **요청별**: `POST /jobs` 의 `impala_query_options` (전역값 위에 병합, 같은 키는 요청값이 우선)
+- **둘 다 비어 있으면** `configuration` 을 넘기지 않고 그대로 실행한다(기본 동작 유지).
+
+```bash
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
+  "sql": "SELECT a, dt FROM sales WHERE dt IN ('\''1'\'','\''2'\'')",
+  "partition_column": "dt", "target_table": "public.t",
+  "impala_query_options": {"MEM_LIMIT": "2g", "REQUEST_POOL": "etl"}
+}'
+```
 
 ### 감싸는 쿼리(wrapper_query)
 분할된 각 sub-query를 다른 쿼리로 감싸 executor가 실행하게 한다. placeholder는 SQL과

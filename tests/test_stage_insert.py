@@ -24,7 +24,7 @@ class _RecordingBackend:
         self.executed = sql
         return 1
 
-    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None):
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None):
         self.staged = (impala_select, staging_table, staging_ddl, insert_sql)
         if on_progress:
             on_progress(11)

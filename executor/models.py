@@ -80,6 +80,7 @@ class Task:
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
+    impala_query_options: Optional[dict] = None  # 요청별 Impala SET 옵션(전역에 병합)
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
     error: Optional[str] = None
@@ -128,3 +129,4 @@ class CreateTaskRequest(BaseModel):
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
+    impala_query_options: Optional[dict] = None

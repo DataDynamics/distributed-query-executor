@@ -29,8 +29,12 @@ class Backend(Protocol):
         partition_column: str,
         partition_values: list[str],
         on_progress=None,
+        query_options=None,
     ) -> int:
-        """[copy 모드] 소스에서 sub_query를 읽어 target_table에 COPY 적재, 행 수 반환."""
+        """[copy 모드] 소스에서 sub_query를 읽어 target_table에 COPY 적재, 행 수 반환.
+
+        query_options: 이 task 의 Impala 쿼리 옵션(SET). 전역 기본값 위에 병합된다.
+        """
         ...
 
     def execute(self, sql: str) -> int:
@@ -44,6 +48,7 @@ class Backend(Protocol):
         staging_ddl: str,
         insert_sql: str,
         on_progress=None,
+        query_options=None,
     ) -> int:
         """[stage_insert 모드] Impala 결과를 Greenplum staging 테이블에 COPY 적재 후,
         staging 을 소스로 하는 INSERT 를 실행한다. INSERT 영향 행 수를 반환."""
@@ -63,7 +68,7 @@ class MockBackend:
     def __init__(self, rows_per_value: int = 100):
         self.rows_per_value = rows_per_value
 
-    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None) -> int:
+    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None) -> int:
         # 파티션 값 개수 × rows_per_value 를 적재한 것으로 가정(값이 없으면 최소 1로 간주).
         total = max(1, len(partition_values)) * self.rows_per_value
         if on_progress:
@@ -74,7 +79,7 @@ class MockBackend:
         # statement 모드: 항상 rows_per_value 행이 영향받은 것으로 가정.
         return self.rows_per_value
 
-    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None) -> int:
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None) -> int:
         # stage_insert 모드: rows_per_value 행을 staging→target 으로 옮긴 것으로 가정.
         if on_progress:
             on_progress(self.rows_per_value)
@@ -92,10 +97,25 @@ class ImpalaToGreenplumBackend:
     keytab 으로 kinit 되어 있어야 한다(systemd kinit 서비스 참고).
     """
 
-    def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000):
+    def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000,
+                 query_options: dict | None = None):
         self.impala_dsn = impala_dsn
         self.greenplum_dsn = greenplum_dsn
         self.batch_size = batch_size
+        # Impala 쿼리 옵션 전역 기본값(SET). 요청별 옵션이 이 위에 병합된다.
+        self.query_options: dict = query_options or {}
+
+    def _impala_execute(self, cur, sql: str, query_options) -> None:
+        """Impala 커서로 sql 을 실행한다. 전역+요청별 옵션을 병합해 configuration 으로 넘긴다.
+
+        병합 결과가 비어 있으면(둘 다 미지정) configuration 인자를 아예 넘기지 않고
+        그대로 실행한다(요청자 의도: 옵션이 없으면 기본 동작 유지).
+        """
+        opts = {**self.query_options, **(query_options or {})}
+        if opts:
+            cur.execute(sql, configuration=opts)
+        else:
+            cur.execute(sql)
 
     def execute(self, sql: str) -> int:
         """statement 모드: 대상 Greenplum 에서 SQL(예: INSERT ... SELECT)을 그대로 실행.
@@ -112,12 +132,13 @@ class ImpalaToGreenplumBackend:
             conn.commit()
         return affected if affected and affected > 0 else 0
 
-    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None) -> int:
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None) -> int:
         """Impala SELECT → Greenplum staging(TEMP) COPY 적재 → staging→target INSERT.
 
         한 Greenplum 세션(연결) 안에서 CREATE TEMP TABLE → COPY → INSERT 를 수행하므로
         TEMP 테이블이 INSERT 시점까지 보이며, 세션 종료 시 자동 정리된다.
         SELECT(Impala)과 INSERT(Greenplum)이 서로 다른 엔진일 때의 표준 패턴.
+        query_options 는 Impala SELECT 에만 적용된다(INSERT 는 Greenplum).
         반환: INSERT 영향 행 수(미지원 시 적재 행 수).
         """
         from impala.dbapi import connect as impala_connect  # 지연 임포트
@@ -127,7 +148,7 @@ class ImpalaToGreenplumBackend:
         impala_conn = impala_connect(**self.impala_dsn)
         try:
             cur = impala_conn.cursor()
-            cur.execute(impala_select)
+            self._impala_execute(cur, impala_select, query_options)
             columns = [d[0] for d in cur.description]
 
             with psycopg.connect(self.greenplum_dsn) as gp:
@@ -148,7 +169,7 @@ class ImpalaToGreenplumBackend:
         finally:
             impala_conn.close()
 
-    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None) -> int:
+    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None) -> int:
         """copy 모드: Impala 에서 sub_query 결과를 스트리밍해 Greenplum 에 COPY 적재한다.
 
         Impala 커서를 batch_size 단위로 fetch 하며 psycopg COPY(STDIN)로 흘려보내므로,
@@ -169,7 +190,7 @@ class ImpalaToGreenplumBackend:
         impala_conn = impala_connect(**self.impala_dsn)
         try:
             cur = impala_conn.cursor()
-            cur.execute(sub_query)
+            self._impala_execute(cur, sub_query, query_options)
             columns = [d[0] for d in cur.description]
 
             with psycopg.connect(self.greenplum_dsn) as gp:
@@ -244,6 +265,7 @@ def build_backend(settings) -> Backend:
             impala_dsn=impala_dsn,
             greenplum_dsn=settings.greenplum_dsn,
             batch_size=settings.copy_batch_size,
+            query_options=getattr(settings, "impala_query_options", None),
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()

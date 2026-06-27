@@ -439,6 +439,7 @@ class HttpDispatcher(_DispatcherBase):
                 "staging_table": job.staging_table,
                 "staging_ddl": job.staging_ddl,
                 "insert_sql": job.insert_sql,
+                "impala_query_options": job.impala_query_options,
                 "username": job.username,
             },
         )
@@ -547,7 +548,8 @@ class LocalDispatcher(_DispatcherBase):
                     rows = await loop.run_in_executor(
                         None,
                         lambda: backend.stage_and_insert(
-                            task.sub_query, job.staging_table, job.staging_ddl, job.insert_sql
+                            task.sub_query, job.staging_table, job.staging_ddl, job.insert_sql,
+                            query_options=job.impala_query_options,
                         ),
                     )
                 else:
@@ -556,6 +558,7 @@ class LocalDispatcher(_DispatcherBase):
                         lambda: backend.move(
                             task.sub_query, job.target_table, job.write_mode,
                             job.partition_column, task.partition_values,
+                            query_options=job.impala_query_options,
                         ),
                     )
                 task.rows_written = rows

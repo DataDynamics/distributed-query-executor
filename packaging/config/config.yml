@@ -85,6 +85,9 @@ executor:
     ca_cert: ${impala.ca_cert:}
     user: ${impala.user:}
     password: ${impala.password:}
+    # Impala 쿼리 옵션 전역 기본값(SET). "MEM_LIMIT=2g,REQUEST_POOL=etl" 형태.
+    # 비우면 configuration 없이 그대로 실행. 요청별 impala_query_options 가 덮어쓴다.
+    query_options: ${impala.query_options:}
   greenplum:
     dsn: ${greenplum.dsn:}                        # Greenplum 적재 대상 DSN(미설정 시 Mock 백엔드)
   copy:

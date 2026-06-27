@@ -324,6 +324,7 @@ def create_app(
                 staging_table=req.staging_table,
                 staging_ddl=req.staging_ddl,
                 insert_sql=req.wrapper_query if req.exec_mode == "stage_insert" else None,
+                impala_query_options=req.impala_query_options,
                 status=JobStatus.SPLITTING,
             )
             job.tasks = [

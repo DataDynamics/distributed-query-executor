@@ -221,6 +221,8 @@ class Job:
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
+    # 요청별 Impala 쿼리 옵션(SET). executor 에서 전역 기본값 위에 병합되어 적용된다.
+    impala_query_options: Optional[dict] = None
     job_id: str = field(default_factory=lambda: _new_id("job"))
     status: JobStatus = JobStatus.PENDING
     tasks: list[Task] = field(default_factory=list)
@@ -291,6 +293,7 @@ class Job:
             "staging_table": self.staging_table,
             "staging_ddl": self.staging_ddl,
             "insert_sql": self.insert_sql,
+            "impala_query_options": self.impala_query_options,
             "status": self.status.value,
             "error": self.error,
             "created_at": self.created_at,
@@ -321,6 +324,7 @@ class Job:
             staging_table=d.get("staging_table"),
             staging_ddl=d.get("staging_ddl"),
             insert_sql=d.get("insert_sql"),
+            impala_query_options=d.get("impala_query_options"),
             job_id=d["job_id"],
             status=JobStatus(d.get("status", "PENDING")),
             error=d.get("error"),
@@ -415,6 +419,11 @@ class CreateJobRequest(BaseModel):
     wrapper_placeholder: str = Field(
         default="{{SUBQUERY}}",
         description="wrapper_query 안에서 sub-query가 들어갈 자리표시자(기본 {{SUBQUERY}}).",
+    )
+    impala_query_options: Optional[dict[str, str]] = Field(
+        default=None,
+        description="이 작업의 Impala 쿼리 옵션(SET). 전역 impala.query_options 위에 병합된다. "
+        "예: {\"MEM_LIMIT\": \"2g\", \"REQUEST_POOL\": \"etl\"}. 미지정 시 전역값만 적용.",
     )
 
 

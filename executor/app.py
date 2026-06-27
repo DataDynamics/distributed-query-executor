@@ -165,6 +165,7 @@ def create_app(
                         task.staging_ddl,
                         task.insert_sql,
                         progress,
+                        query_options=task.impala_query_options,
                     ),
                 )
             else:
@@ -178,6 +179,7 @@ def create_app(
                         task.partition_column,
                         task.partition_values,
                         progress,
+                        query_options=task.impala_query_options,
                     ),
                 )
             task.rows_written = rows
@@ -227,6 +229,7 @@ def create_app(
             staging_table=req.staging_table,
             staging_ddl=req.staging_ddl,
             insert_sql=req.insert_sql,
+            impala_query_options=req.impala_query_options,
         )
         tasks[task.task_id] = task
         with job_log_context(task.job_id, task.task_id):

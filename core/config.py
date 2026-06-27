@@ -87,6 +87,29 @@ def _csv_list(value) -> list[str]:
     return []
 
 
+def _kv_dict(value) -> dict[str, str]:
+    """``K=V,K2=V2`` 형태의 문자열(또는 dict)을 {K: V} dict 로 변환한다.
+
+    Impala query option 처럼 "옵션=값" 쌍을 쉼표로 나열한 한 줄 문자열을 받아 dict 로
+    만든다. 각 항목은 첫 ``=`` 기준으로 key/value 를 나눈다(값에 ``=`` 가 들어가도 안전).
+    이미 dict 면 문자열 키/값으로 정규화한다. 비어 있으면 빈 dict 를 돌려준다.
+    """
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items()}
+    if isinstance(value, str):
+        out: dict[str, str] = {}
+        for item in value.split(","):
+            item = item.strip()
+            if not item or "=" not in item:
+                continue
+            k, v = item.split("=", 1)
+            k = k.strip()
+            if k:
+                out[k] = v.strip()
+        return out
+    return {}
+
+
 class Settings:
     """config.yml + config.properties 에서 로드한 전역 애플리케이션 설정 컨테이너.
 
@@ -257,6 +280,12 @@ class Settings:
         # GSSAPI 에서는 사용하지 않음(LDAP/PLAIN 인증일 때만)
         self.impala_user: str = _get_nested("executor", "impala", "user", "")
         self.impala_password: str = _get_nested("executor", "impala", "password", "")
+        # Impala 쿼리 옵션(전역 기본값). "MEM_LIMIT=2g,REQUEST_POOL=etl" 형태 → dict.
+        # 비어 있으면 {} 이고, 이 경우 impyla 에 configuration 을 넘기지 않고 그대로 실행한다.
+        # 요청별 impala_query_options 가 있으면 이 전역값 위에 덮어쓴다.
+        self.impala_query_options: dict[str, str] = _kv_dict(
+            _get_nested("executor", "impala", "query_options", "")
+        )
         # Greenplum (target) — 읽어온 데이터를 적재할 대상 DB 접속 DSN.
         self.greenplum_dsn: str = _get_nested("executor", "greenplum", "dsn", "")
         # source→target 복사 시 한 번에 처리할 행 수. 메모리 사용량과 처리량의 균형값.
