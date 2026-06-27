@@ -116,9 +116,16 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
 
 - 설정 디렉터리: `/etc/query-executor/` (환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경)
 - 로컬 개발 시: `QUERY_EXECUTOR_CONFIG_DIR=packaging/config` 로 저장소 기본값 사용
-- 핵심 항목: `coordinator.executors`, `impala.*`, `greenplum.dsn`, `copy.batch_size`
+- 핵심 항목: `coordinator.executors`, `coordinator.max_concurrent_jobs`/`max_pending_jobs`,
+  `impala.*`, `greenplum.dsn`, `copy.batch_size`
 - `impala.host` 와 `greenplum.dsn` 이 모두 설정되면 실제 `ImpalaToGreenplumBackend`,
   아니면 `MockBackend`(실제 I/O 없음)로 폴백
+- **coordinator admission control(동시 job 제한 + 대기 큐)**: 들어온 job 요청을
+  - 실행 슬롯(`coordinator.max_concurrent_jobs`, 기본 16)이 비어 있으면 즉시 `RUNNING`,
+  - 다 찼으면 `PENDING` 으로 **대기 큐**에 넣고(`coordinator.max_pending_jobs`, 기본 100),
+  - 실행+대기 합(=capacity)을 넘는 요청은 **`429 Too Many Requests`** (`Retry-After: 5`)로 거부한다.
+  슬롯이 나면 대기 job 이 FIFO 로 실행된다. `max_concurrent_jobs<=0` 이면 무제한.
+  (executor 단의 task 동시 제한은 `executor.max_concurrent_tasks` — 아래 "수평 확장" 참고)
 - Impala는 **TLS + Kerberos(GSSAPI)**: `impala.use_ssl`/`impala.ca_cert`,
   `impala.auth_mechanism=GSSAPI`/`impala.kerberos_service_name`. 티켓은 OS 자격증명
   캐시(KRB5CCNAME)를 사용 → systemd kinit 서비스/타이머로 keytab 갱신 ([deploy/README.md](deploy/README.md))
@@ -127,6 +134,11 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
   - coordinator(job 단위): `... [job_531ab6f734ca][-] - 쿼리 실행 요청 수신 ...`
   - executor(task 단위): `... [job_demo999][t_demo123] - task ... 완료: 2행 적재`
   - 작업/태스크와 무관한 로그는 `[-][-]`
+  - **WARNING 전용 로그 분리**: 메인 로그(INFO+)와 별개로 **WARNING 이상만** 모으는
+    `*-warn.log`(예: `query-coordinator-server-warn.log`)를 따로 남겨 운영 중 문제만 빠르게
+    추적한다. 로거 이름까지 포함한 강화 포맷이며, 메인 레벨(`logging.level`)을 WARNING 보다
+    높게 잡아도 이 로그는 비지 않는다. `logging.warn.{enabled,level,suffix}`(기본
+    `true`/`WARNING`/`-warn`)로 제어한다.
 - 모니터링: 두 서비스 모두 `/health`·`/metrics`(CPU·메모리·디스크) 제공. coordinator는
   executor `/health`·`/metrics` 를 주기 폴링(`GET /executors`)하고 `monitor.db_dsn`
   설정 시 CPU/메모리 사용량을 PostgreSQL(`monitor.table`)에 주기 기록
@@ -330,6 +342,9 @@ coordinator.id=coord-1     # 인스턴스마다 다르게(미지정 시 host:por
   `updated_at` 신선도로 판정한다. (self_report 모드에선 coordinator 폴링/기록 미가동)
 - **executor admission control**: `executor.max_concurrent_tasks` 로 executor가 동시 실행
   task 수를 제한(여러 coordinator의 합산 부하 방어). 초과분은 슬롯이 날 때까지 대기.
+- **coordinator admission control**: `coordinator.max_concurrent_jobs`(실행 슬롯) +
+  `max_pending_jobs`(대기 큐)로 동시 job 수를 제한, 초과 시 `429`. 단 이 한도는 **coordinator
+  인스턴스별**(인메모리)이라 멀티 coordinator 환경에선 인스턴스 수만큼 합산된다.
 
 스키마: `packaging/config/jobs-schema.sql`, `executor-status-schema.sql`(둘 다 앱이 자동 생성).
 
