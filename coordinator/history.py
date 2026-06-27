@@ -23,28 +23,8 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 # 이력 테이블 DDL. {table} 자리에 실제 테이블명을 format 으로 채워 사용한다.
-# IF NOT EXISTS 이므로 매 기록 전 1회 호출해도 안전하다(존재하면 무시).
-# id 는 행의 단조 증가 키이고, recorded_at 은 행이 기록된 시각(상태 전이 시점)이다.
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS {table} (
-    id                 BIGSERIAL PRIMARY KEY,
-    recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    job_id             TEXT NOT NULL,
-    username           TEXT,
-    status             TEXT NOT NULL,
-    partition_column   TEXT,
-    target_table       TEXT,
-    parallelism        INTEGER,
-    total_tasks        INTEGER,
-    completed_tasks    INTEGER,
-    total_rows_written BIGINT,
-    error              TEXT,
-    created_at         TIMESTAMPTZ,
-    started_at         TIMESTAMPTZ,
-    finished_at        TIMESTAMPTZ,
-    original_sql       TEXT
-)
-"""
+# 스키마(job_history 테이블)는 앱이 생성하지 않는다. 운영 전에
+# packaging/config/postgresql.sql 로 미리 만들어 두어야 한다.
 
 # 한 건의 상태 스냅샷을 추가하는 INSERT 문. 컬럼 순서는 _write() 의 row 튜플과 1:1 대응한다.
 _INSERT = """
@@ -60,8 +40,8 @@ class JobHistoryRepository:
     """Job 상태 이력의 기록(record)과 조회(read)를 담당하는 저장소.
 
     설정에서 DSN/테이블명을 읽어 보관한다. DSN 이 비어 있으면 enabled=False 가 되어
-    기록은 생략되고 조회는 빈 결과를 돌려준다. 테이블 생성(DDL)은 _ddl_ready 플래그로
-    프로세스 수명 내 한 번만 시도해 불필요한 DDL 반복을 피한다.
+    기록은 생략되고 조회는 빈 결과를 돌려준다. 테이블 스키마는 앱이 만들지 않으며,
+    운영 전에 packaging/config/postgresql.sql 로 미리 생성돼 있어야 한다.
     """
 
     def __init__(self, settings):
@@ -70,8 +50,6 @@ class JobHistoryRepository:
         self.table: str = getattr(settings, "history_table", "job_history")
         # DSN 이 있어야만 기록/조회 기능을 활성화한다.
         self.enabled: bool = bool(self.dsn)
-        # CREATE TABLE 을 이미 실행했는지 표시(중복 DDL 방지용 1회성 플래그).
-        self._ddl_ready = False
 
     async def record(self, job) -> None:
         """현재 Job 상태를 이력 테이블에 한 행 기록한다(append-only).
@@ -122,7 +100,7 @@ class JobHistoryRepository:
 
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
-                cur.execute(_CREATE_TABLE.format(table=self.table))  # 테이블이 없으면 먼저 생성
+                # 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
                 # 페이징용 전체 건수: 행 수가 아니라 "서로 다른 job 개수"를 센다.
                 cur.execute(f"SELECT count(DISTINCT job_id) FROM {self.table}")
                 total = cur.fetchone()[0]
@@ -160,8 +138,8 @@ class JobHistoryRepository:
     def _write(self, job) -> None:
         """job 스냅샷 한 건을 동기 psycopg 로 INSERT 한다(워커 스레드에서 호출됨).
 
-        record() 가 asyncio.to_thread 로 이 메서드를 실행한다. 첫 호출 시에만 DDL 을
-        실행해 테이블 존재를 보장하고(_ddl_ready), 이후에는 INSERT 만 수행한다.
+        record() 가 asyncio.to_thread 로 이 메서드를 실행한다. 테이블은 postgresql.sql 로
+        사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         row 튜플의 값 순서는 _INSERT 문의 컬럼 순서와 정확히 일치해야 한다.
         """
         import psycopg  # 지연 임포트
@@ -182,12 +160,9 @@ class JobHistoryRepository:
             job.finished_at,
             job.original_sql,
         )
+        # 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
-                if not self._ddl_ready:
-                    # 프로세스 수명 내 최초 1회만 테이블 생성 시도(이후 반복 DDL 생략).
-                    cur.execute(_CREATE_TABLE.format(table=self.table))
-                    self._ddl_ready = True
                 cur.execute(_INSERT.format(table=self.table), row)
             conn.commit()
         logger.info("job %s 이력 기록(status=%s) -> %s", job.job_id, job.status.value, self.table)

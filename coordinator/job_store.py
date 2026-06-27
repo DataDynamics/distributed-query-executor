@@ -80,18 +80,9 @@ class InMemoryJobStore:
         return bool(job and job.cancel_requested)
 
 
-# 공유 저장소 테이블 DDL. data(JSONB)에 Job 전체 스냅샷을 넣고, 자주 조회/갱신하는
-# status·cancel_requested는 별도 컬럼으로 빼 두어 인덱싱·빠른 갱신이 가능하게 한다.
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS {table} (
-    job_id           TEXT PRIMARY KEY,
-    coordinator_id   TEXT,
-    status           TEXT,
-    cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    data             JSONB NOT NULL
-)
-"""
+# 스키마(jobs 테이블)는 앱이 생성하지 않는다. 운영 전에 packaging/config/postgresql.sql
+# 을 적용해 테이블/인덱스를 미리 만들어 두어야 한다(아래 컬럼 구성 참고).
+#   job_id, coordinator_id, status, cancel_requested, updated_at, data(JSONB)
 
 
 class SqlJobStore:
@@ -111,24 +102,16 @@ class SqlJobStore:
         self.dsn = dsn
         self.table = table
         self.coordinator_id = coordinator_id
-        # 테이블 DDL을 이미 보장했는지 여부(프로세스 생애 동안 1회만 실행하기 위함).
-        self._ddl_ready = False
 
     def _conn(self):
-        """새 DB 연결을 열고, 최초 1회에 한해 테이블 DDL을 보장한 뒤 반환한다.
+        """새 DB 연결을 연다.
 
-        ``_ddl_ready`` 플래그로 ``CREATE TABLE IF NOT EXISTS`` 를 프로세스당 한 번만
-        실행한다. psycopg는 여기서 지연 임포트한다(모듈 로드 비용·선택 의존성 처리).
+        테이블 생성(DDL)은 앱이 하지 않는다 — 사전에 postgresql.sql 로 스키마를 만들어
+        두어야 한다. psycopg는 여기서 지연 임포트한다(모듈 로드 비용·선택 의존성 처리).
         """
         import psycopg  # 지연 임포트
 
-        conn = psycopg.connect(self.dsn)
-        if not self._ddl_ready:
-            with conn.cursor() as cur:
-                cur.execute(_CREATE_TABLE.format(table=self.table))
-            conn.commit()
-            self._ddl_ready = True
-        return conn
+        return psycopg.connect(self.dsn)
 
     def add(self, job: Job) -> None:
         """새 Job을 저장한다(내부적으로 ``save`` 와 동일한 UPSERT)."""

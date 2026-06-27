@@ -55,22 +55,8 @@ class ExecutorHealth:
         return asdict(self)
 
 
-# 메트릭 기록 테이블 DDL. {table} 자리에 monitor_table 을 채워 사용한다.
-# IF NOT EXISTS 이므로 최초 기록 시 1회 실행해도 안전하다.
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS {table} (
-    id              BIGSERIAL PRIMARY KEY,
-    recorded_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    executor_url    TEXT NOT NULL,
-    healthy         BOOLEAN NOT NULL,
-    cpu_percent     DOUBLE PRECISION,
-    memory_percent  DOUBLE PRECISION,
-    memory_used_mb  DOUBLE PRECISION,
-    memory_total_mb DOUBLE PRECISION,
-    disk_percent    DOUBLE PRECISION,
-    error           TEXT
-)
-"""
+# 스키마(executor_health_metrics 테이블)는 앱이 생성하지 않는다. 운영 전에
+# packaging/config/postgresql.sql 로 미리 만들어 두어야 한다.
 
 # 메트릭 한 건을 추가하는 INSERT 문. 값 순서는 _write_pg() 의 rows 튜플과 1:1 대응한다.
 _INSERT = """
@@ -97,8 +83,6 @@ class HealthMonitor:
         }
         # start() 가 생성한 백그라운드 태스크 핸들(stop() 에서 취소용).
         self._tasks: list[asyncio.Task] = []
-        # 메트릭 테이블 DDL 1회 실행 여부 플래그.
-        self._ddl_ready = False
 
     # ───────── 생명주기 ─────────
 
@@ -226,7 +210,7 @@ class HealthMonitor:
         """스냅샷의 각 executor 행을 메트릭 테이블에 executemany 로 일괄 INSERT 한다(워커 스레드).
 
         snapshot dict 의 일부 필드만 골라(테이블 컬럼에 맞춰) 튜플로 변환한 뒤 한 번에 기록한다.
-        첫 호출 시에만 DDL 을 실행해 테이블 존재를 보장한다(_ddl_ready).
+        테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         """
         import psycopg  # 지연 임포트(모니터 미사용 시 psycopg 불필요)
 
@@ -246,9 +230,6 @@ class HealthMonitor:
         ]
         with psycopg.connect(self.settings.monitor_db_dsn) as conn:
             with conn.cursor() as cur:
-                if not self._ddl_ready:
-                    cur.execute(_CREATE_TABLE.format(table=table))
-                    self._ddl_ready = True
                 cur.executemany(_INSERT.format(table=table), rows)
             conn.commit()
         logger.info("메트릭 %d건 기록 완료 -> %s", len(rows), table)

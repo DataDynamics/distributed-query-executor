@@ -14,23 +14,8 @@ from .history import _executor_id
 
 logger = logging.getLogger(__name__)
 
-# executor_status 테이블 DDL. executor_id 가 PK 이므로 executor 1대당 1행만 유지되고,
-# heartbeat 마다 같은 행을 갱신(UPSERT)한다. {table} 은 설정값으로 치환된다.
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS {table} (
-    executor_id          TEXT PRIMARY KEY,
-    cpu_percent          DOUBLE PRECISION,
-    memory_percent       DOUBLE PRECISION,
-    memory_used_mb       DOUBLE PRECISION,
-    memory_total_mb      DOUBLE PRECISION,
-    disk_percent         DOUBLE PRECISION,
-    disk_used_gb         DOUBLE PRECISION,
-    disk_total_gb        DOUBLE PRECISION,
-    active_tasks         INTEGER,
-    max_concurrent_tasks INTEGER,
-    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-)
-"""
+# 스키마(executor_status 테이블)는 앱이 생성하지 않는다. 운영 전에
+# packaging/config/postgresql.sql 로 미리 만들어 두어야 한다(executor_id 가 PK).
 
 # self-report UPSERT: 같은 executor_id 행이 있으면(ON CONFLICT) 모든 메트릭과
 # updated_at 을 새 값으로 덮어쓴다. 즉 "마지막으로 본 상태" 한 줄만 항상 유지된다.
@@ -73,7 +58,6 @@ class ExecutorStatusReporter:
         self.tasks_provider = tasks_provider
         self.enabled: bool = bool(self.dsn)
         self._task: asyncio.Task | None = None
-        self._ddl_ready = False
 
     async def start(self) -> None:
         """self-report 백그라운드 루프를 시작한다(비활성이면 경고 후 무동작)."""
@@ -115,7 +99,7 @@ class ExecutorStatusReporter:
     def _report_once(self) -> None:
         """현재 시스템 메트릭과 동시 처리 현황을 한 번 수집해 UPSERT 한다(동기).
 
-        첫 호출에서만 테이블 DDL 을 보장(CREATE IF NOT EXISTS)하고 이후로는 생략한다.
+        테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         """
         import psycopg  # 지연 임포트
 
@@ -132,8 +116,5 @@ class ExecutorStatusReporter:
         )
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
-                if not self._ddl_ready:
-                    cur.execute(_CREATE_TABLE.format(table=self.table))
-                    self._ddl_ready = True
                 cur.execute(_UPSERT.format(table=self.table), row)
             conn.commit()

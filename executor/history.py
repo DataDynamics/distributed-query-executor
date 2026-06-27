@@ -14,38 +14,8 @@ import socket
 
 logger = logging.getLogger(__name__)
 
-# task_history 테이블 DDL. 상태 전이마다 한 행씩 쌓는 append-only 구조라 PK 는 단조
-# 증가하는 id 이고, 같은 task_id 가 여러 번 등장한다. {table} 은 설정값으로 치환된다.
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS {table} (
-    id            BIGSERIAL PRIMARY KEY,
-    recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    job_id        TEXT NOT NULL,
-    task_id       TEXT NOT NULL,
-    username      TEXT,
-    executor_id   TEXT,
-    status        TEXT NOT NULL,
-    rows_written  BIGINT,
-    error         TEXT,
-    started_at    TIMESTAMPTZ,
-    finished_at   TIMESTAMPTZ,
-    sub_query     TEXT,
-    exec_mode     TEXT,
-    staging_ddl   TEXT,
-    insert_sql    TEXT
-)
-"""
-
-# 구버전 테이블에 신규 컬럼을 보강하는 마이그레이션.
-# ADD COLUMN IF NOT EXISTS 라 이미 있으면 무시되어 반복 실행에 안전하다.
-_ALTERS = (
-    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
-    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
-    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS sub_query TEXT",
-    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS exec_mode TEXT",
-    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS staging_ddl TEXT",
-    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS insert_sql TEXT",
-)
+# 스키마(task_history 테이블)는 앱이 생성/변경하지 않는다. 운영 전에
+# packaging/config/postgresql.sql 로 테이블·컬럼·인덱스를 미리 만들어 두어야 한다.
 
 _INSERT = """
 INSERT INTO {table}
@@ -78,7 +48,6 @@ class TaskHistoryRepository:
         self.table: str = getattr(settings, "task_history_table", "task_history")
         self.executor_id: str = _executor_id()
         self.enabled: bool = bool(self.dsn)
-        self._ddl_ready = False
 
     def read(self, limit: int = 50, offset: int = 0) -> dict:
         """이 executor 의 task 이력 조회(task_id별 최신 1건, 페이징).
@@ -101,9 +70,9 @@ class TaskHistoryRepository:
             return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
         import psycopg  # 지연 임포트
 
+        # 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
-                self._ensure_schema(cur)  # 없으면 생성 + 신규 컬럼 보강
                 cur.execute(
                     f"SELECT count(DISTINCT task_id) FROM {self.table} WHERE executor_id = %s",
                     (self.executor_id,),
@@ -137,12 +106,6 @@ class TaskHistoryRepository:
         ]
         return {"enabled": True, "rows": out, "total": total, "limit": limit, "offset": offset}
 
-    def _ensure_schema(self, cur) -> None:
-        """이력 테이블을 생성(없으면)하고, 구버전 테이블에 신규 컬럼을 보강한다."""
-        cur.execute(_CREATE_TABLE.format(table=self.table))
-        for alter in _ALTERS:
-            cur.execute(alter.format(table=self.table))
-
     async def record(self, task) -> None:
         """task 의 현재 상태를 이력 테이블에 한 행 기록한다(동기 psycopg → 스레드).
 
@@ -163,7 +126,7 @@ class TaskHistoryRepository:
             logger.exception("task %s 이력 기록 실패", task.task_id)
 
     def _write(self, task) -> None:
-        """이력 테이블에 한 행 INSERT(동기). 첫 호출에서만 테이블 DDL 을 보장한다."""
+        """이력 테이블에 한 행 INSERT(동기). 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다."""
         import psycopg  # 지연 임포트
 
         row = (
@@ -183,8 +146,5 @@ class TaskHistoryRepository:
         )
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
-                if not self._ddl_ready:
-                    self._ensure_schema(cur)
-                    self._ddl_ready = True
                 cur.execute(_INSERT.format(table=self.table), row)
             conn.commit()
