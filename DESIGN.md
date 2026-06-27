@@ -467,10 +467,13 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 | 일부 task 실패 | `failure_policy`: `fail_fast`(Job FAILED) / `best_effort`(Job PARTIAL, 성공 task 적재 유지) |
 | 적재 중 실패 | task 트랜잭션 rollback → 부분 적재 잔존 없음 |
 | 과부하 | admission이 입구에서 `429`로 거부(`Retry-After`) → 클라이언트 재시도 |
+| executor 동시 처리 full | executor 가 `POST /tasks`를 **202로 즉시 접수**하고 task 를 `QUEUED`로 내부 대기(세마포어). 에러 아님 — coordinator 는 폴링하며 기다린다(백프레셔) |
+| executor 연결 실패 | **연결 계열 실패(`TransportError`/5xx)는 같은 executor 에 `task_max_retries`회 지수 백오프 재시도** → 소진 시 **다른 살아있는 executor 로 failover**(`task_failover`). 시작 전이라 항상 안전 |
+| 실행 중 executor 유실 | 폴링 중 연결 끊김: **멱등(`overwrite_partitions`)이고 후보가 남았을 때만** 다른 executor 로 재실행. `append`는 중복 적재 위험이 있어 재배정하지 않고 FAILED |
 | 취소 | Job cancel → 비종료 task의 executor에 `POST /tasks/{id}/cancel` 전파. 협조적 취소(QUEUED는 즉시, 실행 중은 현재 작업 후 `CANCELLED` 마감) |
-| 타임아웃 | executor 호출에 `task_timeout_s` 적용 |
+| 타임아웃 | **접속은 `task_connect_timeout_s`(짧게), 전체는 `task_timeout_s`** 로 분리 적용 → 죽은 executor 에 오래 매달리지 않는다 |
 
-> 멱등성: `overwrite_partitions`는 task별 담당 파티션을 먼저 DELETE 후 COPY 하므로 같은 sub-query 재실행이 안전하다. Task에 `attempt` 필드를 두지만 **자동 재시도/executor 재배정 루프는 아직 구현 전(향후)** 이다.
+> 멱등성: `overwrite_partitions`는 task별 담당 파티션을 먼저 DELETE 후 COPY 하므로 같은 sub-query 재실행이 안전하다. executor 가 task 를 정상 접수해 `FAILED`로 보고한 **백엔드 오류는 재시도 대상이 아니다**(재시도해도 같은 결과). 재시도/failover 는 **연결 계열 실패에만** 발동한다.
 
 ---
 
@@ -492,8 +495,9 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 
 ## 17. 향후 확장
 
-- **자동 재시도/executor 재배정**: task 실패·executor 다운 시 저장된 `sub_query`로 다른 executor에 재전송(`overwrite_partitions` 멱등성 활용).
 - **실행 중 즉시 취소**: 백엔드 커서 취소(`cursor.cancel()`) + 트랜잭션 rollback으로 진행 중 Impala/COPY 즉시 중단.
+- **헬스 기반 executor 선택**: 현재 failover 는 설정된 executor 를 순서대로 시도(죽은 후보는 짧은 connect 타임아웃으로 빠르게 건너뜀)한다. 모니터의 헬스 스냅샷을 참조해 살아있는 executor 를 우선 배정하면 더 효율적이다.
+- **append 모드 재실행 안전화**: 현재 폴링 중 유실은 멱등(`overwrite_partitions`)일 때만 재배정한다. task 단위 staging+swap 등으로 `append`도 안전 재실행 가능하게.
 - **callback 기반 상태 전파**: polling 대신 executor→coordinator 콜백으로 부하 제거.
 - **집계/GROUP BY 쿼리 지원**: 소스 측 사전 집계 후 적재 또는 적재 후 재집계.
 - **IN 절 자동 합성**: IN이 없을 때 Impala `SHOW PARTITIONS`로 값 조회 후 합성.

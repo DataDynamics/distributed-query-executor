@@ -41,6 +41,9 @@ def _hermetic_settings(monkeypatch):
     monkeypatch.setattr(settings, "history_db_dsn", "", raising=False)
     monkeypatch.setattr(settings, "store_backend", "memory", raising=False)
     monkeypatch.setattr(settings, "executor_self_report", False, raising=False)
+    # 주변 /etc 설정(coordinator.executors)에 의존하지 않도록 executor 목록도 비운다.
+    # executor 가 필요한 테스트는 각자 설정/디스패처에 명시적으로 주입한다.
+    monkeypatch.setattr(settings, "executors", [], raising=False)
 
 
 @pytest.fixture

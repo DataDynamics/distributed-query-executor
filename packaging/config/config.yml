@@ -41,7 +41,12 @@ coordinator:
                                                                # 실행+대기 합을 넘는 요청은 429 로 거부. 0 이하면 무제한.
   max_dispatch_concurrency: ${coordinator.max_dispatch_concurrency:32}   # 동시 task 디스패치 상한(코루틴 동시성)
   poll_interval_s: ${coordinator.poll_interval_s:1.0}     # task 상태 폴링 간격(초)
-  task_timeout_s: ${coordinator.task_timeout_s:3600}      # task HTTP 타임아웃(초)
+  task_timeout_s: ${coordinator.task_timeout_s:3600}      # task HTTP 전체(read) 타임아웃(초)
+  # executor 장애 대응(연결 실패 시 재시도 → 다른 executor 로 failover)
+  task_connect_timeout_s: ${coordinator.task_connect_timeout_s:5.0}  # 접속 전용 타임아웃(초). 죽은 executor 빠르게 실패
+  task_max_retries: ${coordinator.task_max_retries:2}     # 연결 실패 시 같은 executor 재시도 횟수(지수 백오프)
+  task_retry_backoff_s: ${coordinator.task_retry_backoff_s:0.5}      # 재시도 백오프 기준(초): backoff*2**시도
+  task_failover: ${coordinator.task_failover:true}        # 재시도 소진 시 다른 executor 로 재배정
 
 store:
   backend: ${store.backend:memory}                # 작업 저장소: memory(단일) | postgres(멀티 coordinator 공유)

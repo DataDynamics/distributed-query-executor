@@ -184,6 +184,23 @@ class Settings:
         self.task_timeout_s: float = float(
             _get("coordinator", "task_timeout_s", 3600)
         )
+        # executor 접속(connect) 전용 타임아웃(초). task_timeout_s(전체 read 타임아웃)와
+        # 분리해, executor 가 죽어 응답이 없을 때 1시간씩 매달리지 않고 빠르게 실패하도록 한다.
+        self.task_connect_timeout_s: float = float(
+            _get("coordinator", "task_connect_timeout_s", 5.0)
+        )
+        # 연결 계열 실패 시 같은 executor 에 재시도하는 횟수(지수 백오프). 0 이면 재시도 없음.
+        self.task_max_retries: int = int(
+            _get("coordinator", "task_max_retries", 2)
+        )
+        # 재시도 지수 백오프의 기준 시간(초): 대기 = backoff * 2**시도횟수.
+        self.task_retry_backoff_s: float = float(
+            _get("coordinator", "task_retry_backoff_s", 0.5)
+        )
+        # 재시도를 모두 소진해도 연결 실패면, 다른 살아있는 executor 로 재배정(failover)할지 여부.
+        self.task_failover: bool = _to_bool(
+            _get("coordinator", "task_failover", True)
+        )
 
         # ───────── Coordinator - executor 헬스 모니터링 & 메트릭 기록 ─────────
         self.monitor_enabled: bool = _to_bool(_get("monitor", "enabled", True))

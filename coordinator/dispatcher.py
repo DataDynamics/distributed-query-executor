@@ -48,6 +48,13 @@ def _now_iso() -> str:
 # 종료 여부 판정 등에서 "끝났는가?"의 기준으로 재사용한다.
 _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
 
+# 재시도/failover 대상으로 보는 예외: 연결 계열(TransportError: connect/read 타임아웃,
+# 네트워크 오류 등) + executor 가 5xx/4xx 로 응답한 경우(HTTPStatusError).
+# 이들은 "executor 에 닿지 못했거나 일시적으로 처리하지 못한" 상황이라 재시도가 의미 있다.
+# 반대로 executor 가 task 를 정상 접수해 FAILED 로 보고한 백엔드 오류는 여기 해당하지 않는다
+# (재시도해도 같은 결과이므로 그대로 실패 처리한다).
+_RETRYABLE = (httpx.TransportError, httpx.HTTPStatusError)
+
 
 def finalize_job(job: Job) -> None:
     """하위 task들의 결과를 집계해 Job의 최종 상태를 확정한다.
@@ -290,51 +297,158 @@ class HttpDispatcher(_DispatcherBase):
     async def _execute(self, job: Job) -> None:
         # job의 모든 task를 동시에 시작한다. 하나의 HTTP 클라이언트를 공유해
         # 연결을 재사용하고, 실제 동시 실행 수는 _run_task 내부의 _sem 으로 제한한다.
-        async with httpx.AsyncClient(timeout=self.settings.task_timeout_s) as client:
+        # 타임아웃은 connect(접속)와 read(전체)를 분리한다: read 는 task 가 오래 걸려도
+        # 기다리되, connect 는 짧게 잡아 죽은 executor 에서 1시간씩 매달리지 않고 빠르게
+        # 실패→재시도/failover 하도록 한다.
+        timeout = httpx.Timeout(
+            self.settings.task_timeout_s,
+            connect=self.settings.task_connect_timeout_s,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
             await asyncio.gather(
                 *(self._run_task(client, job, t) for t in job.tasks)
             )
+
+    def _failover_order(self, task: Task) -> list[str]:
+        """이 task 를 시도할 executor URL 순서를 만든다.
+
+        배정된 executor 를 먼저 두고, task_failover 가 켜져 있으면 설정된 다른 executor 들을
+        뒤에 붙여 failover 후보로 삼는다. 비활성이거나 후보가 없으면 배정된 executor 하나만
+        반환한다. 짧은 connect 타임아웃 덕분에 죽은 후보는 빠르게 건너뛴다.
+        """
+        primary = task.executor_url
+        order = [primary] if primary else []
+        if self.settings.task_failover:
+            for url in self.settings.executors:
+                if url and url not in order:
+                    order.append(url)
+        return order or [primary]
 
     async def _run_task(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         # 디스패치 동시성 세마포어로 한 번에 떠 있는 task 수를 제한한다.
         async with self._sem:
             # 슬롯을 잡기까지 기다리는 사이 취소됐을 수 있으므로 실행 직전에 재확인.
-            if job.cancel_requested:
+            if self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
+                self._save(job)
                 return
-            task.attempt += 1
             try:
-                # executor에 task 실행을 요청(필요한 실행 컨텍스트를 모두 페이로드에 담는다).
-                await client.post(
-                    f"{task.executor_url}/tasks",
-                    json={
-                        "task_id": task.task_id,
-                        "job_id": job.job_id,
-                        "sub_query": task.sub_query,
-                        "target_table": job.target_table,
-                        "write_mode": job.write_mode,
-                        "partition_column": job.partition_column,
-                        "partition_values": task.partition_values,
-                        "exec_mode": job.exec_mode,
-                        "staging_table": job.staging_table,
-                        "staging_ddl": job.staging_ddl,
-                        "insert_sql": job.insert_sql,
-                        "username": job.username,
-                    },
-                )
-                # 시작에 성공했으면 종료될 때까지 상태를 폴링한다.
-                await self._poll(client, job, task)
-            except Exception as exc:  # 네트워크 / 타임아웃 / executor 오류
-                # 시작 또는 폴링 단계의 모든 실패를 task 실패로 기록한다. job 전체의
-                # 최종 상태는 나중에 finalize_job 이 failure_policy 에 따라 결정한다.
+                await self._dispatch_with_failover(client, job, task)
+            except Exception as exc:
+                # _RETRYABLE 외 예기치 못한 오류(JSON 파싱 실패 등)는 이 task 만 실패로
+                # 격리한다(asyncio.gather 의 다른 task 에 영향 주지 않도록). job 최종 상태는
+                # finalize_job 이 failure_policy 로 결정한다.
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
-            finally:
-                # 성공/실패와 무관하게 최신 task 상태를 저장(대시보드/조회 반영).
                 self._save(job)
+
+    async def _dispatch_with_failover(
+        self, client: httpx.AsyncClient, job: Job, task: Task
+    ) -> None:
+        """task 를 executor 후보들에 순서대로 시도한다(재시도 + failover).
+
+        - 시작(POST /tasks) 단계의 연결 실패는 같은 executor 에 지수 백오프로 재시도하고,
+          재시도를 소진하면 다음 후보 executor 로 넘어간다(failover). 시작 전이라 재시도는
+          항상 안전하다(중복 적재 위험 없음).
+        - 시작에 성공한 뒤 폴링 단계에서 연결이 끊기면, 멱등 모드(overwrite_partitions)이고
+          남은 후보가 있을 때만 다른 executor 로 재실행한다. append 는 중복 적재 위험이
+          있으므로 재배정하지 않고 실패 처리한다.
+        """
+        order = self._failover_order(task)
+        last_err: Exception | None = None
+
+        for idx, url in enumerate(order):
+            # 1) 시작 단계: 같은 executor 에 (1 + task_max_retries)회까지 시도.
+            started = False
+            for attempt in range(self.settings.task_max_retries + 1):
+                if self._cancel_observed(job):
+                    task.status = TaskStatus.CANCELLED
+                    self._save(job)
+                    return
+                task.attempt += 1
+                task.executor_url = url  # 현재 시도 중인 executor 를 task 에 반영
+                try:
+                    await self._start_task(client, job, task, url)
+                    started = True
+                    break
+                except _RETRYABLE as exc:
+                    last_err = exc
+                    task.error = str(exc)
+                    self._save(job)
+                    logger.warning(
+                        "task %s 시작 실패(executor=%s, 시도=%s/%s): %s",
+                        task.task_id, url, attempt + 1,
+                        self.settings.task_max_retries + 1, exc,
+                    )
+                    if attempt < self.settings.task_max_retries:
+                        # 지수 백오프: backoff * 2**시도횟수
+                        await asyncio.sleep(
+                            self.settings.task_retry_backoff_s * (2 ** attempt)
+                        )
+            if not started:
+                if idx + 1 < len(order):
+                    logger.warning(
+                        "task %s → 다른 executor 로 failover (%s)", task.task_id, url,
+                    )
+                continue  # 다음 후보 executor 로 failover
+
+            # 2) 폴링 단계: 시작 성공. 종료 상태까지 추적한다.
+            try:
+                await self._poll(client, job, task)
+                self._save(job)
+                return
+            except _RETRYABLE as exc:
+                last_err = exc
+                can_redo = (
+                    self.settings.task_failover
+                    and job.write_mode == "overwrite_partitions"
+                    and idx + 1 < len(order)
+                )
+                logger.warning(
+                    "task %s 폴링 중 연결 실패(executor=%s): %s%s",
+                    task.task_id, url, exc,
+                    " → 다른 executor 로 재실행(멱등)" if can_redo else "",
+                )
+                if can_redo:
+                    continue  # 멱등이므로 다른 executor 에 재실행 안전
+                task.status = TaskStatus.FAILED
+                task.error = f"폴링 실패: {exc}"
+                self._save(job)
+                return
+
+        # 모든 후보/재시도 소진 → 최종 실패
+        task.status = TaskStatus.FAILED
+        task.error = str(last_err) if last_err else (task.error or "executor 연결 실패")
+        self._save(job)
+
+    async def _start_task(
+        self, client: httpx.AsyncClient, job: Job, task: Task, url: str
+    ) -> None:
+        """executor 에 task 실행을 요청한다(POST /tasks). 비2xx 응답은 예외로 올린다."""
+        resp = await client.post(
+            f"{url}/tasks",
+            json={
+                "task_id": task.task_id,
+                "job_id": job.job_id,
+                "sub_query": task.sub_query,
+                "target_table": job.target_table,
+                "write_mode": job.write_mode,
+                "partition_column": job.partition_column,
+                "partition_values": task.partition_values,
+                "exec_mode": job.exec_mode,
+                "staging_table": job.staging_table,
+                "staging_ddl": job.staging_ddl,
+                "insert_sql": job.insert_sql,
+                "username": job.username,
+            },
+        )
+        resp.raise_for_status()  # 5xx/4xx → HTTPStatusError(=_RETRYABLE) 로 재시도/failover
 
     async def _poll(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         # executor가 task를 종료 상태로 보고할 때까지 주기적으로 상태를 조회한다.
+        # 일시적 전송 오류(blip)는 task_max_retries 회까지 흡수하고, 그 한도를 넘으면
+        # 예외를 올려 상위(_dispatch_with_failover)가 failover/실패를 결정하게 한다.
+        transient = 0
         while task.status not in _TERMINAL:
             # 매 폴링마다 취소를 확인해, 취소가 감지되면 더 기다리지 않고 즉시 빠져나온다.
             if self._cancel_observed(job):
@@ -342,7 +456,15 @@ class HttpDispatcher(_DispatcherBase):
                 return
             # 폴링 간격만큼 쉬고 다음 상태를 조회(executor에 과도한 부하를 주지 않도록).
             await asyncio.sleep(self.settings.poll_interval_s)
-            resp = await client.get(f"{task.executor_url}/tasks/{task.task_id}")
+            try:
+                resp = await client.get(f"{task.executor_url}/tasks/{task.task_id}")
+                resp.raise_for_status()
+                transient = 0  # 성공하면 일시 오류 카운터 초기화
+            except _RETRYABLE:
+                transient += 1
+                if transient > self.settings.task_max_retries:
+                    raise  # 한도 초과 → 상위에서 failover/실패 처리
+                continue
             data = resp.json()
             # executor가 보고한 상태/진척으로 로컬 task를 갱신한다. rows_written 은
             # 아직 보고 전이면 기존 값을 유지한다.
