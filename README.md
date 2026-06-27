@@ -315,7 +315,11 @@ curl -s -X POST localhost:8088/jobs/$JOB/cancel
   (`executor_id` 컬럼으로 어느 executor 인지 식별). **따라서 executor 호스트에도 PG
   자격증명이 필요**하다.
 - 기록 대상 DB는 `history.db_dsn`(미설정 시 `monitor.db_dsn`) 공유. 둘 다 없으면 비활성
-  (경고 로그). 스키마: `packaging/config/postgresql.sql`(전체 통합).
+  (경고 로그).
+- ⚠️ **스키마는 앱이 자동 생성하지 않는다.** PostgreSQL을 쓰기 전에 통합 스키마
+  `packaging/config/postgresql.sql`을 **먼저 실행**해 테이블/인덱스를 만들어 두어야 한다
+  (안 하면 "relation does not exist"로 실패):
+  `psql "$history_db_dsn" -f packaging/config/postgresql.sql`
 
 ```sql
 -- 특정 job 의 executor task 진행 이력 추적
@@ -327,6 +331,12 @@ FROM task_history WHERE job_id = '<job_id>' ORDER BY recorded_at;
 
 coordinator를 여러 대 둘 수 있다. 이때 두 가지를 공유 PostgreSQL(`history.db_dsn`)로
 옮긴다(설정은 모든 coordinator·executor가 동일 DSN 공유).
+
+> ⚠️ **먼저 스키마 생성**: PostgreSQL을 쓰는 경우(공유 store / 이력 / self-report) 서비스
+> 기동 **전에** 반드시 통합 스키마를 한 번 적용한다. 앱은 테이블을 자동 생성하지 않는다.
+> ```bash
+> psql "postgresql://user:pass@pg:5432/queryexec" -f packaging/config/postgresql.sql
+> ```
 
 | 설정 | 효과 |
 |---|---|
@@ -356,7 +366,7 @@ coordinator.id=coord-1     # 인스턴스마다 다르게(미지정 시 host:por
   `max_pending_jobs`(대기 큐)로 동시 job 수를 제한, 초과 시 `429`. 단 이 한도는 **coordinator
   인스턴스별**(인메모리)이라 멀티 coordinator 환경에선 인스턴스 수만큼 합산된다.
 
-스키마: `packaging/config/postgresql.sql`(전체 통합, 앱이 자동 생성).
+스키마: `packaging/config/postgresql.sql`(전체 통합). 앱은 DDL을 하지 않으므로 **반드시 먼저 실행**한다.
 
 > 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 두면 된다.
 

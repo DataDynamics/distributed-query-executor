@@ -157,9 +157,9 @@ executor.status_interval_s=10
 - admission 한도(`max_concurrent_jobs`/`max_pending_jobs`)는 **coordinator 인스턴스별**(인메모리)
   이므로, 멀티 coordinator 에선 인스턴스 수만큼 합산된다.
 
-스키마는 앱이 `CREATE TABLE IF NOT EXISTS` 로 자동 생성한다. 사전 생성/권한 관리를 원하면
-통합 스키마 한 파일로 전체 테이블(jobs/job_history/task_history/executor_status/
-executor_health_metrics)을 만든다:
+⚠️ **앱은 스키마를 자동 생성하지 않는다.** 서비스 기동 **전에** 통합 스키마 한 파일로 전체
+테이블(jobs/job_history/task_history/executor_status/executor_health_metrics)을 먼저 만든다
+(안 하면 "relation does not exist"로 실패):
 
 ```bash
 PG="postgresql://user:pass@pg-host:5432/queryexec"
@@ -250,9 +250,8 @@ monitor.table=executor_health_metrics
 monitor.disk_path=/
 ```
 
-테이블(`executor_health_metrics`)은 앱이 `CREATE TABLE IF NOT EXISTS` 로 자동 생성한다.
-사전 생성/권한 관리를 원하면 통합 스키마 `packaging/config/postgresql.sql` 을 사용한다
-(`monitor.db_dsn` 이 다른 DB면 그 DB에도 적용):
+테이블(`executor_health_metrics`)도 앱이 자동 생성하지 않으므로, 통합 스키마
+`packaging/config/postgresql.sql` 을 **먼저 적용**한다(`monitor.db_dsn` 이 다른 DB면 그 DB에도 적용):
 
 ```bash
 psql "postgresql://user:pass@pg-host:5432/monitoring" -f /opt/query-executor/packaging/config/postgresql.sql
