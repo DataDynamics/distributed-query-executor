@@ -90,23 +90,34 @@ sequenceDiagram
 ## 디렉터리 구조
 
 ```
-core/          # 공용: 설정 로더 + 설정 + 로깅 (coordinator·executor 공유)
-  config_loader.py  config.properties + config.yml(${변수:기본값}) 치환 로더
-  config.py         Settings (config 파일 기반 전역 설정)
-  logging.py        일 단위 롤링 파일 로깅 (파일명_YYYYMMDD.log)
-coordinator/   # FastAPI: 검증 → 분할 → 디스패치 → 상태 추적
-  parser.py      1단계 검증 + IN 절 탐지 (sqlglot, hive 방언)
-  splitter.py    IN 목록을 N개의 완전한 sub-query로 분할
-  dispatcher.py  executor 비동기 디스패치 + 상태 polling (httpx)
-  monitor.py     executor /health·/metrics 폴링 + PostgreSQL 메트릭 기록
-  app.py         REST API (POST /jobs, .../result, /executors, /health, /metrics)
-  __main__.py    실행 진입점 (python -m coordinator)
-executor/      # FastAPI: Impala 읽기 → Greenplum COPY 적재, task 상태 노출
-  backend.py     ImpalaToGreenplumBackend (impyla + psycopg) + MockBackend
-  app.py         REST API (POST /tasks, GET /tasks/{id}, /health, /metrics)
-  __main__.py    실행 진입점 (EXECUTOR_PORT=8001 python -m executor)
-packaging/config/  # config.properties + config.yml 기본값
-tests/         # coordinator 검증 + 라이프사이클 테스트
+core/                # 공용: 설정 로더 + 설정 + 로깅 + 메트릭 (coordinator·executor 공유)
+  config_loader.py     config.properties + config.yml(${변수:기본값}) 치환 로더
+  config.py            Settings — config 파일 기반 전역 설정(싱글턴)
+  logging.py           일 단위 롤링 로깅(파일명_YYYYMMDD.log) + WARNING 전용 로그(*-warn.log) 분리
+  metrics.py           CPU/메모리/디스크 시스템 메트릭 수집(psutil)
+coordinator/         # FastAPI: 검증 → 분할 → 디스패치 → 상태 추적
+  parser.py            1단계 검증 + 파티션 IN 절 탐지(sqlglot, strict/lenient 모드)
+  splitter.py          IN 목록을 N개의 완전한 sub-query로 분할(원문 포맷 보존)
+  dispatcher.py        디스패치 + admission control(JobAdmission: 동시 슬롯 + 대기 큐) + 상태 polling
+  models.py            Job/Task 도메인 모델 + 상태 enum + 요청/응답 스키마
+  job_store.py         Job 저장소: InMemory(단일) / Sql(멀티 coordinator 공유, JSONB)
+  history.py           job 단위 실행 이력 기록·조회(PostgreSQL, job_id별 최신 1건)
+  monitor.py           executor /health·/metrics 폴링 + PostgreSQL 메트릭 기록
+  executor_status.py   공유 상태 테이블(executor self-report) 조회 + 신선도 liveness 판정
+  dashboard.py         모니터링 대시보드 HTML(인라인 CSS/JS) + 설정 마스킹
+  config.py            core 설정을 패키지-로컬로 재노출(임포트 편의)
+  app.py               REST API (POST /jobs, .../status·result·cancel, /cluster, /executors, /health, /metrics)
+  __main__.py          실행 진입점 (python -m coordinator)
+executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task 상태 노출
+  backend.py           ImpalaToGreenplumBackend(impyla + psycopg) + MockBackend
+  models.py            Task 도메인 모델 + 상태 enum + 요청 스키마
+  history.py           task 단위 실행 이력 기록·조회(PostgreSQL, task_id별 최신 1건)
+  status.py            자기 상태(CPU/메모리/동시 task)를 공유 DB에 self-report(UPSERT)
+  dashboard.py         executor self-view 대시보드 HTML(remote mode에서 /에 노출)
+  app.py               REST API (POST /tasks, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
+  __main__.py          실행 진입점 (EXECUTOR_PORT=8001 python -m executor)
+packaging/config/    # config.properties + config.yml 기본값 + 스키마(*.sql)
+tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
 
 ## 설정 (config.properties + config.yml)
