@@ -36,6 +36,8 @@ class Task:
     rows_written: int = 0
     error: Optional[str] = None
     cancel_requested: bool = False
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
 
     def view(self) -> dict:
         return {
@@ -45,6 +47,11 @@ class Task:
             "rows_written": self.rows_written,
             "error": self.error,
             "cancel_requested": self.cancel_requested,
+            "username": self.username,
+            "exec_mode": self.exec_mode,
+            "target_table": self.target_table,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
         }
 
 

@@ -4,20 +4,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
 from core.config import settings
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from .backend import Backend, build_backend
-from .history import TaskHistoryRepository
+from .dashboard import DASHBOARD_HTML, masked_config
+from .history import TaskHistoryRepository, _executor_id
 from .models import CreateTaskRequest, Task, TaskStatus
 from .status import ExecutorStatusReporter
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# "활성"(처리중)으로 간주하는 task 상태: 처리중 Task 탭 집계 기준.
+_ACTIVE_STATUSES = {TaskStatus.QUEUED, TaskStatus.READING, TaskStatus.WRITING}
 
 
 def _build_backend() -> Backend:
@@ -81,9 +93,11 @@ def create_app(
         try:
             if task.cancel_requested:
                 task.status = TaskStatus.CANCELLED
+                task.finished_at = _now_iso()
                 await history.record(task)  # CANCELLED 이력
                 return
             task.status = TaskStatus.READING
+            task.started_at = _now_iso()
             await history.record(task)  # READING 이력
             loop = asyncio.get_running_loop()
             # impyla/psycopg는 블로킹이므로 스레드에서 실행해 이벤트 루프를 막지 않는다.
@@ -123,15 +137,18 @@ def create_app(
             # 실행 중 취소 요청이 들어왔으면 DONE 대신 CANCELLED 처리
             if task.cancel_requested:
                 task.status = TaskStatus.CANCELLED
+                task.finished_at = _now_iso()
                 logger.info("task %s 취소됨", task.task_id)
                 await history.record(task)
                 return
             task.status = TaskStatus.DONE
+            task.finished_at = _now_iso()
             logger.info("task %s 완료: %s행 적재", task.task_id, rows)
             await history.record(task)  # DONE 이력
         except Exception as exc:
             task.status = TaskStatus.FAILED
             task.error = str(exc)
+            task.finished_at = _now_iso()
             logger.exception("task %s 실패", task.task_id)
             await history.record(task)  # FAILED 이력
 
@@ -164,6 +181,32 @@ def create_app(
             logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
         return {"task_id": task.task_id, "status": task.status.value}
 
+    @app.get("/tasks", tags=["Tasks"], summary="태스크 목록(현재 executor 보유분)")
+    def list_tasks(status: Optional[str] = None, limit: int = 0):
+        all_tasks = list(tasks.values())
+        total = len(all_tasks)
+        active = sum(1 for t in all_tasks if t.status in _ACTIVE_STATUSES)
+        running = sum(
+            1 for t in all_tasks
+            if t.status in (TaskStatus.READING, TaskStatus.WRITING)
+        )
+        # 최근 시작분이 위로 오도록 정렬(시작 전 task 는 뒤로).
+        rows = sorted(all_tasks, key=lambda t: t.started_at or "", reverse=True)
+        if status:
+            s = status.lower()
+            if s in ("active", "running"):
+                rows = [t for t in rows if t.status in _ACTIVE_STATUSES]
+            else:
+                rows = [t for t in rows if t.status.value.lower() == s]
+        if limit and limit > 0:
+            rows = rows[:limit]
+        return {
+            "tasks": [t.view() for t in rows],
+            "total": total,
+            "active": active,
+            "running": running,
+        }
+
     @app.get("/tasks/{task_id}", tags=["Tasks"], summary="태스크 상태 조회")
     def get_task(task_id: str):
         task = tasks.get(task_id)
@@ -190,6 +233,7 @@ def create_app(
         # 아직 시작 전이면 즉시 취소 확정, 실행 중이면 _run 이 완료 후 CANCELLED 처리
         if task.status == TaskStatus.QUEUED:
             task.status = TaskStatus.CANCELLED
+            task.finished_at = _now_iso()
             await history.record(task)
         return task.view()
 
@@ -215,6 +259,44 @@ def create_app(
         active, queued, mx = _task_counts()
         m["tasks"] = {"active": active, "queued": queued, "max": mx}
         return m
+
+    if settings.dashboard_enabled:
+        started_at = datetime.now(timezone.utc)
+        start_monotonic = time.monotonic()
+        history_reader = TaskHistoryRepository(settings)
+
+        @app.get("/", include_in_schema=False)
+        def dashboard():
+            return HTMLResponse(DASHBOARD_HTML)
+
+        @app.get("/history", tags=["Monitoring"], summary="이 executor의 task 실행 이력(페이징)")
+        def get_history(limit: int = 50, offset: int = 0):
+            limit = max(1, min(limit, 200))
+            offset = max(0, offset)
+            return history_reader.read(limit=limit, offset=offset)
+
+        @app.get("/config", tags=["Monitoring"], summary="환경설정(비밀값 마스킹)")
+        def get_config():
+            return {"config": masked_config(settings)}
+
+        @app.get("/info", tags=["Monitoring"], summary="기타 정보")
+        def get_info():
+            by_status: dict[str, int] = {}
+            for t in tasks.values():
+                by_status[t.status.value] = by_status.get(t.status.value, 0) + 1
+            active, queued, mx = _task_counts()
+            return {
+                "version": "0.1.0",
+                "executor_id": _executor_id(),
+                "self_report": settings.executor_self_report,
+                "max_concurrent_tasks": mx,
+                "active_tasks": active,
+                "queued_tasks": queued,
+                "started_at": started_at.isoformat(),
+                "uptime_seconds": round(time.monotonic() - start_monotonic, 1),
+                "tasks_total": len(tasks),
+                "tasks_by_status": by_status,
+            }
 
     return app
 

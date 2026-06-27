@@ -403,7 +403,7 @@ def create_app(
                 "finished_at": j.finished_at,
                 "original_sql": j.original_sql,
             }
-            for j in jobs[:limit]
+            for j in (jobs if limit <= 0 else jobs[:limit])
         ]
         return {"jobs": rows, "total": total_all, "running": running, "active": active}
 

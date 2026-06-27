@@ -72,13 +72,17 @@ class JobHistoryRepository:
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(_CREATE_TABLE.format(table=self.table))  # 없으면 생성
-                cur.execute(f"SELECT count(*) FROM {self.table}")
+                cur.execute(f"SELECT count(DISTINCT job_id) FROM {self.table}")
                 total = cur.fetchone()[0]
                 cur.execute(
                     "SELECT recorded_at, job_id, username, status, partition_column, "
                     "target_table, completed_tasks, total_tasks, total_rows_written, error, "
-                    "started_at, finished_at, original_sql "
-                    f"FROM {self.table} ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
+                    "started_at, finished_at, original_sql FROM ("
+                    "  SELECT DISTINCT ON (job_id) recorded_at, job_id, username, status, "
+                    "    partition_column, target_table, completed_tasks, total_tasks, "
+                    "    total_rows_written, error, started_at, finished_at, original_sql "
+                    f"  FROM {self.table} ORDER BY job_id, recorded_at DESC"
+                    ") t ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
                     (limit, offset),
                 )
                 rows = cur.fetchall()
