@@ -39,35 +39,47 @@ def masked_config(settings) -> list[dict]:
         settings: app/executor/history/impala/greenplum/logging 등 설정 속성을 가진 객체.
 
     반환:
-        ``[{"section": ..., "key": ..., "value": ...}, ...]`` 형태의 행 목록.
+        ``[{"section": ..., "key": ..., "value": ..., "desc": ...}, ...]`` 형태의 행 목록.
+        desc 는 각 설정 항목의 의미를 설명하는 한 줄 안내다.
     """
-    rows: list[tuple[str, str, object]] = [
-        ("app", "name", settings.app_name),
-        ("app", "debug", settings.debug),
-        ("executor", "host", settings.executor_host),
-        ("executor", "self_report", settings.executor_self_report),
-        ("executor", "status_table", settings.executor_status_table),
-        ("executor", "status_interval_s", settings.executor_status_interval_s),
-        ("executor", "max_concurrent_tasks", settings.executor_max_concurrent_tasks),
-        ("history", "db_dsn", mask_dsn(settings.history_db_dsn)),
-        ("history", "task_table", settings.task_history_table),
-        ("monitor", "disk_path", settings.monitor_disk_path),
-        ("impala", "host", settings.impala_host or "(미설정→Mock)"),
-        ("impala", "port", settings.impala_port),
-        ("impala", "database", settings.impala_database),
-        ("impala", "auth_mechanism", settings.impala_auth_mechanism),
-        ("impala", "kerberos_service_name", settings.impala_kerberos_service_name),
-        ("impala", "use_ssl", settings.impala_use_ssl),
-        ("impala", "ca_cert", settings.impala_ca_cert),
-        ("impala", "user", settings.impala_user),
-        ("impala", "password", "***" if settings.impala_password else ""),
-        ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn)),
-        ("greenplum", "copy_batch_size", settings.copy_batch_size),
-        ("logging", "level", settings.log_level),
-        ("logging", "dir", str(settings.log_dir)),
-        ("logging", "rolling.backup_count", settings.log_rolling_backup_count),
+    # (section, key, value, desc) — desc 는 환경설정 탭의 "설명" 컬럼에 표시된다.
+    rows: list[tuple[str, str, object, str]] = [
+        ("app", "name", settings.app_name, "애플리케이션 이름"),
+        ("app", "debug", settings.debug, "디버그 모드(상세 로깅/검증)"),
+        ("executor", "host", settings.executor_host,
+         "executor 바인드 주소(포트는 EXECUTOR_PORT 환경변수)"),
+        ("executor", "self_report", settings.executor_self_report,
+         "자기 상태를 공유 DB에 직접 기록(멀티 coordinator)"),
+        ("executor", "status_table", settings.executor_status_table, "self-report 상태 테이블"),
+        ("executor", "status_interval_s", settings.executor_status_interval_s,
+         "self-report 주기(초)"),
+        ("executor", "max_concurrent_tasks", settings.executor_max_concurrent_tasks,
+         "이 executor 가 동시에 실행하는 task 수(0=무제한)"),
+        ("history", "db_dsn", mask_dsn(settings.history_db_dsn),
+         "task 이력/공유 상태 DB DSN(미설정 시 이력 비활성)"),
+        ("history", "task_table", settings.task_history_table, "task 실행 이력 테이블"),
+        ("monitor", "disk_path", settings.monitor_disk_path, "디스크 사용량 측정 경로"),
+        ("impala", "host", settings.impala_host or "(미설정→Mock)",
+         "Impala(소스) 호스트. 미설정 시 MockBackend"),
+        ("impala", "port", settings.impala_port, "Impala 포트(HiveServer2)"),
+        ("impala", "database", settings.impala_database, "Impala 기본 데이터베이스"),
+        ("impala", "auth_mechanism", settings.impala_auth_mechanism, "Impala 인증 방식(GSSAPI=Kerberos)"),
+        ("impala", "kerberos_service_name", settings.impala_kerberos_service_name,
+         "Kerberos 서비스 이름"),
+        ("impala", "use_ssl", settings.impala_use_ssl, "Impala 접속 TLS 사용 여부"),
+        ("impala", "ca_cert", settings.impala_ca_cert, "TLS 검증용 CA 인증서 경로"),
+        ("impala", "user", settings.impala_user, "Impala 사용자(LDAP 등)"),
+        ("impala", "password", "***" if settings.impala_password else "",
+         "Impala 비밀번호(설정 시 *** 로 마스킹)"),
+        ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn),
+         "Greenplum(타깃) 적재 DSN. 미설정 시 MockBackend"),
+        ("greenplum", "copy_batch_size", settings.copy_batch_size, "COPY 배치 크기(행)"),
+        ("logging", "level", settings.log_level, "메인 로그 레벨(이 레벨 이상 기록)"),
+        ("logging", "dir", str(settings.log_dir), "로그 디렉터리(일 단위 롤링)"),
+        ("logging", "rolling.backup_count", settings.log_rolling_backup_count,
+         "로그 보관 일수(초과분 자동 삭제)"),
     ]
-    return [{"section": s, "key": k, "value": v} for s, k, v in rows]
+    return [{"section": s, "key": k, "value": v, "desc": d} for s, k, v, d in rows]
 
 
 DASHBOARD_HTML = """<!doctype html>
@@ -115,6 +127,7 @@ DASHBOARD_HTML = """<!doctype html>
          vertical-align:middle; overflow:hidden; }
   .bar > i { display:block; height:100%; background:var(--acc); }
   .mut{color:var(--mut);} .err{color:var(--bad);} code{color:var(--acc);}
+  .desc { text-align:left; color:var(--mut); white-space:normal; max-width:560px; }
   .sec { color:var(--warn); font-weight:600; }
   .pager { display:flex; gap:10px; align-items:center; margin-top:10px; }
   .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
@@ -242,16 +255,31 @@ async function loadConf(){
     {t:"section", f:r=>`<span class="sec">${r.section}</span>`},
     {t:"key", k:"key"},
     {t:"value", f:r=>fmt(String(r.value))},
+    {t:"설명", f:r=>`<div class="desc">${fmt(r.desc)}</div>`},
   ];
   $("#p-conf").innerHTML = table(cols, d.config);
 }
+// 그외 정보 탭의 각 key 에 대한 한 줄 설명. tasks.<status> 키는 동적이라 별도 처리한다.
+const infoDesc = {
+  version: "애플리케이션 버전",
+  executor_id: "이 executor 인스턴스 식별자(host:port)",
+  self_report: "자기 상태 self-report 사용 여부",
+  max_concurrent_tasks: "동시에 실행하는 task 상한(0=무제한)",
+  active_tasks: "현재 실행 중(READING/WRITING) task 수",
+  queued_tasks: "대기 중(QUEUED) task 수",
+  started_at: "이 executor 기동 시각",
+  uptime_seconds: "기동 후 경과 시간(초)",
+  tasks_total: "보유 중인 전체 task 수",
+};
+function infoDescOf(k){ return k.startsWith("tasks.") ? "상태별 task 수" : (infoDesc[k] || ""); }
 async function loadInfo(){
   const d = await getJSON("/info");
   const rows = Object.entries(d).filter(([k,v])=>typeof v!=="object")
     .map(([k,v])=>({key:k,value:v}));
   const byStatus = Object.entries(d.tasks_by_status||{}).map(([k,v])=>({key:"tasks."+k,value:v}));
   const cols = [{t:"key",k:"key"},
-    {t:"value", f:r=> r.key.endsWith("_at") ? fmtDate(r.value) : fmt(String(r.value))}];
+    {t:"value", f:r=> r.key.endsWith("_at") ? fmtDate(r.value) : fmt(String(r.value))},
+    {t:"설명", f:r=>`<div class="desc">${fmt(infoDescOf(r.key))}</div>`}];
   $("#p-info").innerHTML = table(cols, rows.concat(byStatus));
 }
 const loaders = {tasks:loadTasks, hist:loadHist, conf:loadConf, info:loadInfo};

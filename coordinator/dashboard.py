@@ -45,54 +45,79 @@ def masked_config(settings) -> list[dict]:
         settings: 노출할 설정 속성을 담은 설정 객체.
 
     Returns:
-        list[dict]: 각 항목이 {"section", "key", "value"} 형태인 행 목록.
+        list[dict]: 각 항목이 {"section", "key", "value", "desc"} 형태인 행 목록.
+        desc 는 각 설정 항목의 의미를 설명하는 한 줄 안내다.
     """
-    rows: list[tuple[str, str, object]] = [
-        ("app", "name", settings.app_name),
-        ("app", "debug", settings.debug),
-        ("app", "query.sql_dialect", settings.query_default_dialect),
-        ("coordinator", "host", settings.coordinator_host),
-        ("coordinator", "port", settings.coordinator_port),
-        ("coordinator", "id", settings.coordinator_id),
-        ("coordinator", "executor_mode", settings.executor_mode),
-        ("coordinator", "max_concurrent_jobs", settings.max_concurrent_jobs),
-        ("coordinator", "max_pending_jobs", settings.max_pending_jobs),
-        ("coordinator", "max_dispatch_concurrency", settings.max_dispatch_concurrency),
-        ("coordinator", "poll_interval_s", settings.poll_interval_s),
-        ("coordinator", "task_timeout_s", settings.task_timeout_s),
-        ("store", "backend", settings.store_backend),
-        ("store", "table", settings.store_table),
-        ("monitor", "enabled", settings.monitor_enabled),
-        ("monitor", "health_interval_s", settings.monitor_health_interval_s),
-        ("monitor", "record_interval_s", settings.monitor_record_interval_s),
-        ("monitor", "db_dsn", mask_dsn(settings.monitor_db_dsn)),
-        ("monitor", "table", settings.monitor_table),
-        ("monitor", "disk_path", settings.monitor_disk_path),
-        ("history", "db_dsn", mask_dsn(settings.history_db_dsn)),
-        ("history", "table", settings.history_table),
-        ("history", "task_table", settings.task_history_table),
-        ("executor", "host", settings.executor_host),
-        ("executor", "self_report", settings.executor_self_report),
-        ("executor", "status_table", settings.executor_status_table),
-        ("executor", "status_interval_s", settings.executor_status_interval_s),
-        ("executor", "max_concurrent_tasks", settings.executor_max_concurrent_tasks),
-        ("executor", "executors", ", ".join(settings.executors) or "(없음)"),
-        ("impala", "host", settings.impala_host or "(미설정→Mock)"),
-        ("impala", "port", settings.impala_port),
-        ("impala", "database", settings.impala_database),
-        ("impala", "auth_mechanism", settings.impala_auth_mechanism),
-        ("impala", "kerberos_service_name", settings.impala_kerberos_service_name),
-        ("impala", "use_ssl", settings.impala_use_ssl),
-        ("impala", "ca_cert", settings.impala_ca_cert),
-        ("impala", "user", settings.impala_user),
-        ("impala", "password", "***" if settings.impala_password else ""),
-        ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn)),
-        ("greenplum", "copy_batch_size", settings.copy_batch_size),
-        ("logging", "level", settings.log_level),
-        ("logging", "dir", str(settings.log_dir)),
-        ("logging", "rolling.backup_count", settings.log_rolling_backup_count),
+    # (section, key, value, desc) — desc 는 환경설정 탭의 "설명" 컬럼에 표시된다.
+    rows: list[tuple[str, str, object, str]] = [
+        ("app", "name", settings.app_name, "애플리케이션 이름"),
+        ("app", "debug", settings.debug, "디버그 모드(상세 로깅/검증)"),
+        ("app", "query.sql_dialect", settings.query_default_dialect,
+         "쿼리 파싱 기본 방언(요청에서 sql_dialect 로 재정의 가능)"),
+        ("coordinator", "host", settings.coordinator_host, "coordinator 바인드 주소"),
+        ("coordinator", "port", settings.coordinator_port, "coordinator 수신 포트"),
+        ("coordinator", "id", settings.coordinator_id,
+         "멀티 coordinator 식별자(미지정 시 host:port)"),
+        ("coordinator", "executor_mode", settings.executor_mode,
+         "remote(HTTP 디스패치) | local(in-process 직접 실행)"),
+        ("coordinator", "max_concurrent_jobs", settings.max_concurrent_jobs,
+         "동시에 RUNNING 가능한 job 수(실행 슬롯). 0 이하면 무제한"),
+        ("coordinator", "max_pending_jobs", settings.max_pending_jobs,
+         "슬롯이 찼을 때 PENDING 으로 대기 가능한 job 수. 실행+대기 합 초과 시 429 거부"),
+        ("coordinator", "max_dispatch_concurrency", settings.max_dispatch_concurrency,
+         "동시 task 디스패치 상한(코루틴 동시성)"),
+        ("coordinator", "poll_interval_s", settings.poll_interval_s,
+         "task 상태 폴링 간격(초)"),
+        ("coordinator", "task_timeout_s", settings.task_timeout_s,
+         "executor 호출(task) HTTP 타임아웃(초)"),
+        ("store", "backend", settings.store_backend,
+         "Job 저장소: memory(단일) | postgres(멀티 coordinator 공유)"),
+        ("store", "table", settings.store_table, "공유 store 테이블명(postgres backend)"),
+        ("monitor", "enabled", settings.monitor_enabled, "executor 헬스/메트릭 모니터링 사용 여부"),
+        ("monitor", "health_interval_s", settings.monitor_health_interval_s,
+         "executor 헬스 체크 주기(초)"),
+        ("monitor", "record_interval_s", settings.monitor_record_interval_s,
+         "메트릭 DB 기록 주기(초)"),
+        ("monitor", "db_dsn", mask_dsn(settings.monitor_db_dsn),
+         "메트릭 기록 DB DSN(미설정 시 폴링만, DB 기록 생략)"),
+        ("monitor", "table", settings.monitor_table, "메트릭 테이블명"),
+        ("monitor", "disk_path", settings.monitor_disk_path, "디스크 사용량 측정 경로"),
+        ("history", "db_dsn", mask_dsn(settings.history_db_dsn),
+         "실행 이력/공유 상태 DB DSN(미설정 시 이력 비활성)"),
+        ("history", "table", settings.history_table, "job 실행 이력 테이블"),
+        ("history", "task_table", settings.task_history_table, "task 실행 이력 테이블"),
+        ("executor", "host", settings.executor_host,
+         "executor 바인드 주소(포트는 EXECUTOR_PORT 환경변수)"),
+        ("executor", "self_report", settings.executor_self_report,
+         "executor 가 자기 상태를 공유 DB에 직접 기록(멀티 coordinator)"),
+        ("executor", "status_table", settings.executor_status_table, "executor self-report 상태 테이블"),
+        ("executor", "status_interval_s", settings.executor_status_interval_s,
+         "executor self-report 주기(초)"),
+        ("executor", "max_concurrent_tasks", settings.executor_max_concurrent_tasks,
+         "executor 1대가 동시에 실행하는 task 수(0=무제한)"),
+        ("executor", "executors", ", ".join(settings.executors) or "(없음)",
+         "디스패치 대상 executor 베이스 URL 목록"),
+        ("impala", "host", settings.impala_host or "(미설정→Mock)",
+         "Impala(소스) 호스트. 미설정 시 MockBackend"),
+        ("impala", "port", settings.impala_port, "Impala 포트(HiveServer2)"),
+        ("impala", "database", settings.impala_database, "Impala 기본 데이터베이스"),
+        ("impala", "auth_mechanism", settings.impala_auth_mechanism, "Impala 인증 방식(GSSAPI=Kerberos)"),
+        ("impala", "kerberos_service_name", settings.impala_kerberos_service_name,
+         "Kerberos 서비스 이름"),
+        ("impala", "use_ssl", settings.impala_use_ssl, "Impala 접속 TLS 사용 여부"),
+        ("impala", "ca_cert", settings.impala_ca_cert, "TLS 검증용 CA 인증서 경로"),
+        ("impala", "user", settings.impala_user, "Impala 사용자(LDAP 등)"),
+        ("impala", "password", "***" if settings.impala_password else "",
+         "Impala 비밀번호(설정 시 *** 로 마스킹)"),
+        ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn),
+         "Greenplum(타깃) 적재 DSN. 미설정 시 MockBackend"),
+        ("greenplum", "copy_batch_size", settings.copy_batch_size, "COPY 배치 크기(행)"),
+        ("logging", "level", settings.log_level, "메인 로그 레벨(이 레벨 이상 기록)"),
+        ("logging", "dir", str(settings.log_dir), "로그 디렉터리(일 단위 롤링)"),
+        ("logging", "rolling.backup_count", settings.log_rolling_backup_count,
+         "로그 보관 일수(초과분 자동 삭제)"),
     ]
-    return [{"section": s, "key": k, "value": v} for s, k, v in rows]
+    return [{"section": s, "key": k, "value": v, "desc": d} for s, k, v, d in rows]
 
 
 # 대시보드 페이지 전체(HTML/CSS/JS)를 담은 문자열. '/' 핸들러가 이 값을 그대로 응답으로 내보낸다.
@@ -142,6 +167,7 @@ DASHBOARD_HTML = """<!doctype html>
          vertical-align:middle; overflow:hidden; }
   .bar > i { display:block; height:100%; background:var(--acc); }
   .mut{color:var(--mut);} .err{color:var(--bad);} code{color:var(--acc);}
+  .desc { text-align:left; color:var(--mut); white-space:normal; max-width:560px; }
   .sec { color:var(--warn); font-weight:600; }
   .pager { display:flex; gap:10px; align-items:center; margin-top:10px; }
   .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
@@ -318,16 +344,34 @@ async function loadConf(){
     {t:"section", f:r=>`<span class="sec">${r.section}</span>`},
     {t:"key", k:"key"},
     {t:"value", f:r=>fmt(String(r.value))},
+    {t:"설명", f:r=>`<div class="desc">${fmt(r.desc)}</div>`},
   ];
   $("#p-conf").innerHTML = table(cols, d.config);
 }
+// 그외 정보 탭의 각 key 에 대한 한 줄 설명. jobs.<status> 키는 동적이라 별도 처리한다.
+const infoDesc = {
+  version: "애플리케이션 버전",
+  coordinator_id: "이 coordinator 식별자(멀티 인스턴스 구분)",
+  executor_mode: "remote(HTTP 디스패치) | local(in-process 직접 실행)",
+  store_backend: "Job 저장소 backend(memory | postgres)",
+  executor_self_report: "executor 자기 상태 self-report 사용 여부",
+  started_at: "이 coordinator 기동 시각",
+  uptime_seconds: "기동 후 경과 시간(초)",
+  jobs_total: "저장소에 보관된 전체 job 수",
+  executors_configured: "설정된 executor 수",
+  max_concurrent_jobs: "동시 실행 슬롯 수(job)",
+  max_pending_jobs: "대기 큐 상한(실행+대기 초과 시 429)",
+  max_dispatch_concurrency: "동시 task 디스패치 상한",
+};
+function infoDescOf(k){ return k.startsWith("jobs.") ? "상태별 job 수" : (infoDesc[k] || ""); }
 async function loadInfo(){
   const d = await getJSON("/info");
   const rows = Object.entries(d).filter(([k,v])=>typeof v!=="object")
     .map(([k,v])=>({key:k,value:v}));
   const byStatus = Object.entries(d.jobs_by_status||{}).map(([k,v])=>({key:"jobs."+k,value:v}));
   const cols = [{t:"key",k:"key"},
-    {t:"value", f:r=> r.key.endsWith("_at") ? fmtDate(r.value) : fmt(String(r.value))}];
+    {t:"value", f:r=> r.key.endsWith("_at") ? fmtDate(r.value) : fmt(String(r.value))},
+    {t:"설명", f:r=>`<div class="desc">${fmt(infoDescOf(r.key))}</div>`}];
   $("#p-info").innerHTML = table(cols, rows.concat(byStatus));
 }
 const loaders = {jobs:loadJobs, hist:loadHist, exec:loadExec, conf:loadConf, info:loadInfo};
