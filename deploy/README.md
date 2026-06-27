@@ -158,14 +158,12 @@ executor.status_interval_s=10
   이므로, 멀티 coordinator 에선 인스턴스 수만큼 합산된다.
 
 스키마는 앱이 `CREATE TABLE IF NOT EXISTS` 로 자동 생성한다. 사전 생성/권한 관리를 원하면
-`packaging/config/` 의 SQL 을 사용한다:
+통합 스키마 한 파일로 전체 테이블(jobs/job_history/task_history/executor_status/
+executor_health_metrics)을 만든다:
 
 ```bash
 PG="postgresql://user:pass@pg-host:5432/queryexec"
-psql "$PG" -f /opt/query-executor/packaging/config/jobs-schema.sql
-psql "$PG" -f /opt/query-executor/packaging/config/history-schema.sql
-psql "$PG" -f /opt/query-executor/packaging/config/task-history-schema.sql
-psql "$PG" -f /opt/query-executor/packaging/config/executor-status-schema.sql
+psql "$PG" -f /opt/query-executor/packaging/config/postgresql.sql
 ```
 
 > 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 둔다.
@@ -252,11 +250,12 @@ monitor.table=executor_health_metrics
 monitor.disk_path=/
 ```
 
-테이블은 앱이 `CREATE TABLE IF NOT EXISTS` 로 자동 생성한다. 사전 생성/권한 관리를
-원하면 `packaging/config/monitor-schema.sql` 을 사용한다:
+테이블(`executor_health_metrics`)은 앱이 `CREATE TABLE IF NOT EXISTS` 로 자동 생성한다.
+사전 생성/권한 관리를 원하면 통합 스키마 `packaging/config/postgresql.sql` 을 사용한다
+(`monitor.db_dsn` 이 다른 DB면 그 DB에도 적용):
 
 ```bash
-psql "postgresql://user:pass@pg-host:5432/monitoring" -f /opt/query-executor/packaging/config/monitor-schema.sql
+psql "postgresql://user:pass@pg-host:5432/monitoring" -f /opt/query-executor/packaging/config/postgresql.sql
 
 # 최근 기록 조회
 psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_percent

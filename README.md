@@ -315,8 +315,7 @@ curl -s -X POST localhost:8088/jobs/$JOB/cancel
   (`executor_id` 컬럼으로 어느 executor 인지 식별). **따라서 executor 호스트에도 PG
   자격증명이 필요**하다.
 - 기록 대상 DB는 `history.db_dsn`(미설정 시 `monitor.db_dsn`) 공유. 둘 다 없으면 비활성
-  (경고 로그). 스키마: `packaging/config/history-schema.sql`,
-  `packaging/config/task-history-schema.sql`.
+  (경고 로그). 스키마: `packaging/config/postgresql.sql`(전체 통합).
 
 ```sql
 -- 특정 job 의 executor task 진행 이력 추적
@@ -357,7 +356,7 @@ coordinator.id=coord-1     # 인스턴스마다 다르게(미지정 시 host:por
   `max_pending_jobs`(대기 큐)로 동시 job 수를 제한, 초과 시 `429`. 단 이 한도는 **coordinator
   인스턴스별**(인메모리)이라 멀티 coordinator 환경에선 인스턴스 수만큼 합산된다.
 
-스키마: `packaging/config/jobs-schema.sql`, `executor-status-schema.sql`(둘 다 앱이 자동 생성).
+스키마: `packaging/config/postgresql.sql`(전체 통합, 앱이 자동 생성).
 
 > 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 두면 된다.
 
