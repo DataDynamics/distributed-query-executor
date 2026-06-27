@@ -214,14 +214,14 @@ function composeSql(q){
   if(q.exec_mode) parts.push(`-- 실행 방식: ${q.exec_mode}`);
   if(q.exec_mode === 'statement'){
     // statement 모드: sub_query 자체가 INSERT ... SELECT (대상 DB에서 그대로 실행)
-    if(q.sub_query) parts.push(`-- SELECT + INSERT (대상 DB에서 실행)\n${q.sub_query}`);
+    if(q.sub_query) parts.push(`-- SELECT + INSERT (대상 DB에서 실행)\\n${q.sub_query}`);
   } else {
     // copy / stage_insert: SELECT 는 sub_query
-    if(q.sub_query) parts.push(`-- SELECT (Impala 읽기)\n${q.sub_query}`);
-    if(q.staging_ddl) parts.push(`-- STAGING DDL (Greenplum TEMP)\n${q.staging_ddl}`);
-    if(q.insert_sql) parts.push(`-- INSERT (staging → target)\n${q.insert_sql}`);
+    if(q.sub_query) parts.push(`-- SELECT (Impala 읽기)\\n${q.sub_query}`);
+    if(q.staging_ddl) parts.push(`-- STAGING DDL (Greenplum TEMP)\\n${q.staging_ddl}`);
+    if(q.insert_sql) parts.push(`-- INSERT (staging → target)\\n${q.insert_sql}`);
   }
-  return parts.join('\n\n') || '(쿼리문 없음)';
+  return parts.join('\\n\\n') || '(쿼리문 없음)';
 }
 function showSql(id){
   $("#modal-title").textContent = id;
