@@ -26,13 +26,26 @@ CREATE TABLE IF NOT EXISTS {table} (
     executor_id   TEXT,
     status        TEXT NOT NULL,
     rows_written  BIGINT,
-    error         TEXT
+    error         TEXT,
+    started_at    TIMESTAMPTZ,
+    finished_at   TIMESTAMPTZ,
+    sub_query     TEXT
 )
 """
 
+# 구버전 테이블(started_at/finished_at/sub_query 컬럼이 없던)을 보강하는 마이그레이션.
+# ADD COLUMN IF NOT EXISTS 라 이미 있으면 무시되어 반복 실행에 안전하다.
+_ALTERS = (
+    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
+    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
+    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS sub_query TEXT",
+)
+
 _INSERT = """
-INSERT INTO {table} (job_id, task_id, username, executor_id, status, rows_written, error)
-VALUES (%s, %s, %s, %s, %s, %s, %s)
+INSERT INTO {table}
+    (job_id, task_id, username, executor_id, status, rows_written, error,
+     started_at, finished_at, sub_query)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -84,7 +97,7 @@ class TaskHistoryRepository:
 
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
-                cur.execute(_CREATE_TABLE.format(table=self.table))  # 없으면 생성
+                self._ensure_schema(cur)  # 없으면 생성 + 신규 컬럼 보강
                 cur.execute(
                     f"SELECT count(DISTINCT task_id) FROM {self.table} WHERE executor_id = %s",
                     (self.executor_id,),
@@ -92,9 +105,9 @@ class TaskHistoryRepository:
                 total = cur.fetchone()[0]
                 cur.execute(
                     "SELECT recorded_at, job_id, task_id, username, status, "
-                    "rows_written, error FROM ("
+                    "rows_written, error, started_at, finished_at, sub_query FROM ("
                     "  SELECT DISTINCT ON (task_id) recorded_at, job_id, task_id, "
-                    "    username, status, rows_written, error "
+                    "    username, status, rows_written, error, started_at, finished_at, sub_query "
                     f"  FROM {self.table} WHERE executor_id = %s "
                     "  ORDER BY task_id, recorded_at DESC"
                     ") t ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
@@ -107,10 +120,19 @@ class TaskHistoryRepository:
                 "recorded_at": r[0].isoformat() if r[0] is not None else None,
                 "job_id": r[1], "task_id": r[2], "username": r[3], "status": r[4],
                 "rows_written": r[5], "error": r[6],
+                "started_at": r[7].isoformat() if r[7] is not None else None,
+                "finished_at": r[8].isoformat() if r[8] is not None else None,
+                "sub_query": r[9],
             }
             for r in rows
         ]
         return {"enabled": True, "rows": out, "total": total, "limit": limit, "offset": offset}
+
+    def _ensure_schema(self, cur) -> None:
+        """이력 테이블을 생성(없으면)하고, 구버전 테이블에 신규 컬럼을 보강한다."""
+        cur.execute(_CREATE_TABLE.format(table=self.table))
+        for alter in _ALTERS:
+            cur.execute(alter.format(table=self.table))
 
     async def record(self, task) -> None:
         """task 의 현재 상태를 이력 테이블에 한 행 기록한다(동기 psycopg → 스레드).
@@ -143,11 +165,14 @@ class TaskHistoryRepository:
             task.status.value,
             task.rows_written,
             task.error,
+            getattr(task, "started_at", None),
+            getattr(task, "finished_at", None),
+            getattr(task, "sub_query", None),
         )
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 if not self._ddl_ready:
-                    cur.execute(_CREATE_TABLE.format(table=self.table))
+                    self._ensure_schema(cur)
                     self._ddl_ready = True
                 cur.execute(_INSERT.format(table=self.table), row)
             conn.commit()

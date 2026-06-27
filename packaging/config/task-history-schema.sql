@@ -13,8 +13,16 @@ CREATE TABLE IF NOT EXISTS task_history (
     executor_id  TEXT,
     status       TEXT NOT NULL,
     rows_written BIGINT,
-    error        TEXT
+    error        TEXT,
+    started_at   TIMESTAMPTZ,   -- task 가 READING 을 시작한 시각
+    finished_at  TIMESTAMPTZ,   -- task 가 종료(DONE/FAILED/CANCELLED)된 시각
+    sub_query    TEXT           -- 이 task 가 실행한 sub-query 전문
 );
+
+-- 구버전 테이블 보강(앱도 자동 수행). 이미 있으면 무시된다.
+ALTER TABLE task_history ADD COLUMN IF NOT EXISTS started_at  TIMESTAMPTZ;
+ALTER TABLE task_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE task_history ADD COLUMN IF NOT EXISTS sub_query   TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_task_history_job_id ON task_history (job_id);
 CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON task_history (task_id);

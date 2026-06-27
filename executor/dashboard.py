@@ -133,6 +133,18 @@ DASHBOARD_HTML = """<!doctype html>
   .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
                   padding:6px 12px; border-radius:6px; cursor:pointer; }
   .pager button:disabled { color:var(--mut); cursor:default; opacity:.5; }
+  .lnk { color:var(--acc); cursor:pointer; text-decoration:none; }
+  .lnk:hover { text-decoration:underline; }
+  .modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.4);
+           align-items:center; justify-content:center; z-index:50; }
+  .modal-box { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+               width:min(900px,90%); max-height:80%; overflow:auto; padding:16px; }
+  .modal-head { display:flex; justify-content:space-between; align-items:center;
+                gap:20px; margin-bottom:10px; }
+  .modal-head button { background:none; border:none; color:var(--mut); font-size:18px; cursor:pointer; }
+  #modal-sql { white-space:pre-wrap; word-break:break-all; background:#f6f8fa;
+               border:1px solid var(--line); border-radius:6px; padding:12px;
+               font:13px/1.55 ui-monospace,Menlo,Consolas,monospace; color:var(--fg); }
 </style>
 </head>
 <body>
@@ -153,6 +165,12 @@ DASHBOARD_HTML = """<!doctype html>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
 </main>
+<div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box">
+    <div class="modal-head"><b id="modal-title"></b><button onclick="closeModal()">✕</button></div>
+    <pre id="modal-sql"></pre>
+  </div>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 let active = "tasks";
@@ -186,6 +204,15 @@ function table(cols, rows){
   for(const r of rows){ h += "<tr>" + cols.map(c=>`<td>${c.f?c.f(r):fmt(r[c.k])}</td>`).join("") + "</tr>"; }
   return h + "</tbody></table>";
 }
+// Task ID → sub-query 매핑/모달. 행 클릭 시 해당 task 의 쿼리 전문을 보여준다.
+const sqlMap = {};
+function showSql(id){
+  $("#modal-title").textContent = id;
+  $("#modal-sql").textContent = sqlMap[id] || '(쿼리문 없음)';
+  $("#modal").style.display = 'flex';
+}
+function closeModal(){ $("#modal").style.display = 'none'; }
+const taskLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${id}</a>`;
 async function getJSON(u){ const r = await fetch(u); return r.json(); }
 
 async function loadTasks(){
@@ -227,13 +254,16 @@ async function loadHist(){
     return;
   }
   histTotal = d.total || 0;
+  (d.rows||[]).forEach(r=>{ if(r.sub_query) sqlMap[r.task_id]=r.sub_query; });
   const cols = [
-    {t:"기록 시간", f:r=>`<span class="mut">${fmtDate(r.recorded_at)}</span>`},
     {t:"작업 ID", f:r=>`<code>${fmt(r.job_id)}</code>`},
-    {t:"Task ID", f:r=>`<code>${fmt(r.task_id)}</code>`},
+    {t:"Task ID", f:r=>taskLink(r.task_id)},
     {t:"사용자", k:"username"},
     {t:"상태", f:r=>pill(r.status)},
     {t:"적재 행수", f:r=>fmtNum(r.rows_written)},
+    {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
+    {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
+    {t:"소요 시간", f:r=>dur(r.started_at, r.finished_at)},
     {t:"에러", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
   ];
   const n = d.rows ? d.rows.length : 0;
