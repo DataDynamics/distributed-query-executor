@@ -52,8 +52,17 @@ sudo systemctl enable --now query-coordinator
 coordinator.host=0.0.0.0
 coordinator.port=8000
 coordinator.executors=http://127.0.0.1:8001,http://127.0.0.1:8002
-coordinator.max_concurrent_jobs=16
-coordinator.max_dispatch_concurrency=32
+coordinator.id=                        # 멀티 coordinator 식별자(미지정 시 host:port)
+coordinator.executor_mode=remote       # remote(HTTP 디스패치) | local(in-process 직접 실행)
+
+# 동시성/큐잉(admission control)
+coordinator.max_concurrent_jobs=16     # 동시에 RUNNING 가능한 job 수(실행 슬롯)
+coordinator.max_pending_jobs=100       # 슬롯이 차면 PENDING 으로 대기 가능한 job 수
+                                        #  → 실행+대기 합을 넘는 요청은 429(Retry-After)로 거부
+coordinator.max_dispatch_concurrency=32 # 동시 task 디스패치 상한(코루틴 동시성)
+
+# Executor 동시 task 상한(executor 1대 기준, admission control)
+executor.max_concurrent_tasks=8
 
 # Executor - Impala (source). 비어 있으면 MockBackend 사용. TLS + Kerberos(GSSAPI)
 impala.host=
@@ -72,6 +81,11 @@ copy.batch_size=10000
 > `impala.host` 와 `greenplum.dsn` 이 **모두** 설정되면 실제 `ImpalaToGreenplumBackend`
 > 가 동작하고, 하나라도 비어 있으면 `MockBackend`(실제 I/O 없음)로 폴백한다.
 > 실제 연결 시에는 `requirements-executor.txt` 도 설치해야 한다(impyla, psycopg, SASL/GSSAPI).
+
+> **동시성 적정값**: 실제 천장은 coordinator 코어가 아니라 Greenplum 동시 COPY 허용량·
+> Impala 동시 쿼리 슬롯·executor 풀 합이다. 다운스트림 용량에 맞춰
+> `executor.max_concurrent_tasks` 를 분배하고, `max_dispatch_concurrency` 는 그 이상으로
+> 두어 coordinator 가 병목이 되지 않게 한다.
 
 ## Impala TLS + Kerberos
 
@@ -112,6 +126,51 @@ sudo systemctl enable --now query-executor-kinit.timer
 - `query-executor-kinit.timer` 가 4시간마다 재발급해 만료를 방지한다.
 - 티켓 확인: `sudo -u queryexec KRB5CCNAME=FILE:/var/lib/query-executor/krb5cc klist`
 
+## 멀티 coordinator & 실행 이력 (PostgreSQL)
+
+기본은 단일 coordinator + 인메모리다. **여러 coordinator**를 두거나 **실행 이력을 영속**하려면
+공유 PostgreSQL을 설정한다(모든 coordinator·executor가 같은 DSN을 공유).
+
+```properties
+# 모든 coordinator/executor 공통
+history.db_dsn=postgresql://user:pass@pg-host:5432/queryexec
+history.table=job_history
+history.task_table=task_history
+
+# 멀티 coordinator: Job 저장소를 공유 PostgreSQL 로 (기본 memory)
+store.backend=postgres
+store.table=jobs
+
+# executor 가 자기 상태를 공유 DB에 직접 기록(coordinator 중복 폴링 제거)
+executor.self_report=true
+executor.status_table=executor_status
+executor.status_interval_s=10
+```
+
+- **공유 Job 저장소(`store.backend=postgres`)**: `jobs` 테이블(JSONB)에 상태를 두어, 어느
+  coordinator로 조회/취소가 가도 동작한다. cross-coordinator 취소도 플래그 공유로 동작.
+- **2계층 이력**: `run()` 시작/종료는 `job_history`(coordinator), 각 task 상태 전이는
+  `task_history`(executor, `executor_id` 포함)에 기록된다. 제출 시 `username` 을 넘기면 두
+  테이블 모두에 기록된다(대시보드 "사용자" 컬럼). **executor 호스트에도 PG 자격증명이 필요**하다.
+- **executor liveness**: `self_report=true` 면 executor 가 `executor_status` 에 heartbeat 를
+  upsert 하고, coordinator 는 `updated_at` 신선도로 살아있음을 판정한다.
+- admission 한도(`max_concurrent_jobs`/`max_pending_jobs`)는 **coordinator 인스턴스별**(인메모리)
+  이므로, 멀티 coordinator 에선 인스턴스 수만큼 합산된다.
+
+스키마는 앱이 `CREATE TABLE IF NOT EXISTS` 로 자동 생성한다. 사전 생성/권한 관리를 원하면
+`packaging/config/` 의 SQL 을 사용한다:
+
+```bash
+PG="postgresql://user:pass@pg-host:5432/queryexec"
+psql "$PG" -f /opt/query-executor/packaging/config/jobs-schema.sql
+psql "$PG" -f /opt/query-executor/packaging/config/history-schema.sql
+psql "$PG" -f /opt/query-executor/packaging/config/task-history-schema.sql
+psql "$PG" -f /opt/query-executor/packaging/config/executor-status-schema.sql
+```
+
+> 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 둔다.
+> 이력만 남기고 싶으면 `history.db_dsn` 만 설정해도 된다(저장소/ self-report 는 끄고).
+
 ## 운영 명령
 
 ```bash
@@ -123,6 +182,10 @@ journalctl -u query-executor@8001 -f
 # 파일 로그(일 단위 롤링)
 tail -f /var/log/query-executor/query-coordinator-server.log
 tail -f /var/log/query-executor/query-executor-server-8001.log
+
+# WARNING 이상만 모은 전용 로그(문제 추적용, *-warn.log)
+tail -f /var/log/query-executor/query-coordinator-server-warn.log
+tail -f /var/log/query-executor/query-executor-server-8001-warn.log
 
 # 재시작 / 중지
 sudo systemctl restart query-coordinator
@@ -141,9 +204,12 @@ curl -s localhost:8000/health
 curl -s localhost:8000/metrics
 curl -s localhost:8001/health
 curl -s localhost:8001/metrics
-# coordinator가 보유한 executor 헬스/메트릭 상태
+# coordinator가 보유한 executor 헬스/메트릭 상태 + 클러스터 통합 상태
 curl -s localhost:8000/executors
+curl -s localhost:8000/cluster
 
+# 모니터링 대시보드(브라우저): coordinator http://<host>:8000/
+#   remote 모드면 각 executor 도 자기 화면 제공: http://<host>:8001/
 # Swagger UI / OpenAPI 스키마
 #   http://<host>:8000/docs , http://<host>:8001/docs
 curl -s localhost:8000/openapi.json | head -c 200
@@ -199,4 +265,9 @@ psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_perc
 
 ## 참고
 
-- coordinator를 다중 인스턴스로 띄우려면 Job 저장소를 Redis 등으로 교체해야 한다(현재 인메모리).
+- coordinator·executor 모두 상태를 **프로세스 메모리**에 두므로 인스턴스당 **단일 워커**로
+  실행한다. 처리량 확장은 워커가 아니라 **executor 인스턴스 수**로 한다.
+- coordinator를 **다중 인스턴스**로 띄우려면 `store.backend=postgres` + 공유 `history.db_dsn`
+  으로 Job 저장소/이력을 PostgreSQL에 외부화한다(위 "멀티 coordinator & 실행 이력" 참고).
+- 별도 executor 프로세스 없이 동작을 검증하려면 `coordinator.executor_mode=local`(또는
+  `COORDINATOR_EXECUTOR_MODE=local`)로 coordinator 안에서 백엔드를 직접 실행한다.
