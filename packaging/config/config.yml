@@ -31,7 +31,7 @@ logging:
 # ───────── Coordinator ─────────
 coordinator:
   host: ${coordinator.host:0.0.0.0}                       # 바인드 주소
-  port: ${coordinator.port:8000}                          # 수신 포트
+  port: ${coordinator.port:8088}                          # 수신 포트
   executor_mode: ${coordinator.executor_mode:remote}      # remote(HTTP 디스패치) | local(in-process 직접 실행)
   id: ${coordinator.id:}                                  # 멀티 coordinator 식별자(미지정 시 host:port)
   executors: ${coordinator.executors:}                    # executor 베이스 URL 목록(쉼표 구분)

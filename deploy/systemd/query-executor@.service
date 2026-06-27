@@ -1,6 +1,6 @@
 [Unit]
 # 템플릿 유닛: 인스턴스 이름(%i)을 포트로 사용한다.
-#   예) systemctl start query-executor@8001  ->  포트 8001로 기동
+#   예) systemctl start query-executor@8087  ->  포트 8087로 기동
 Description=Distributed Query Executor (port %i)
 Documentation=https://github.com/DataDynamics/distributed-query-executor
 After=network-online.target query-executor-kinit.service

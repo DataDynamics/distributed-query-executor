@@ -48,8 +48,8 @@ flowchart TB
 
     subgraph Executors["Executor Pool (N개, 독립 서비스)"]
         direction LR
-        E1["Executor :8001<br/>/tasks · /metrics · 대시보드(/)"]
-        E2["Executor :8002"]
+        E1["Executor :8087<br/>/tasks · /metrics · 대시보드(/)"]
+        E2["Executor :8086"]
         E3["Executor :800N"]
     end
 

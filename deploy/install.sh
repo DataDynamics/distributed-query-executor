@@ -79,5 +79,5 @@ echo "Kerberos 티켓 갱신 타이머 활성화:"
 echo "  sudo systemctl enable --now query-executor-kinit.timer"
 echo
 echo "기동:"
-echo "  sudo systemctl enable --now query-executor@8001 query-executor@8002"
+echo "  sudo systemctl enable --now query-executor@8087 query-executor@8086"
 echo "  sudo systemctl enable --now query-coordinator"

@@ -25,8 +25,8 @@ flowchart TB
 
     subgraph Executors["Executor Pool (N개, 독립 서비스)"]
         direction LR
-        E1["Executor :8001<br/>/tasks · /health · /metrics"]
-        E2["Executor :8002"]
+        E1["Executor :8087<br/>/tasks · /health · /metrics"]
+        E2["Executor :8086"]
         E3["Executor :800N"]
     end
 
@@ -115,7 +115,7 @@ executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task �
   status.py            자기 상태(CPU/메모리/동시 task)를 공유 DB에 self-report(UPSERT)
   dashboard.py         executor self-view 대시보드 HTML(remote mode에서 /에 노출)
   app.py               REST API (POST /tasks, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
-  __main__.py          실행 진입점 (EXECUTOR_PORT=8001 python -m executor)
+  __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 packaging/config/    # config.properties + config.yml 기본값 + 스키마(*.sql)
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
@@ -162,8 +162,8 @@ coordinator·executor 의 health 와 CPU/메모리/디스크, 실행 중 job 수
 `refresh=true`(기본)면 executor 를 즉시 폴링하고, `refresh=false`면 모니터 캐시를 쓴다.
 
 ```bash
-curl -s localhost:8000/cluster            # 즉시 폴링
-curl -s 'localhost:8000/cluster?refresh=false'   # 캐시 사용
+curl -s localhost:8088/cluster            # 즉시 폴링
+curl -s 'localhost:8088/cluster?refresh=false'   # 캐시 사용
 ```
 
 ```json
@@ -175,7 +175,7 @@ curl -s 'localhost:8000/cluster?refresh=false'   # 캐시 사용
       "disk":   {"path": "/", "total_gb": 823.96, "used_gb": 566.25, "percent": 72.4} }
   },
   "executors": [
-    { "executor_url": "http://127.0.0.1:8001", "healthy": true,
+    { "executor_url": "http://127.0.0.1:8087", "healthy": true,
       "cpu_percent": 3.1, "memory_percent": 22.5, "memory_used_mb": 4096.0,
       "disk_percent": 61.0, "disk_used_gb": 120.5, "disk_total_gb": 200.0 }
   ],
@@ -231,9 +231,9 @@ executor를 실제 클러스터에 연결하려면 드라이버를 추가 설치
 
 ```bash
 # executor 기동 (포트는 EXECUTOR_PORT 로 지정). 여러 개 띄울 수 있다.
-QUERY_EXECUTOR_CONFIG_DIR=packaging/config EXECUTOR_PORT=8001 \
+QUERY_EXECUTOR_CONFIG_DIR=packaging/config EXECUTOR_PORT=8087 \
   .venv/bin/python -m executor &
-QUERY_EXECUTOR_CONFIG_DIR=packaging/config EXECUTOR_PORT=8002 \
+QUERY_EXECUTOR_CONFIG_DIR=packaging/config EXECUTOR_PORT=8086 \
   .venv/bin/python -m executor &
 
 # coordinator 기동 (host/port/executors 는 config 에서 읽음)
@@ -247,16 +247,16 @@ QUERY_EXECUTOR_CONFIG_DIR=packaging/config \
 
 ```bash
 # 1) 제출 → job_id
-JOB=$(curl -s localhost:8000/jobs -H 'content-type: application/json' \
+JOB=$(curl -s localhost:8088/jobs -H 'content-type: application/json' \
   -d '{"sql":"SELECT a, dt FROM t WHERE dt IN ('\''1'\'','\''2'\'')","partition_column":"dt","target_table":"public.t"}' \
   | python -c 'import sys,json;print(json.load(sys.stdin)["job_id"])')
 
 # 2) 진행 상태(경량) 조회
-curl -s localhost:8000/jobs/$JOB/status
+curl -s localhost:8088/jobs/$JOB/status
 # {"job_id":"...","status":"RUNNING","progress_percent":50.0,"completed":1,"total":2, ...}
 
 # 전체 상태(태스크 포함)
-curl -s localhost:8000/jobs/$JOB
+curl -s localhost:8088/jobs/$JOB
 ```
 
 | 엔드포인트 | 설명 |
@@ -273,7 +273,7 @@ curl -s localhost:8000/jobs/$JOB
 200 응답). 분할/래핑/스테이징 결과가 제대로 만들어지는지 확인하는 용도다.
 
 ```bash
-curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT a, dt FROM sales WHERE dt IN ('\''1'\'','\''2'\'','\''3'\'')",
   "partition_column": "dt", "target_table": "public.t", "parallelism": 2,
   "dry_run": true
@@ -289,7 +289,7 @@ curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
 ### 작업 취소
 
 ```bash
-curl -s -X POST localhost:8000/jobs/$JOB/cancel
+curl -s -X POST localhost:8088/jobs/$JOB/cancel
 # {"job_id":"...","status":"CANCELLED","cancel_requested":true, ...}
 ```
 
@@ -372,9 +372,9 @@ executor를 별도로 띄우지 않고 **coordinator 안에서 in-process로 직
 COORDINATOR_EXECUTOR_MODE=local .venv/bin/python -m coordinator
 
 # 제출 → executor 없이 즉시 실행됨 → 상태 DONE
-curl -s localhost:8000/jobs -H 'content-type: application/json' \
+curl -s localhost:8088/jobs -H 'content-type: application/json' \
   -d '{"sql":"SELECT a, dt FROM t WHERE dt IN ('\''1'\'','\''2'\'')","partition_column":"dt","target_table":"public.t","parallelism":2}'
-curl -s localhost:8000/jobs/<job_id>/status   # {"status":"DONE", ...}
+curl -s localhost:8088/jobs/<job_id>/status   # {"status":"DONE", ...}
 ```
 
 | `coordinator.executor_mode` | 동작 |
@@ -399,10 +399,10 @@ curl -s localhost:8000/jobs/<job_id>/status   # {"status":"DONE", ...}
 | 그외 정보 | `GET /info` | 버전·coordinator_id·executor_mode·store backend·self_report·uptime·상태별 job 수 |
 
 ```bash
-# 브라우저에서 http://<host>:8000/
-curl -s localhost:8000/jobs        # 작업 목록(JSON)
-curl -s localhost:8000/config      # 설정(마스킹)
-curl -s localhost:8000/info        # 요약
+# 브라우저에서 http://<host>:8088/
+curl -s localhost:8088/jobs        # 작업 목록(JSON)
+curl -s localhost:8088/config      # 설정(마스킹)
+curl -s localhost:8088/info        # 요약
 ```
 
 - 읽기 전용이며 `/config` 의 비밀값은 마스킹된다. 노출이 우려되면 `dashboard.enabled=false`
@@ -420,11 +420,11 @@ curl -s localhost:8000/info        # 요약
 | `/openapi.json` | OpenAPI 3 스키마 |
 
 ```bash
-# 브라우저에서 http://localhost:8000/docs (coordinator), http://localhost:8001/docs (executor)
+# 브라우저에서 http://localhost:8088/docs (coordinator), http://localhost:8087/docs (executor)
 ```
 
 ```bash
-curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('\''2026-01-01'\'','\''2026-01-02'\'') AND region='\''KR'\''",
   "partition_column": "dt",
   "target_table": "public.sales_mirror",
@@ -440,7 +440,7 @@ coordinator 1개 + executor 다수를 systemd 서비스로 운영하는 구성�
 
 ```bash
 sudo ./deploy/install.sh
-sudo systemctl enable --now query-executor@8001 query-executor@8002
+sudo systemctl enable --now query-executor@8087 query-executor@8086
 sudo systemctl enable --now query-coordinator
 ```
 
@@ -461,7 +461,7 @@ sudo systemctl enable --now query-coordinator
 등장하면 모두 치환된다. 괄호 등은 wrapper 작성자가 직접 둔다.
 
 ```bash
-curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT a, dt FROM sales WHERE dt IN ('\''1'\'','\''2'\'','\''3'\'','\''4'\'')",
   "partition_column": "dt",
   "target_table": "staging.sales_part",
@@ -505,7 +505,7 @@ CREATE TEMP TABLE <staging>  ─ staging_ddl
 을 참조한다(분할된 SELECT 는 staging 으로 적재되므로).
 
 ```bash
-curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT a, dt FROM imp WHERE dt IN ('\''1'\'','\''2'\'','\''3'\'')",
   "partition_column": "dt",
   "target_table": "public.target",
@@ -523,7 +523,7 @@ curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
 
 ```bash
 # INSERT 래퍼를 대상 DB에서 직접 실행 (COPY 미사용)
-curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT a, dt FROM src WHERE dt IN ('\''1'\'','\''2'\'','\''3'\'')",
   "partition_column": "dt",
   "target_table": "public.mirror",
@@ -551,7 +551,7 @@ SQL의 `A.REGION_NO` 에 매칭된다(대소문자도 무관). 단, 서로 다�
 `IN` 절이 여러 개 있으면 먼저 발견된 것이 선택되므로 그럴 땐 컬럼명이 유일해야 한다.
 
 ```bash
-curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT ... WHERE ... A.REGION_NO IN ('R1','R2','R3') ...",
   "partition_column": "REGION_NO",
   "target_table": "public.orders_mirror",

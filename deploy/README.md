@@ -17,7 +17,7 @@ coordinator 1개와 executor 다수를 systemd 서비스로 운영하기 위한 
 
 - **설정 디렉터리**: `/etc/query-executor/` (환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경 가능)
 - **로그**: `/var/log/query-executor/` (일 단위 롤링, `파일명_YYYYMMDD.log`)
-- **executor는 템플릿 유닛**이라 포트별로 여러 인스턴스를 띄운다: `query-executor@8001`, `query-executor@8002` ...
+- **executor는 템플릿 유닛**이라 포트별로 여러 인스턴스를 띄운다: `query-executor@8087`, `query-executor@8086` ...
 - coordinator·executor 모두 상태를 **프로세스 메모리**에 두므로 인스턴스당 **단일 워커**로 실행한다. 처리량 확장은 워커가 아니라 **executor 인스턴스 수**로 한다.
 
 ## 빠른 설치 (스크립트 사용)
@@ -33,7 +33,7 @@ sudo ./deploy/install.sh
 sudo vi /etc/query-executor/config.properties   # executors, impala.*, greenplum.dsn 등
 
 # 3) 서비스 기동 (executor 2개 + coordinator)
-sudo systemctl enable --now query-executor@8001 query-executor@8002
+sudo systemctl enable --now query-executor@8087 query-executor@8086
 sudo systemctl enable --now query-coordinator
 ```
 
@@ -50,8 +50,8 @@ sudo systemctl enable --now query-coordinator
 ```properties
 # Coordinator
 coordinator.host=0.0.0.0
-coordinator.port=8000
-coordinator.executors=http://127.0.0.1:8001,http://127.0.0.1:8002
+coordinator.port=8088
+coordinator.executors=http://127.0.0.1:8087,http://127.0.0.1:8086
 coordinator.id=                        # 멀티 coordinator 식별자(미지정 시 host:port)
 coordinator.executor_mode=remote       # remote(HTTP 디스패치) | local(in-process 직접 실행)
 
@@ -177,19 +177,19 @@ psql "$PG" -f /opt/query-executor/packaging/config/executor-status-schema.sql
 # 상태/로그(저널)
 systemctl status query-coordinator
 journalctl -u query-coordinator -f
-journalctl -u query-executor@8001 -f
+journalctl -u query-executor@8087 -f
 
 # 파일 로그(일 단위 롤링)
 tail -f /var/log/query-executor/query-coordinator-server.log
-tail -f /var/log/query-executor/query-executor-server-8001.log
+tail -f /var/log/query-executor/query-executor-server-8087.log
 
 # WARNING 이상만 모은 전용 로그(문제 추적용, *-warn.log)
 tail -f /var/log/query-executor/query-coordinator-server-warn.log
-tail -f /var/log/query-executor/query-executor-server-8001-warn.log
+tail -f /var/log/query-executor/query-executor-server-8087-warn.log
 
 # 재시작 / 중지
 sudo systemctl restart query-coordinator
-sudo systemctl stop query-executor@8002
+sudo systemctl stop query-executor@8086
 
 # executor 인스턴스 추가(포트 8003): config.properties 의 executors 에 추가 후
 sudo systemctl enable --now query-executor@8003
@@ -200,21 +200,21 @@ sudo systemctl restart query-coordinator
 
 ```bash
 # 헬스 / 메트릭(CPU·메모리·디스크)
-curl -s localhost:8000/health
-curl -s localhost:8000/metrics
-curl -s localhost:8001/health
-curl -s localhost:8001/metrics
+curl -s localhost:8088/health
+curl -s localhost:8088/metrics
+curl -s localhost:8087/health
+curl -s localhost:8087/metrics
 # coordinator가 보유한 executor 헬스/메트릭 상태 + 클러스터 통합 상태
-curl -s localhost:8000/executors
-curl -s localhost:8000/cluster
+curl -s localhost:8088/executors
+curl -s localhost:8088/cluster
 
-# 모니터링 대시보드(브라우저): coordinator http://<host>:8000/
-#   remote 모드면 각 executor 도 자기 화면 제공: http://<host>:8001/
+# 모니터링 대시보드(브라우저): coordinator http://<host>:8088/
+#   remote 모드면 각 executor 도 자기 화면 제공: http://<host>:8087/
 # Swagger UI / OpenAPI 스키마
-#   http://<host>:8000/docs , http://<host>:8001/docs
-curl -s localhost:8000/openapi.json | head -c 200
+#   http://<host>:8088/docs , http://<host>:8087/docs
+curl -s localhost:8088/openapi.json | head -c 200
 
-curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('\''2026-01-01'\'','\''2026-01-02'\'') AND region='\''KR'\''",
   "partition_column": "dt",
   "target_table": "public.sales_mirror",
@@ -224,14 +224,14 @@ curl -s localhost:8000/jobs -H 'content-type: application/json' -d '{
 
 ## 방화벽(firewalld)
 
-외부에서 coordinator(8000)에 접근해야 한다면:
+외부에서 coordinator(8088)에 접근해야 한다면:
 
 ```bash
-sudo firewall-cmd --permanent --add-port=8000/tcp
+sudo firewall-cmd --permanent --add-port=8088/tcp
 sudo firewall-cmd --reload
 ```
 
-executor 포트(8001, 8002 ...)는 보통 coordinator와 같은 호스트 내부 통신이므로 외부 개방이 불필요하다.
+executor 포트(8087, 8086 ...)는 보통 coordinator와 같은 호스트 내부 통신이므로 외부 개방이 불필요하다.
 
 ## 헬스/메트릭 모니터링
 
