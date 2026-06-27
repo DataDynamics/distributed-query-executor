@@ -69,6 +69,13 @@ class Settings:
         self.executor_log_filename: str = _get_nested(
             "logging", "filename", "executor", "query-executor-server.log"
         )
+        # WARNING 이상만 따로 모으는 별도 로그(운영 시 문제만 빠르게 추적). INFO 로그와 분리.
+        self.log_warn_enabled: bool = _to_bool(
+            _get_nested("logging", "warn", "enabled", True)
+        )
+        self.log_warn_level: str = _get_nested("logging", "warn", "level", "WARNING")
+        # 메인 로그 파일명 stem 뒤에 붙는 접미사: foo.log → foo-warn.log
+        self.log_warn_suffix: str = _get_nested("logging", "warn", "suffix", "-warn")
 
         self.config_dir: Path = _CONFIG_DIR
         self.config_yaml_path: Path = _yaml_path

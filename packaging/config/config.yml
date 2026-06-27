@@ -1,59 +1,77 @@
+# 분산 쿼리 실행기 메인 설정.
+# 값은 Spring Boot 스타일 자리표시자 ${변수:기본값} 을 사용하며,
+# config.properties 의 같은 이름 변수로 덮어쓸 수 있다(없으면 콜론 뒤 기본값 사용).
+
 app:
-  name: ${app.name:distributed-query-executor}
-  debug: ${app.debug:false}
+  name: ${app.name:distributed-query-executor}   # 애플리케이션 이름
+  debug: ${app.debug:false}                       # 디버그 모드(상세 로깅/검증)
 
 query:
-  sql_dialect: ${query.sql_dialect:hive}
+  sql_dialect: ${query.sql_dialect:hive}          # 쿼리 파싱 기본 방언(요청에서 재정의 가능)
 
+# ───────── 로깅 ─────────
+# 일 단위 롤링(파일명_YYYYMMDD.log). INFO 메인 로그와 WARNING 전용 로그를 분리한다.
 logging:
-  level: ${log.level:INFO}
-  dir: ${log.dir:/var/log/query-executor}
+  level: ${log.level:INFO}                        # 메인 로그 레벨(이 레벨 이상을 메인 파일에 기록)
+  dir: ${log.dir:/var/log/query-executor}         # 로그 디렉터리
   rolling:
-    type: daily
-    backup_count: ${log.backup_count:30}
+    type: daily                                   # 롤링 방식(일 단위)
+    backup_count: ${log.backup_count:30}          # 보관 일수(초과분 자동 삭제)
   filename:
-    coordinator: ${log.filename.coordinator:query-coordinator-server.log}
-    executor: ${log.filename.executor:query-executor-server.log}
+    coordinator: ${log.filename.coordinator:query-coordinator-server.log}   # coordinator 메인 로그 파일
+    executor: ${log.filename.executor:query-executor-server.log}            # executor 메인 로그 파일
+  # WARNING 이상만 별도 파일로 모아 운영 중 문제만 빠르게 추적한다.
+  # 파일명은 메인 로그 stem 뒤에 suffix 를 붙인 형태(예: query-coordinator-server-warn.log).
+  # 메인 레벨(level)을 WARNING 보다 높게 잡아도 이 로그는 비지 않으며, 로거 이름까지 함께 남긴다.
+  warn:
+    enabled: ${log.warn.enabled:true}             # WARNING 전용 로그 사용 여부
+    level: ${log.warn.level:WARNING}              # 전용 로그에 모을 최소 레벨(WARNING/ERROR)
+    suffix: ${log.warn.suffix:-warn}              # 메인 파일명 stem 뒤에 붙는 접미사
 
+# ───────── Coordinator ─────────
 coordinator:
-  host: ${coordinator.host:0.0.0.0}
-  port: ${coordinator.port:8000}
-  executor_mode: ${coordinator.executor_mode:remote}
-  id: ${coordinator.id:}
+  host: ${coordinator.host:0.0.0.0}                       # 바인드 주소
+  port: ${coordinator.port:8000}                          # 수신 포트
+  executor_mode: ${coordinator.executor_mode:remote}      # remote(HTTP 디스패치) | local(in-process 직접 실행)
+  id: ${coordinator.id:}                                  # 멀티 coordinator 식별자(미지정 시 host:port)
+  executors: ${coordinator.executors:}                    # executor 베이스 URL 목록(쉼표 구분)
+  # 동시 실행 슬롯 + 대기 큐(admission control)
+  max_concurrent_jobs: ${coordinator.max_concurrent_jobs:16}   # 동시에 RUNNING 가능한 job 수(실행 슬롯)
+  max_pending_jobs: ${coordinator.max_pending_jobs:100}        # 슬롯이 다 찼을 때 PENDING 으로 대기 가능한 job 수.
+                                                               # 실행+대기 합을 넘는 요청은 429 로 거부. 0 이하면 무제한.
+  max_dispatch_concurrency: ${coordinator.max_dispatch_concurrency:32}   # 동시 task 디스패치 상한(코루틴 동시성)
+  poll_interval_s: ${coordinator.poll_interval_s:1.0}     # task 상태 폴링 간격(초)
+  task_timeout_s: ${coordinator.task_timeout_s:3600}      # task HTTP 타임아웃(초)
 
 store:
-  backend: ${store.backend:memory}
-  table: ${store.table:jobs}
+  backend: ${store.backend:memory}                # 작업 저장소: memory(단일) | postgres(멀티 coordinator 공유)
+  table: ${store.table:jobs}                      # 공유 store 테이블명
 
 dashboard:
-  enabled: ${dashboard.enabled:true}
-  executors: ${coordinator.executors:}
-  max_concurrent_jobs: ${coordinator.max_concurrent_jobs:16}
-  max_dispatch_concurrency: ${coordinator.max_dispatch_concurrency:32}
-  poll_interval_s: ${coordinator.poll_interval_s:1.0}
-  task_timeout_s: ${coordinator.task_timeout_s:3600}
+  enabled: ${dashboard.enabled:true}              # / 모니터링 대시보드 사용 여부(읽기 전용)
 
 monitor:
-  enabled: ${monitor.enabled:true}
-  health_interval_s: ${monitor.health_interval_s:10}
-  record_interval_s: ${monitor.record_interval_s:60}
-  db_dsn: ${monitor.db_dsn:}
-  table: ${monitor.table:executor_health_metrics}
-  disk_path: ${monitor.disk_path:/}
+  enabled: ${monitor.enabled:true}               # executor 헬스/메트릭 모니터링 사용 여부
+  health_interval_s: ${monitor.health_interval_s:10}    # 헬스 체크 주기(초)
+  record_interval_s: ${monitor.record_interval_s:60}    # 메트릭 기록 주기(초)
+  db_dsn: ${monitor.db_dsn:}                      # 메트릭 기록 DB DSN(미설정 시 기록 생략)
+  table: ${monitor.table:executor_health_metrics}       # 메트릭 테이블명
+  disk_path: ${monitor.disk_path:/}              # 디스크 사용량 측정 경로
 
 history:
-  db_dsn: ${history.db_dsn:}
-  table: ${history.table:job_history}
-  task_table: ${history.task_table:task_history}
+  db_dsn: ${history.db_dsn:}                      # 실행 이력/상태 공유 DB DSN(미설정 시 이력 비활성)
+  table: ${history.table:job_history}             # job 실행 이력 테이블
+  task_table: ${history.task_table:task_history}  # task 실행 이력 테이블
 
+# ───────── Executor ─────────
 executor:
-  host: ${executor.host:0.0.0.0}
-  self_report: ${executor.self_report:false}
-  status_table: ${executor.status_table:executor_status}
-  status_interval_s: ${executor.status_interval_s:10}
-  max_concurrent_tasks: ${executor.max_concurrent_tasks:8}
+  host: ${executor.host:0.0.0.0}                          # 바인드 주소(포트는 EXECUTOR_PORT 환경변수)
+  self_report: ${executor.self_report:false}             # 상태를 공유 DB에 self-report 할지(멀티 coordinator)
+  status_table: ${executor.status_table:executor_status} # self-report 상태 테이블
+  status_interval_s: ${executor.status_interval_s:10}    # self-report 주기(초)
+  max_concurrent_tasks: ${executor.max_concurrent_tasks:8}   # executor 1대가 동시에 실행하는 task 수(0=무제한)
   impala:
-    host: ${impala.host:}
+    host: ${impala.host:}                         # Impala 호스트(미설정 시 Mock 백엔드)
     port: ${impala.port:21050}
     database: ${impala.database:default}
     auth_mechanism: ${impala.auth_mechanism:GSSAPI}
@@ -63,6 +81,6 @@ executor:
     user: ${impala.user:}
     password: ${impala.password:}
   greenplum:
-    dsn: ${greenplum.dsn:}
+    dsn: ${greenplum.dsn:}                        # Greenplum 적재 대상 DSN(미설정 시 Mock 백엔드)
   copy:
-    batch_size: ${copy.batch_size:10000}
+    batch_size: ${copy.batch_size:10000}          # COPY 배치 크기(행)

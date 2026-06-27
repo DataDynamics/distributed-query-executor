@@ -33,7 +33,19 @@ LOG_FORMAT = (
     "%(levelname)s %(asctime)s.%(msecs)03d %(process)d %(programname)s"
     " %(filename)s:%(funcName)s:%(lineno)d [%(job_id)s][%(task_id)s] - %(message)s"
 )
+# WARNING 전용 로그는 추적에 도움되도록 로거 이름(%(name)s)을 추가로 남긴다.
+WARN_LOG_FORMAT = (
+    "%(levelname)s %(asctime)s.%(msecs)03d %(process)d %(programname)s"
+    " %(name)s %(filename)s:%(funcName)s:%(lineno)d"
+    " [%(job_id)s][%(task_id)s] - %(message)s"
+)
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _warn_filename(filename: str, suffix: str) -> str:
+    """메인 로그 파일명 stem 뒤에 suffix 를 붙인다: foo.log → foo-warn.log."""
+    p = Path(filename)
+    return f"{p.stem}{suffix}{p.suffix or '.log'}"
 
 
 class _ProgramNameFilter(logging.Filter):
@@ -104,9 +116,25 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
     file_handler.addFilter(program_filter)
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
+    # 루트 레벨은 메인 로그와 WARNING 로그 중 더 낮은(더 많이 통과시키는) 쪽으로 맞춘다.
+    # (메인 레벨이 WARNING 보다 높게 설정돼도 WARNING 로그가 비지 않도록)
+    warn_level = getattr(logging, settings.log_warn_level.upper(), logging.WARNING)
+    root_level = min(log_level, warn_level) if settings.log_warn_enabled else log_level
+    root_logger.setLevel(root_level)
     root_logger.handlers.clear()
     root_logger.addHandler(file_handler)
+
+    # WARNING 이상만 모으는 별도 롤링 파일(문제만 빠르게 추적). INFO 로그와 분리·강화 포맷.
+    if settings.log_warn_enabled:
+        warn_handler = _DailyFileHandler(
+            log_dir=log_dir,
+            filename=_warn_filename(filename, settings.log_warn_suffix),
+            backup_count=settings.log_rolling_backup_count,
+        )
+        warn_handler.setLevel(warn_level)
+        warn_handler.setFormatter(logging.Formatter(fmt=WARN_LOG_FORMAT, datefmt=DATE_FORMAT))
+        warn_handler.addFilter(program_filter)
+        root_logger.addHandler(warn_handler)
 
     # uvicorn/httpx 등의 과도한 로그를 레벨에 맞춰 정리
     logging.getLogger("uvicorn.access").setLevel(
