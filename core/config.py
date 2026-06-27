@@ -103,6 +103,11 @@ class Settings:
         self.max_concurrent_jobs: int = int(
             _get("coordinator", "max_concurrent_jobs", 16)
         )
+        # 실행 슬롯(max_concurrent_jobs)이 다 찼을 때 PENDING 으로 대기 가능한 job 수.
+        # 실행+대기 합을 넘는 요청은 429 로 거부. 0 이하이면 무제한.
+        self.max_pending_jobs: int = int(
+            _get("coordinator", "max_pending_jobs", 100)
+        )
         self.max_dispatch_concurrency: int = int(
             _get("coordinator", "max_dispatch_concurrency", 32)
         )

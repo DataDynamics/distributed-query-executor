@@ -26,6 +26,7 @@ def masked_config(settings) -> list[dict]:
         ("coordinator", "id", settings.coordinator_id),
         ("coordinator", "executor_mode", settings.executor_mode),
         ("coordinator", "max_concurrent_jobs", settings.max_concurrent_jobs),
+        ("coordinator", "max_pending_jobs", settings.max_pending_jobs),
         ("coordinator", "max_dispatch_concurrency", settings.max_dispatch_concurrency),
         ("coordinator", "poll_interval_s", settings.poll_interval_s),
         ("coordinator", "task_timeout_s", settings.task_timeout_s),

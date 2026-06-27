@@ -199,41 +199,64 @@ def create_app(
                 },
             )
 
-        job = Job(
-            job_id=job_id,
-            original_sql=req.sql,
-            partition_column=req.partition_column,
-            target_table=req.target_table,
-            write_mode=req.write_mode,
-            parallelism=req.parallelism,
-            split_strategy=req.split_strategy,
-            failure_policy=req.failure_policy,
-            username=req.username,
-            exec_mode=req.exec_mode,
-            staging_table=req.staging_table,
-            staging_ddl=req.staging_ddl,
-            insert_sql=req.wrapper_query if req.exec_mode == "stage_insert" else None,
-            status=JobStatus.SPLITTING,
-        )
-        job.tasks = [
-            Task(
-                job_id=job.job_id,
-                executor_url=url,
-                sub_query=sq.sql,
-                partition_values=sq.partition_values,
+        # 동시 실행 슬롯 + 대기 큐 상한(admission control). 초과 시 429 로 거부한다.
+        # 정상 부하는 PENDING 으로 흡수(runner.run 안에서 슬롯 대기)하고,
+        # 실행+대기 용량을 넘는 폭주만 여기서 막아 메모리/다운스트림을 보호한다.
+        admission = getattr(runner, "admission", None)
+        if admission is not None and not admission.try_admit():
+            logger.warning(
+                "동시 job 한도 초과로 거부 (in-flight=%s, capacity=%s)",
+                admission.inflight, admission.capacity,
             )
-            for sq, url in zip(sub_queries, executor_urls)
-        ]
-        store.add(job)
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"동시 실행/대기 job 한도 초과(capacity={admission.capacity}). "
+                    "잠시 후 재시도하세요."
+                ),
+                headers={"Retry-After": "5"},
+            )
+        try:
+            job = Job(
+                job_id=job_id,
+                original_sql=req.sql,
+                partition_column=req.partition_column,
+                target_table=req.target_table,
+                write_mode=req.write_mode,
+                parallelism=req.parallelism,
+                split_strategy=req.split_strategy,
+                failure_policy=req.failure_policy,
+                username=req.username,
+                exec_mode=req.exec_mode,
+                staging_table=req.staging_table,
+                staging_ddl=req.staging_ddl,
+                insert_sql=req.wrapper_query if req.exec_mode == "stage_insert" else None,
+                status=JobStatus.SPLITTING,
+            )
+            job.tasks = [
+                Task(
+                    job_id=job.job_id,
+                    executor_url=url,
+                    sub_query=sq.sql,
+                    partition_values=sq.partition_values,
+                )
+                for sq, url in zip(sub_queries, executor_urls)
+            ]
+            store.add(job)
 
-        logger.info(
-            "job %s 생성: %d개 sub-query로 분할 (partition=%s, target=%s)",
-            job.job_id,
-            len(job.tasks),
-            req.partition_column,
-            req.target_table,
-        )
-        background.add_task(runner.run, job)
+            logger.info(
+                "job %s 생성: %d개 sub-query로 분할 (partition=%s, target=%s)",
+                job.job_id,
+                len(job.tasks),
+                req.partition_column,
+                req.target_table,
+            )
+            background.add_task(runner.run, job)
+        except Exception:
+            # 수용했지만 스케줄 전에 실패 → in-flight 슬롯 반납(run 이 호출되지 않으므로).
+            if admission is not None:
+                admission.release()
+            raise
         return CreateJobResponse(job_id=job.job_id)
 
     @app.get("/jobs/{job_id}", tags=["Jobs"], summary="작업 상태 조회(태스크 포함)")
@@ -442,6 +465,7 @@ def create_app(
                 "jobs_total": len(all_jobs),
                 "executors_configured": len(settings.executors),
                 "max_concurrent_jobs": settings.max_concurrent_jobs,
+                "max_pending_jobs": settings.max_pending_jobs,
                 "max_dispatch_concurrency": settings.max_dispatch_concurrency,
                 "jobs_by_status": by_status,
             }
