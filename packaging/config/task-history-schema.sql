@@ -16,13 +16,19 @@ CREATE TABLE IF NOT EXISTS task_history (
     error        TEXT,
     started_at   TIMESTAMPTZ,   -- task 가 READING 을 시작한 시각
     finished_at  TIMESTAMPTZ,   -- task 가 종료(DONE/FAILED/CANCELLED)된 시각
-    sub_query    TEXT           -- 이 task 가 실행한 sub-query 전문
+    sub_query    TEXT,          -- 이 task 가 실행한 SELECT sub-query 전문
+    exec_mode    TEXT,          -- 적재 방식: copy | statement | stage_insert
+    staging_ddl  TEXT,          -- stage_insert 의 staging(TEMP) 생성 DDL
+    insert_sql   TEXT           -- stage_insert 의 INSERT 문(staging→target)
 );
 
 -- 구버전 테이블 보강(앱도 자동 수행). 이미 있으면 무시된다.
 ALTER TABLE task_history ADD COLUMN IF NOT EXISTS started_at  TIMESTAMPTZ;
 ALTER TABLE task_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
 ALTER TABLE task_history ADD COLUMN IF NOT EXISTS sub_query   TEXT;
+ALTER TABLE task_history ADD COLUMN IF NOT EXISTS exec_mode   TEXT;
+ALTER TABLE task_history ADD COLUMN IF NOT EXISTS staging_ddl TEXT;
+ALTER TABLE task_history ADD COLUMN IF NOT EXISTS insert_sql  TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_task_history_job_id ON task_history (job_id);
 CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON task_history (task_id);

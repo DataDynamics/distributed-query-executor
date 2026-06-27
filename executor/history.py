@@ -29,23 +29,29 @@ CREATE TABLE IF NOT EXISTS {table} (
     error         TEXT,
     started_at    TIMESTAMPTZ,
     finished_at   TIMESTAMPTZ,
-    sub_query     TEXT
+    sub_query     TEXT,
+    exec_mode     TEXT,
+    staging_ddl   TEXT,
+    insert_sql    TEXT
 )
 """
 
-# 구버전 테이블(started_at/finished_at/sub_query 컬럼이 없던)을 보강하는 마이그레이션.
+# 구버전 테이블에 신규 컬럼을 보강하는 마이그레이션.
 # ADD COLUMN IF NOT EXISTS 라 이미 있으면 무시되어 반복 실행에 안전하다.
 _ALTERS = (
     "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
     "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
     "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS sub_query TEXT",
+    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS exec_mode TEXT",
+    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS staging_ddl TEXT",
+    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS insert_sql TEXT",
 )
 
 _INSERT = """
 INSERT INTO {table}
     (job_id, task_id, username, executor_id, status, rows_written, error,
-     started_at, finished_at, sub_query)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     started_at, finished_at, sub_query, exec_mode, staging_ddl, insert_sql)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -105,9 +111,11 @@ class TaskHistoryRepository:
                 total = cur.fetchone()[0]
                 cur.execute(
                     "SELECT recorded_at, job_id, task_id, username, status, "
-                    "rows_written, error, started_at, finished_at, sub_query FROM ("
+                    "rows_written, error, started_at, finished_at, sub_query, "
+                    "exec_mode, staging_ddl, insert_sql FROM ("
                     "  SELECT DISTINCT ON (task_id) recorded_at, job_id, task_id, "
-                    "    username, status, rows_written, error, started_at, finished_at, sub_query "
+                    "    username, status, rows_written, error, started_at, finished_at, "
+                    "    sub_query, exec_mode, staging_ddl, insert_sql "
                     f"  FROM {self.table} WHERE executor_id = %s "
                     "  ORDER BY task_id, recorded_at DESC"
                     ") t ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
@@ -122,7 +130,8 @@ class TaskHistoryRepository:
                 "rows_written": r[5], "error": r[6],
                 "started_at": r[7].isoformat() if r[7] is not None else None,
                 "finished_at": r[8].isoformat() if r[8] is not None else None,
-                "sub_query": r[9],
+                "sub_query": r[9], "exec_mode": r[10],
+                "staging_ddl": r[11], "insert_sql": r[12],
             }
             for r in rows
         ]
@@ -168,6 +177,9 @@ class TaskHistoryRepository:
             getattr(task, "started_at", None),
             getattr(task, "finished_at", None),
             getattr(task, "sub_query", None),
+            getattr(task, "exec_mode", None),
+            getattr(task, "staging_ddl", None),
+            getattr(task, "insert_sql", None),
         )
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:

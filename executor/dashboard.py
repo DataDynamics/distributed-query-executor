@@ -204,11 +204,28 @@ function table(cols, rows){
   for(const r of rows){ h += "<tr>" + cols.map(c=>`<td>${c.f?c.f(r):fmt(r[c.k])}</td>`).join("") + "</tr>"; }
   return h + "</tbody></table>";
 }
-// Task ID → sub-query 매핑/모달. 행 클릭 시 해당 task 의 쿼리 전문을 보여준다.
+// Task ID → 쿼리 정보 매핑/모달. 행 클릭 시 SELECT 와 (있으면) INSERT 를 함께 보여준다.
+// 값은 {exec_mode, sub_query, staging_ddl, insert_sql} 형태.
 const sqlMap = {};
+// 적재 방식에 맞춰 SELECT / STAGING / INSERT 섹션을 하나의 텍스트로 조립한다.
+function composeSql(q){
+  if(!q) return '(쿼리문 없음)';
+  const parts = [];
+  if(q.exec_mode) parts.push(`-- 실행 방식: ${q.exec_mode}`);
+  if(q.exec_mode === 'statement'){
+    // statement 모드: sub_query 자체가 INSERT ... SELECT (대상 DB에서 그대로 실행)
+    if(q.sub_query) parts.push(`-- SELECT + INSERT (대상 DB에서 실행)\n${q.sub_query}`);
+  } else {
+    // copy / stage_insert: SELECT 는 sub_query
+    if(q.sub_query) parts.push(`-- SELECT (Impala 읽기)\n${q.sub_query}`);
+    if(q.staging_ddl) parts.push(`-- STAGING DDL (Greenplum TEMP)\n${q.staging_ddl}`);
+    if(q.insert_sql) parts.push(`-- INSERT (staging → target)\n${q.insert_sql}`);
+  }
+  return parts.join('\n\n') || '(쿼리문 없음)';
+}
 function showSql(id){
   $("#modal-title").textContent = id;
-  $("#modal-sql").textContent = sqlMap[id] || '(쿼리문 없음)';
+  $("#modal-sql").textContent = composeSql(sqlMap[id]);
   $("#modal").style.display = 'flex';
 }
 function closeModal(){ $("#modal").style.display = 'none'; }
@@ -254,7 +271,11 @@ async function loadHist(){
     return;
   }
   histTotal = d.total || 0;
-  (d.rows||[]).forEach(r=>{ if(r.sub_query) sqlMap[r.task_id]=r.sub_query; });
+  (d.rows||[]).forEach(r=>{
+    if(r.sub_query || r.insert_sql || r.staging_ddl)
+      sqlMap[r.task_id] = {exec_mode:r.exec_mode, sub_query:r.sub_query,
+                           staging_ddl:r.staging_ddl, insert_sql:r.insert_sql};
+  });
   const cols = [
     {t:"작업 ID", f:r=>`<code>${fmt(r.job_id)}</code>`},
     {t:"Task ID", f:r=>taskLink(r.task_id)},
