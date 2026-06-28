@@ -202,6 +202,16 @@ psql "$PG" -f /appuser/query-executor/packaging/config/postgresql.sql
 > 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 둔다.
 > 이력만 남기고 싶으면 `history.db_dsn` 만 설정해도 된다(저장소/ self-report 는 끄고).
 
+> **WarehousePG / Greenplum 7 에 메타 저장소를 둘 때**는 `postgresql.sql` 대신
+> [`warehousepg.sql`](../packaging/config/warehousepg.sql) 을 적용한다(테이블마다 `DISTRIBUTED BY`
+> 지정, history/metrics 는 대리 PK 를 빼고 `job_id`/`executor_url` 로 co-locate). 앱 코드는
+> 그대로다(`ON CONFLICT`·`JSONB`·`DISTINCT ON` 모두 GP7=PG12 에서 지원). 다만 heartbeat/예약은
+> 고빈도 단일행 UPSERT 라 MPP 와 맞지 않으므로, 성능이 중요하면 이 메타 저장소는 PostgreSQL 에
+> 두고 WarehousePG 는 데이터 적재 대상(`greenplum.dsn`)으로만 쓰는 편이 낫다.
+> ```bash
+> psql "$PG" -f /appuser/query-executor/packaging/config/warehousepg.sql
+> ```
+
 ## 운영 명령
 
 ```bash
