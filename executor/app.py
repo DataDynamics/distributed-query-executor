@@ -422,6 +422,7 @@ def create_app(
                 "version": "0.1.0",
                 "executor_id": _executor_id(),
                 "self_report": settings.executor_self_report,
+                "advertise_url": settings.executor_advertise_url,
                 "max_concurrent_tasks": mx,
                 "active_tasks": active,
                 "queued_tasks": queued,

@@ -78,6 +78,20 @@ def masked_config(settings) -> list[dict]:
          "재시도 백오프 기준(초): 대기 = backoff * 2**시도"),
         ("coordinator", "task_failover", settings.task_failover,
          "재시도 소진 시 다른 executor 로 재배정(failover) 여부"),
+        ("coordinator", "executor_select", settings.executor_select,
+         "executor 선택 정책: round_robin | least_loaded | p2c(HA 권장)"),
+        ("coordinator", "executor_health_source", settings.executor_health_source,
+         "부하 뷰 소스: auto(멀티=self_report, 단일=monitor) | monitor | self_report"),
+        ("coordinator", "executor_reservation", settings.executor_reservation,
+         "공유 TTL 예약(엄격 균형). dispatch 중 task 를 예약해 전역 부하를 공유"),
+        ("coordinator", "reservation_ttl_s", settings.reservation_ttl_s,
+         "예약 만료(초). 죽은 coordinator 의 예약 누수 방지"),
+        ("coordinator", "heartbeat_interval_s", settings.heartbeat_interval_s,
+         "coordinator 자기 생존 heartbeat 주기(초)"),
+        ("coordinator", "coordinator_stale_s", settings.coordinator_stale_s,
+         "coordinator 생존 판정 임계(초). 초과 시 죽은 것으로 간주"),
+        ("coordinator", "orphan_reconcile_interval_s", settings.orphan_reconcile_interval_s,
+         "죽은 coordinator 소유 job 정합 주기(초). 0=비활성"),
         ("store", "backend", settings.store_backend,
          "Job 저장소: memory(단일) | postgres(멀티 coordinator 공유)"),
         ("store", "table", settings.store_table, "공유 store 테이블명(postgres backend)"),
@@ -98,11 +112,15 @@ def masked_config(settings) -> list[dict]:
          "executor 바인드 주소(포트는 EXECUTOR_PORT 환경변수)"),
         ("executor", "self_report", settings.executor_self_report,
          "executor 가 자기 상태를 공유 DB에 직접 기록(멀티 coordinator)"),
+        ("executor", "advertise_url", settings.executor_advertise_url or "(없음)",
+         "self-report 에 기록할 자기 base URL(HA URL 키 부하 뷰). coordinator.executors 와 일치"),
         ("executor", "status_table", settings.executor_status_table, "executor self-report 상태 테이블"),
         ("executor", "status_interval_s", settings.executor_status_interval_s,
          "executor self-report 주기(초)"),
         ("executor", "max_concurrent_tasks", settings.executor_max_concurrent_tasks,
          "executor 1대가 동시에 실행하는 task 수(0=무제한)"),
+        ("executor", "shutdown_drain_timeout_s", settings.executor_shutdown_drain_timeout_s,
+         "종료(SIGTERM) 시 진행 중 task 완료를 기다리는 최대 시간(초)"),
         ("executor", "executors", ", ".join(settings.executors) or "(없음)",
          "디스패치 대상 executor 베이스 URL 목록"),
         ("impala", "host", settings.impala_host or "(미설정→Mock)",
@@ -123,6 +141,8 @@ def masked_config(settings) -> list[dict]:
         ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn),
          "Greenplum(타깃) 적재 DSN. 미설정 시 MockBackend"),
         ("greenplum", "copy_batch_size", settings.copy_batch_size, "COPY 배치 크기(행)"),
+        ("greenplum", "copy_preflight", settings.copy_preflight,
+         "COPY 전 SELECT 컬럼이 대상 테이블에 있는지 사전검증(불일치 조기 실패)"),
         ("logging", "level", settings.log_level, "메인 로그 레벨(이 레벨 이상 기록)"),
         ("logging", "dir", str(settings.log_dir), "로그 디렉터리(일 단위 롤링)"),
         ("logging", "rolling.backup_count", settings.log_rolling_backup_count,
@@ -331,11 +351,13 @@ function histNext(){ if(histOffset + HIST_LIMIT < histTotal){ histOffset += HIST
 async function loadExec(){
   const d = await getJSON("/cluster");
   const cm = d.coordinator.metrics;
+  const assign = d.assignment_counts || {};
   const cards = `<div class="cards">
     <div class="card"><div class="k">Coordinator CPU</div><div class="v">${cm.cpu_percent}%</div></div>
     <div class="card"><div class="k">MEM</div><div class="v">${cm.memory.percent}%</div></div>
     <div class="card"><div class="k">DISK</div><div class="v">${cm.disk.percent}%</div></div>
     <div class="card"><div class="k">Executor</div><div class="v">${d.executors_summary.healthy}/${d.executors_summary.total}</div></div>
+    <div class="card"><div class="k">선택 정책</div><div class="v">${fmt(d.executor_select)}</div></div>
    </div>`;
   const cols = [
     {t:"Executor", f:r=>`<code>${fmt(r.executor_id||r.executor_url)}</code>`},
@@ -344,6 +366,7 @@ async function loadExec(){
     {t:"MEM%", k:"memory_percent"},
     {t:"DISK%", k:"disk_percent"},
     {t:"동시 처리", f:r=>concBar(r.active_tasks, r.max_concurrent_tasks)},
+    {t:"누적 배정", f:r=>fmtNum(assign[r.executor_url])},
     {t:"Last Seen", f:r=>`<span class="mut">${fmtDate(r.updated_at||r.last_checked)}</span>`},
     {t:"Error", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
   ];
@@ -366,6 +389,9 @@ const infoDesc = {
   executor_mode: "remote(HTTP 디스패치) | local(in-process 직접 실행)",
   store_backend: "Job 저장소 backend(memory | postgres)",
   executor_self_report: "executor 자기 상태 self-report 사용 여부",
+  executor_select: "executor 선택 정책(round_robin | least_loaded | p2c)",
+  executor_health_source: "부하 뷰 소스(auto | monitor | self_report)",
+  executor_reservation: "공유 TTL 예약(엄격 균형) 사용 여부",
   started_at: "이 coordinator 기동 시각",
   uptime_seconds: "기동 후 경과 시간(초)",
   jobs_total: "저장소에 보관된 전체 job 수",
@@ -397,7 +423,7 @@ document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
   active = b.dataset.tab; refresh();
 });
 getJSON("/info").then(d=>{ $("#hdr").textContent =
-  `id=${d.coordinator_id} · mode=${d.executor_mode} · store=${d.store_backend} · v${d.version}`; });
+  `id=${d.coordinator_id} · mode=${d.executor_mode} · store=${d.store_backend} · select=${d.executor_select} · v${d.version}`; });
 refresh();
 setInterval(()=>{ if(!document.hidden) refresh(); }, 3000);
 </script>

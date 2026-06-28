@@ -50,11 +50,15 @@ def masked_config(settings) -> list[dict]:
          "executor 바인드 주소(포트는 EXECUTOR_PORT 환경변수)"),
         ("executor", "self_report", settings.executor_self_report,
          "자기 상태를 공유 DB에 직접 기록(멀티 coordinator)"),
+        ("executor", "advertise_url", settings.executor_advertise_url or "(없음)",
+         "self-report 에 기록할 자기 base URL(HA URL 키 부하 뷰). coordinator.executors 와 일치"),
         ("executor", "status_table", settings.executor_status_table, "self-report 상태 테이블"),
         ("executor", "status_interval_s", settings.executor_status_interval_s,
          "self-report 주기(초)"),
         ("executor", "max_concurrent_tasks", settings.executor_max_concurrent_tasks,
          "이 executor 가 동시에 실행하는 task 수(0=무제한)"),
+        ("executor", "shutdown_drain_timeout_s", settings.executor_shutdown_drain_timeout_s,
+         "종료(SIGTERM) 시 진행 중 task 완료를 기다리는 최대 시간(초)"),
         ("history", "db_dsn", mask_dsn(settings.history_db_dsn),
          "task 이력/공유 상태 DB DSN(미설정 시 이력 비활성)"),
         ("history", "task_table", settings.task_history_table, "task 실행 이력 테이블"),
@@ -77,6 +81,8 @@ def masked_config(settings) -> list[dict]:
         ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn),
          "Greenplum(타깃) 적재 DSN. 미설정 시 MockBackend"),
         ("greenplum", "copy_batch_size", settings.copy_batch_size, "COPY 배치 크기(행)"),
+        ("greenplum", "copy_preflight", settings.copy_preflight,
+         "COPY 전 SELECT 컬럼이 대상 테이블에 있는지 사전검증(불일치 조기 실패)"),
         ("logging", "level", settings.log_level, "메인 로그 레벨(이 레벨 이상 기록)"),
         ("logging", "dir", str(settings.log_dir), "로그 디렉터리(일 단위 롤링)"),
         ("logging", "rolling.backup_count", settings.log_rolling_backup_count,
@@ -318,6 +324,7 @@ const infoDesc = {
   version: "애플리케이션 버전",
   executor_id: "이 executor 인스턴스 식별자(host:port)",
   self_report: "자기 상태 self-report 사용 여부",
+  advertise_url: "self-report 에 기록하는 자기 base URL(HA URL 키 부하 뷰)",
   max_concurrent_tasks: "동시에 실행하는 task 상한(0=무제한)",
   active_tasks: "현재 실행 중(READING/WRITING) task 수",
   queued_tasks: "대기 중(QUEUED) task 수",
@@ -348,7 +355,7 @@ document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
   active = b.dataset.tab; refresh();
 });
 getJSON("/info").then(d=>{ $("#hdr").textContent =
-  `id=${d.executor_id} · max=${d.max_concurrent_tasks} · v${d.version}`; });
+  `id=${d.executor_id} · max=${d.max_concurrent_tasks} · self_report=${d.self_report} · v${d.version}`; });
 refresh();
 setInterval(()=>{ if(!document.hidden) refresh(); }, 3000);
 </script>
