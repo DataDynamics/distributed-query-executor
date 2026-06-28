@@ -142,6 +142,10 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
   테이블에 있는지 확인해 불일치를 조기 실패시킨다(대용량 스트리밍 전에 차단).
 - **graceful drain**: executor 종료(SIGTERM) 시 진행 중 task 를 강제 중단하지 않고
   `executor.shutdown_drain_timeout_s`(기본 25초) 내에서 완료를 기다린다.
+- **헬스 기반 executor 선택(`coordinator.executor_select`)**: `round_robin`(기본) /
+  `least_loaded` / `p2c`. `least_loaded`·`p2c`는 HealthMonitor 스냅샷(헬스+`active_tasks`)을
+  보고 failover 시 **살아있는·한가한 executor 먼저** 시도한다. **HA(다중 coordinator)** 에서는
+  분산 스탬피드를 피하는 **`p2c`(Power-of-Two-Choices)** 권장.
 - **coordinator admission control(동시 job 제한 + 대기 큐)**: 들어온 job 요청을
   - 실행 슬롯(`coordinator.max_concurrent_jobs`, 기본 16)이 비어 있으면 즉시 `RUNNING`,
   - 다 찼으면 `PENDING` 으로 **대기 큐**에 넣고(`coordinator.max_pending_jobs`, 기본 100),

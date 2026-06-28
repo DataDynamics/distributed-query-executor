@@ -51,6 +51,7 @@ from .models import (
 )
 from .monitor import HealthMonitor
 from .parser import QueryValidationError, is_row_returning, validate_and_parse
+from .selector import ExecutorSelector, SharedLoadView
 from .splitter import split, wrap
 
 logger = logging.getLogger(__name__)
@@ -99,15 +100,21 @@ def create_app(
     """
     settings = settings or default_settings
     store = store or build_job_store(settings)
+    monitor = HealthMonitor(settings)
+    # 헬스/부하 기반 executor 선택(Phase 1). round_robin(기본)이 아니면 monitor 스냅샷을
+    # 부하 뷰로 써서 failover 순서를 헬스 기반으로 정한다(p2c 권장 — HA 분산 스탬피드 방지).
+    _select_policy = getattr(settings, "executor_select", "round_robin")
+    selection_enabled = _select_policy in ("least_loaded", "p2c")
+    selector = ExecutorSelector(policy=_select_policy) if selection_enabled else None
+    load_view = SharedLoadView(monitor.snapshot) if selection_enabled else None
     if runner is None:
         # executor_mode 에 따라 디스패처 선택: local 은 in-process 직접 실행,
         # 그 외(http)는 원격 executor에 HTTP로 task를 분배한다.
         runner = (
             LocalDispatcher(settings, store=store)
             if settings.executor_mode == "local"
-            else HttpDispatcher(settings, store=store)
+            else HttpDispatcher(settings, store=store, load_view=load_view, selector=selector)
         )
-    monitor = HealthMonitor(settings)
     started_at = datetime.now(timezone.utc)
     start_monotonic = time.monotonic()
     # self-report 모드면 executor 상태를 공유 테이블에서 읽는다(coordinator 폴링/기록 안 함)
@@ -122,14 +129,15 @@ def create_app(
         # 앱 수명주기 훅: 기동 시 (1) 재기동 정합 — 영속 저장소(file/postgres)에서 비종료로
         # 남은 job 을 '중단됨(FAILED)'으로 표시해 retry 로 재개 가능하게 한다(인메모리면 no-op).
         # (2) 헬스 모니터를 켠다. status_repo 가 있으면 executor self-report 모드라 폴링 모니터는
-        # 띄우지 않는다.
+        # 보통 띄우지 않지만, 헬스 기반 executor 선택이 켜져 있으면 선택용 부하 뷰를 위해 폴링한다.
         reconcile_interrupted_jobs(store)
-        if status_repo is None:
+        need_monitor = status_repo is None or selection_enabled
+        if need_monitor:
             await monitor.start()
         try:
             yield
         finally:
-            if status_repo is None:
+            if need_monitor:
                 await monitor.stop()
 
     app = FastAPI(

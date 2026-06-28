@@ -507,7 +507,7 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 ## 17. 향후 확장
 
 - **실행 중 즉시 취소**: 백엔드 커서 취소(`cursor.cancel()`) + 트랜잭션 rollback으로 진행 중 Impala/COPY 즉시 중단.
-- **헬스 기반 executor 선택**: 현재 failover 는 설정된 executor 를 순서대로 시도(죽은 후보는 짧은 connect 타임아웃으로 빠르게 건너뜀)한다. 모니터의 헬스 스냅샷을 참조해 살아있는 executor 를 우선 배정하면 더 효율적이다.
+- **헬스 기반 executor 선택**(Phase 1 구현됨): `coordinator.executor_select=least_loaded|p2c`이면 HealthMonitor 스냅샷(헬스+`active_tasks`)을 보고 **failover 순서**를 살아있는·한가한 노드 먼저로 정한다. HA(다중 coordinator)에서는 분산 스탬피드를 피하는 **P2C**가 기본 권장(`coordinator/selector.py`). 남은 단계: 초기 배정도 헬스 기반(Phase 2), 엄격 균형용 공유 예약 + TTL 정합(Phase 3, 멀티 coordinator).
 - **append 모드 재실행 안전화**: 현재 폴링 중 유실은 멱등(`overwrite_partitions`)일 때만 재배정한다. task 단위 staging+swap 등으로 `append`도 안전 재실행 가능하게.
 - **callback 기반 상태 전파**: polling 대신 executor→coordinator 콜백으로 부하 제거.
 - **집계/GROUP BY 쿼리 지원**: 소스 측 사전 집계 후 적재 또는 적재 후 재집계.

@@ -195,7 +195,8 @@ class _DispatcherBase:
         - ``store`` : (선택) job 상태 공유 저장소. 없으면 인메모리만으로 동작.
     """
 
-    def __init__(self, settings: Settings, history: Optional[JobHistoryRepository] = None, store=None):
+    def __init__(self, settings: Settings, history: Optional[JobHistoryRepository] = None,
+                 store=None, load_view=None, selector=None):
         self.settings = settings
         # job 내부에서 동시에 진행할 수 있는 task 수 상한(예: executor 동시 호출 제한).
         # 위 admission(job 단위)과 층위가 다른, task 단위 동시성 제어다.
@@ -203,6 +204,10 @@ class _DispatcherBase:
         self.history = history or JobHistoryRepository(settings)
         self.store = store
         self.admission = JobAdmission(settings)
+        # 헬스/부하 기반 executor 선택(선택). 둘 다 주입되면 failover 순서를 헬스 기반으로
+        # 정한다. 미주입(기본)이면 기존 정적 순서를 그대로 쓴다.
+        self.load_view = load_view
+        self.selector = selector
 
     def _save(self, job: Job) -> None:
         # store 가 주입된 경우에만 영속화한다(인메모리 모드면 no-op).
@@ -312,16 +317,27 @@ class HttpDispatcher(_DispatcherBase):
     def _failover_order(self, task: Task) -> list[str]:
         """이 task 를 시도할 executor URL 순서를 만든다.
 
-        배정된 executor 를 먼저 두고, task_failover 가 켜져 있으면 설정된 다른 executor 들을
-        뒤에 붙여 failover 후보로 삼는다. 비활성이거나 후보가 없으면 배정된 executor 하나만
-        반환한다. 짧은 connect 타임아웃 덕분에 죽은 후보는 빠르게 건너뛴다.
+        - task_failover 가 꺼져 있으면 배정된 executor 하나만 시도한다(기존 동작).
+        - selector+load_view 가 주입돼 있으면 **헬스/부하 기반(P2C 등)** 으로 dispatch 시점의
+          최신 스냅샷을 보고 순서를 정한다(살아있는·한가한 노드 먼저, 죽은 후보는 뒤로).
+          설정에 없는 배정 executor 가 있으면 보존을 위해 앞에 둔다.
+        - 미주입(기본)이면 배정 executor 를 먼저, 나머지를 설정 순서대로 붙인다.
+        짧은 connect 타임아웃 덕분에 죽은 후보는 빠르게 건너뛴다.
         """
         primary = task.executor_url
+        if not self.settings.task_failover:
+            return [primary] if primary else []
+
+        if self.selector is not None and self.load_view is not None:
+            order = self.selector.order(list(self.settings.executors), self.load_view.by_url())
+            if primary and primary not in order:
+                order = [primary] + order
+            return order or ([primary] if primary else [])
+
         order = [primary] if primary else []
-        if self.settings.task_failover:
-            for url in self.settings.executors:
-                if url and url not in order:
-                    order.append(url)
+        for url in self.settings.executors:
+            if url and url not in order:
+                order.append(url)
         return order or [primary]
 
     async def _run_task(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:

@@ -230,6 +230,13 @@ class Settings:
         self.task_failover: bool = _to_bool(
             _get("coordinator", "task_failover", True)
         )
+        # executor 선택 정책(failover 순서): round_robin(기본, 현행) | least_loaded | p2c.
+        # least_loaded/p2c 면 HealthMonitor 스냅샷(헬스+active_tasks)을 보고 살아있는·한가한
+        # 노드를 먼저 시도한다. HA(다중 coordinator)에서는 분산 스탬피드를 피하는 p2c 권장.
+        self.executor_select: str = (
+            os.getenv("COORDINATOR_EXECUTOR_SELECT")
+            or _get("coordinator", "executor_select", "round_robin")
+        ).lower()
 
         # ───────── Coordinator - executor 헬스 모니터링 & 메트릭 기록 ─────────
         self.monitor_enabled: bool = _to_bool(_get("monitor", "enabled", True))

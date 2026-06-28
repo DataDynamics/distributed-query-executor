@@ -48,6 +48,8 @@ coordinator:
   task_retry_backoff_s: ${coordinator.task_retry_backoff_s:0.5}      # 재시도 백오프 기준(초): backoff*2**시도
   task_failover: ${coordinator.task_failover:true}        # 재시도 소진 시 다른 executor 로 재배정
 
+  executor_select: ${coordinator.executor_select:round_robin}  # executor 선택: round_robin(기본) | least_loaded | p2c(HA 권장)
+
 store:
   backend: ${store.backend:memory}                # 작업 저장소: memory(휘발) | file(단일 노드 파일 영속/크래시 복구) | postgres(멀티 coordinator 공유)
   table: ${store.table:jobs}                      # 공유 store 테이블명(postgres)
