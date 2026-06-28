@@ -39,13 +39,14 @@ from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .executor_status import ExecutorStatusRepository
 from .history import JobHistoryRepository
-from .job_store import JobStore, build_job_store
+from .job_store import JobStore, build_job_store, reconcile_interrupted_jobs
 from .models import (
     CreateJobRequest,
     CreateJobResponse,
     Job,
     JobStatus,
     Task,
+    TaskStatus,
     new_job_id,
 )
 from .monitor import HealthMonitor
@@ -118,9 +119,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        # 앱 수명주기 훅: 기동 시 헬스 모니터를 켜고 종료 시 끈다.
-        # status_repo 가 있으면 executor가 스스로 상태를 공유 테이블에 기록하는
-        # self-report 모드이므로, coordinator 측 폴링 모니터는 띄우지 않는다.
+        # 앱 수명주기 훅: 기동 시 (1) 재기동 정합 — 영속 저장소(file/postgres)에서 비종료로
+        # 남은 job 을 '중단됨(FAILED)'으로 표시해 retry 로 재개 가능하게 한다(인메모리면 no-op).
+        # (2) 헬스 모니터를 켠다. status_repo 가 있으면 executor self-report 모드라 폴링 모니터는
+        # 띄우지 않는다.
+        reconcile_interrupted_jobs(store)
         if status_repo is None:
             await monitor.start()
         try:
@@ -409,6 +412,93 @@ def create_app(
         job.status = JobStatus.CANCELLED
         store.save(job)
         return job.progress_view()
+
+    @app.post(
+        "/jobs/{job_id}/retry",
+        status_code=202,
+        tags=["Jobs"],
+        summary="실패 파티션만 재실행",
+        description="종료된 작업(PARTIAL/FAILED/CANCELLED)의 실패·취소 task 만 모아 새 작업으로 "
+        "재실행한다(성공 파티션은 건너뜀). 새 job_id 를 반환한다(202). 재실행 대상이 없거나 "
+        "아직 종료되지 않은 작업이면 409.",
+    )
+    def retry_job(req_background: BackgroundTasks, job_id: str):
+        # 실패 파티션만 재실행: 원본 job 의 FAILED/CANCELLED task 를 새 Job 으로 복제해 디스패치한다.
+        # 멱등성: copy 모드의 실패 task 는 트랜잭션 미커밋(=적재 없음)이거나
+        # overwrite_partitions(선삭제)이므로 재실행이 안전하다.
+        src = store.get(job_id)
+        if src is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        if src.status not in (JobStatus.PARTIAL, JobStatus.FAILED, JobStatus.CANCELLED):
+            raise HTTPException(
+                status_code=409,
+                detail=f"종료된(PARTIAL/FAILED/CANCELLED) 작업만 재실행할 수 있습니다"
+                f"(status={src.status.value}).",
+            )
+        retriable = [
+            t for t in src.tasks
+            if t.status in (TaskStatus.FAILED, TaskStatus.CANCELLED)
+        ]
+        if not retriable:
+            raise HTTPException(status_code=409, detail="재실행할 실패/취소 task 가 없습니다.")
+
+        admission = getattr(runner, "admission", None)
+        if admission is not None and not admission.try_admit():
+            raise HTTPException(
+                status_code=429,
+                detail=f"동시 실행/대기 job 한도 초과(capacity={admission.capacity}).",
+                headers={"Retry-After": "5"},
+            )
+        new_id = new_job_id()
+        with job_log_context(new_id):
+            try:
+                new = Job(
+                    job_id=new_id,
+                    original_sql=src.original_sql,
+                    partition_column=src.partition_column,
+                    target_table=src.target_table,
+                    write_mode=src.write_mode,
+                    parallelism=src.parallelism,
+                    split_strategy=src.split_strategy,
+                    failure_policy=src.failure_policy,
+                    username=src.username,
+                    exec_mode=src.exec_mode,
+                    staging_table=src.staging_table,
+                    staging_ddl=src.staging_ddl,
+                    insert_sql=src.insert_sql,
+                    impala_query_options=src.impala_query_options,
+                    status=JobStatus.SPLITTING,
+                    retry_of=src.job_id,
+                )
+                # 실패/취소 task 만 새 task(QUEUED, attempt=0)로 복제한다. 원본 sub_query·
+                # partition_values·executor 배정을 그대로 재사용한다.
+                new.tasks = [
+                    Task(
+                        job_id=new.job_id,
+                        executor_url=t.executor_url,
+                        sub_query=t.sub_query,
+                        partition_values=t.partition_values,
+                    )
+                    for t in retriable
+                ]
+                store.add(new)
+                logger.info(
+                    "job %s 재실행 → 새 job %s (실패 task %d개)",
+                    src.job_id, new.job_id, len(new.tasks),
+                )
+                req_background.add_task(runner.run, new)
+            except Exception:
+                if admission is not None:
+                    admission.release()
+                raise
+        return JSONResponse(
+            status_code=202,
+            content={
+                "job_id": new.job_id,
+                "retry_of": src.job_id,
+                "retried_tasks": len(new.tasks),
+            },
+        )
 
     @app.get("/jobs/{job_id}/result", tags=["Jobs"], summary="작업 결과(적재 요약) 조회")
     def get_job_result(job_id: str):

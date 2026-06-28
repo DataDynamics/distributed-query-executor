@@ -188,6 +188,8 @@ class Settings:
             os.getenv("STORE_BACKEND") or _get("store", "backend", "memory")
         ).lower()
         self.store_table: str = _get("store", "table", "jobs")
+        # store.backend=file 일 때 스냅샷 파일 경로(비우면 로그 디렉터리 옆 jobs-state.json).
+        self.store_path: str = _get("store", "path", "")
         # 모니터링 대시보드(읽기 전용 웹 UI) 노출 여부.
         # 비밀값은 마스킹되어 표시되지만, 운영 정보가 외부에 드러날 수 있으므로
         # 외부 노출 환경에서는 비활성화를 고려한다.
@@ -267,6 +269,10 @@ class Settings:
         self.executor_max_concurrent_tasks: int = int(
             _get("executor", "max_concurrent_tasks", 8)
         )
+        # 종료(SIGTERM) 시 진행 중 task 를 강제 중단하지 않고 완료를 기다리는 최대 시간(초).
+        self.executor_shutdown_drain_timeout_s: float = float(
+            _get("executor", "shutdown_drain_timeout_s", 25)
+        )
         # Impala (source) — 데이터를 읽어오는 원본. TLS + Kerberos(GSSAPI) 환경 기준 기본값.
         self.impala_host: str = _get_nested("executor", "impala", "host", "")
         self.impala_port: int = int(_get_nested("executor", "impala", "port", 21050))
@@ -295,6 +301,10 @@ class Settings:
         # source→target 복사 시 한 번에 처리할 행 수. 메모리 사용량과 처리량의 균형값.
         self.copy_batch_size: int = int(
             _get_nested("executor", "copy", "batch_size", 10000)
+        )
+        # copy 모드 사전검증: COPY 전에 SELECT 컬럼이 대상 테이블에 있는지 확인(불일치 조기 실패).
+        self.copy_preflight: bool = _to_bool(
+            _get_nested("executor", "copy", "preflight", True)
         )
 
 

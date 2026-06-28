@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-from .models import Job
+from .models import Job, JobStatus, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,103 @@ class InMemoryJobStore:
         """해당 Job에 취소가 요청되었는지 여부를 반환한다(없는 id면 False)."""
         job = self._jobs.get(job_id)
         return bool(job and job.cancel_requested)
+
+
+class FileJobStore(InMemoryJobStore):
+    """단일 coordinator 용 **파일 영속** Job 저장소(크래시 복구).
+
+    InMemoryJobStore 처럼 메모리 dict 로 동작하되, 변경(add/save/취소)마다 전체 스냅샷을
+    JSON 파일에 **원자적으로**(tmp→replace) 기록하고, 기동 시 파일에서 복원한다.
+    PostgreSQL 없이도 프로세스 재시작 후 job 상태/이력을 잃지 않게 한다.
+
+    스냅샷은 매번 전체를 다시 쓴다(단일 노드 규모 기준 단순·안전). 대규모/멀티 coordinator
+    환경이면 SqlJobStore(PostgreSQL)를 권장한다.
+    """
+
+    def __init__(self, path) -> None:
+        super().__init__()
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._load()
+
+    def _load(self) -> None:
+        """기동 시 스냅샷 파일에서 Job 들을 복원한다(없거나 깨졌으면 빈 상태로 시작)."""
+        if not self.path.exists():
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("job 스냅샷 로드 실패: %s", self.path)
+            return
+        for rec in data.get("jobs", []):
+            try:
+                job = Job.from_record(rec)
+                self._jobs[job.job_id] = job
+            except Exception:
+                logger.exception("job 레코드 복원 실패(건너뜀)")
+        logger.info("job 스냅샷 복원: %d개 (%s)", len(self._jobs), self.path)
+
+    def _flush(self) -> None:
+        """현재 전체 Job 을 스냅샷 파일에 원자적으로 기록한다(저장 실패는 로깅만)."""
+        try:
+            payload = {"jobs": [j.to_record() for j in self._jobs.values()]}
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(self.path)  # 같은 파일시스템 내 원자적 교체
+        except Exception:
+            logger.exception("job 스냅샷 저장 실패: %s", self.path)
+
+    def add(self, job: Job) -> None:
+        super().add(job)
+        self._flush()
+
+    def save(self, job: Job) -> None:
+        super().save(job)
+        self._flush()
+
+    def request_cancel(self, job_id: str) -> bool:
+        ok = super().request_cancel(job_id)
+        if ok:
+            self._flush()
+        return ok
+
+
+# 비종료(=재기동 시 중단으로 간주) job/task 상태 집합.
+_NON_TERMINAL_JOB = {JobStatus.PENDING, JobStatus.SPLITTING, JobStatus.RUNNING}
+_TERMINAL_TASK = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
+
+
+def reconcile_interrupted_jobs(store) -> int:
+    """기동 시, 비종료 상태로 남은 job 을 '중단됨(FAILED)'으로 정합한다(크래시 복구).
+
+    프로세스 크래시/재시작으로 실행 루프(``run()``)가 사라진 job 은 더 진행될 수 없다.
+    상태를 정확히 FAILED 로 바꾸고, 진행 중이던 task 도 FAILED 로 표시한다. 이렇게 하면
+    ``POST /jobs/{id}/retry`` 로 실패 파티션만 재실행할 수 있다.
+
+    인메모리 저장소(재시작 시 비어 있음)에서는 대상이 없어 no-op 이다. 반환: 정합한 job 수.
+    """
+    try:
+        jobs = store.list()
+    except Exception:
+        logger.exception("재기동 정합용 job 조회 실패")
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    reconciled = 0
+    for job in jobs:
+        if job.status not in _NON_TERMINAL_JOB:
+            continue
+        for t in job.tasks:
+            if t.status not in _TERMINAL_TASK:
+                t.status = TaskStatus.FAILED
+                t.error = t.error or "coordinator 재시작으로 중단됨"
+        job.status = JobStatus.FAILED
+        job.error = job.error or "coordinator 재시작으로 중단됨"
+        job.finished_at = job.finished_at or now
+        store.save(job)
+        reconciled += 1
+    if reconciled:
+        logger.warning("재기동 정합: 중단된 job %d개를 FAILED 로 표시", reconciled)
+    return reconciled
 
 
 # 스키마(jobs 테이블)는 앱이 생성하지 않는다. 운영 전에 packaging/config/postgresql.sql
@@ -217,15 +316,23 @@ JobStore = InMemoryJobStore
 def build_job_store(settings) -> InMemoryJobStore | SqlJobStore:
     """설정에 따라 알맞은 Job 저장소를 생성하는 팩토리(기본은 메모리).
 
-    ``store_backend`` 가 "postgres"이고 DSN이 설정돼 있으면 SqlJobStore를,
-    그 외에는 InMemoryJobStore를 만든다. postgres로 지정됐지만 DSN이 비어 있으면
-    경고 로그를 남기고 안전하게 메모리 백엔드로 폴백한다.
+    - ``store_backend=postgres`` + DSN: SqlJobStore(멀티 coordinator 공유).
+    - ``store_backend=file``: FileJobStore(단일 노드 파일 영속 → 크래시 복구).
+    - 그 외: InMemoryJobStore(휘발성).
+    postgres로 지정됐지만 DSN이 비어 있으면 경고 후 메모리로 폴백한다.
 
     설정 객체에서 ``getattr`` 로 안전하게 값을 읽어, 해당 속성이 없는 설정과도
     호환되게 한다.
     """
     backend = getattr(settings, "store_backend", "memory")
     dsn = getattr(settings, "history_db_dsn", "")
+    if backend == "file":
+        # 경로 미지정 시 로그 디렉터리 옆에 jobs-state.json 을 둔다.
+        path = getattr(settings, "store_path", "") or str(
+            Path(getattr(settings, "log_dir", "logs")) / "jobs-state.json"
+        )
+        logger.info("FileJobStore 사용(path=%s)", path)
+        return FileJobStore(path)
     if backend == "postgres" and dsn:
         logger.info("SqlJobStore 사용(table=%s)", getattr(settings, "store_table", "jobs"))
         return SqlJobStore(

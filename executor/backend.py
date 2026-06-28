@@ -98,12 +98,15 @@ class ImpalaToGreenplumBackend:
     """
 
     def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000,
-                 query_options: dict | None = None):
+                 query_options: dict | None = None, copy_preflight: bool = True):
         self.impala_dsn = impala_dsn
         self.greenplum_dsn = greenplum_dsn
         self.batch_size = batch_size
         # Impala 쿼리 옵션 전역 기본값(SET). 요청별 옵션이 이 위에 병합된다.
         self.query_options: dict = query_options or {}
+        # copy 모드 COPY 전에 SELECT 컬럼이 대상 테이블에 존재하는지 사전검증할지 여부.
+        # 대용량 스트리밍을 시작하기 전에 컬럼 불일치를 잡아 빠르게 실패시킨다.
+        self.copy_preflight = copy_preflight
 
     def _impala_execute(self, cur, sql: str, query_options) -> None:
         """Impala 커서로 sql 을 실행한다. 전역+요청별 옵션을 병합해 configuration 으로 넘긴다.
@@ -195,6 +198,12 @@ class ImpalaToGreenplumBackend:
 
             with psycopg.connect(self.greenplum_dsn) as gp:
                 with gp.cursor() as gp_cur:
+                    # 사전검증(preflight): COPY 로 한 행도 흘려보내기 전에, Impala SELECT 가
+                    # 내는 컬럼이 모두 대상 테이블에 존재하는지 확인한다. 불일치면 여기서
+                    # 명확한 에러로 즉시 실패(런타임 COPY 오류로 대용량 읽기 후 깨지는 것 방지).
+                    if self.copy_preflight:
+                        target_cols = _target_columns(gp_cur, target_table)
+                        _check_copy_columns(columns, target_cols, target_table)
                     if write_mode == "overwrite_partitions" and partition_values:
                         # 멱등성: 적재 대상 파티션을 먼저 삭제 → DELETE+COPY 가 같은 트랜잭션에
                         # 묶여 commit 되므로 재실행해도 중복 없이 해당 파티션만 새 데이터로 교체.
@@ -216,6 +225,57 @@ class ImpalaToGreenplumBackend:
             return rows_written
         finally:
             impala_conn.close()
+
+
+def _split_schema_table(target_table: str) -> tuple[str, str]:
+    """``schema.table`` 을 (schema, table) 로 분리한다(스키마 없으면 ('', table)).
+
+    따옴표는 제거하고, 점이 여러 개면 마지막을 테이블, 그 앞을 스키마로 본다.
+    """
+    cleaned = target_table.replace('"', "").strip()
+    parts = cleaned.split(".")
+    if len(parts) >= 2:
+        return ".".join(parts[:-1]), parts[-1]
+    return "", parts[-1]
+
+
+def _target_columns(gp_cur, target_table: str) -> list[str]:
+    """information_schema 에서 대상 테이블의 컬럼명 목록을 읽는다(없으면 빈 리스트).
+
+    스키마가 주어지면 (table_schema, table_name) 으로, 아니면 table_name 만으로 조회한다.
+    조회가 비면(테이블 미존재/권한 없음 등) 빈 리스트를 돌려 사전검증을 건너뛰게 한다.
+    """
+    schema, table = _split_schema_table(target_table)
+    if schema:
+        gp_cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema=%s AND table_name=%s",
+            (schema, table),
+        )
+    else:
+        gp_cur.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name=%s",
+            (table,),
+        )
+    return [r[0] for r in gp_cur.fetchall()]
+
+
+def _check_copy_columns(select_columns, target_columns, target_table: str) -> None:
+    """copy 모드 COPY 전 컬럼 정합성 검사(순수 함수 — DB 없이 단위 테스트 가능).
+
+    Impala SELECT 가 내는 각 컬럼명이 대상 테이블에 존재하는지(대소문자 무시) 확인한다.
+    없는 컬럼이 있으면 ``ValueError`` 로 명확한 사유를 올려 조기 실패시킨다.
+    ``target_columns`` 가 비어 있으면(대상 조회 실패 등) 오탐을 피하려 검사를 건너뛴다.
+    """
+    if not target_columns:
+        return
+    target_lc = {c.lower() for c in target_columns}
+    missing = [c for c in select_columns if c.lower() not in target_lc]
+    if missing:
+        raise ValueError(
+            f"COPY 사전검증 실패: 대상 테이블 {target_table} 에 없는 컬럼 {missing}. "
+            f"대상 컬럼={sorted(target_columns)}. SELECT 출력 컬럼과 대상 스키마를 맞추세요."
+        )
 
 
 def _batches(cursor, size: int) -> Iterator[list]:
@@ -266,6 +326,7 @@ def build_backend(settings) -> Backend:
             greenplum_dsn=settings.greenplum_dsn,
             batch_size=settings.copy_batch_size,
             query_options=getattr(settings, "impala_query_options", None),
+            copy_preflight=getattr(settings, "copy_preflight", True),
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()

@@ -78,16 +78,36 @@ def create_app(
     _max = settings.executor_max_concurrent_tasks
     sem = asyncio.Semaphore(_max) if _max and _max > 0 else None
     reporter = ExecutorStatusReporter(settings, tasks_provider=lambda: _task_counts())
+    # 진행 중인 백그라운드 task(코루틴) 집합 — graceful drain 의 대기 대상.
+    inflight: set = set()
+    # 종료(SIGTERM) 시 신규 접수를 막는 드레이닝 플래그(dict 로 클로저에서 가변 공유).
+    drain = {"on": False}
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         # 앱 수명주기 훅: 기동 시 self-report 백그라운드 루프를 켜고(설정 시),
-        # 종료 시 반드시 멈춘다(finally 로 정상/예외 종료 모두 정리 보장).
+        # 종료 시 드레이닝(진행 중 task 안전 완료 대기) 후 리포터를 멈춘다.
         if settings.executor_self_report:
             await reporter.start()
         try:
             yield
         finally:
+            # 1) 드레이닝 시작: 이후 신규 task 는 503 으로 거부한다.
+            drain["on"] = True
+            # 2) 진행 중 task 를 타임아웃 내에서 완료 대기(강제 취소하지 않음).
+            pending = [t for t in inflight if not t.done()]
+            if pending:
+                timeout = settings.executor_shutdown_drain_timeout_s
+                logger.info(
+                    "드레이닝: 진행 중 task %d개 완료 대기(최대 %ss)", len(pending), timeout
+                )
+                _, still = await asyncio.wait(pending, timeout=timeout)
+                if still:
+                    logger.warning(
+                        "드레이닝 타임아웃(%ss): 미완료 task %d개 — 종료 진행",
+                        timeout, len(still),
+                    )
+            # 3) self-report 루프 정리.
             await reporter.stop()
 
     app = FastAPI(
@@ -107,6 +127,9 @@ def create_app(
     app.state.backend = backend
     app.state.tasks = tasks
     app.state.task_history = history
+    # 종료 드레이닝 상태(테스트/디버깅에서 참조). {"on": bool}
+    app.state.drain = drain
+    app.state.inflight = inflight
 
     async def _run_with_ctx(task: Task) -> None:
         """admission 세마포어와 로그 컨텍스트로 감싼 task 실행 래퍼.
@@ -216,6 +239,13 @@ def create_app(
         task_id 와 현재 상태(QUEUED)를 반환하므로, 호출자(coordinator)는 폴링으로 진행을
         추적한다. 동일 task_id 재요청 시 기존 항목을 덮어쓴다.
         """
+        # 종료(드레이닝) 중에는 신규 task 를 받지 않는다 → coordinator 가 다른 executor 로
+        # failover 하거나 재시도하도록 503 으로 거부한다.
+        if drain["on"]:
+            raise HTTPException(
+                status_code=503,
+                detail="executor 종료 중(draining) — 신규 task 를 받지 않습니다.",
+            )
         task = Task(
             task_id=req.task_id,
             job_id=req.job_id,
@@ -234,7 +264,10 @@ def create_app(
         tasks[task.task_id] = task
         with job_log_context(task.job_id, task.task_id):
             await history.record(task)  # QUEUED 이력
-            asyncio.create_task(_run_with_ctx(task))
+            # 백그라운드 실행 task 를 추적해 종료 시 드레이닝(완료 대기)할 수 있게 한다.
+            bg = asyncio.create_task(_run_with_ctx(task))
+            inflight.add(bg)
+            bg.add_done_callback(inflight.discard)
             logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
         return {"task_id": task.task_id, "status": task.status.value}
 

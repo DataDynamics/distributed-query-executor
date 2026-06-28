@@ -49,8 +49,9 @@ coordinator:
   task_failover: ${coordinator.task_failover:true}        # 재시도 소진 시 다른 executor 로 재배정
 
 store:
-  backend: ${store.backend:memory}                # 작업 저장소: memory(단일) | postgres(멀티 coordinator 공유)
-  table: ${store.table:jobs}                      # 공유 store 테이블명
+  backend: ${store.backend:memory}                # 작업 저장소: memory(휘발) | file(단일 노드 파일 영속/크래시 복구) | postgres(멀티 coordinator 공유)
+  table: ${store.table:jobs}                      # 공유 store 테이블명(postgres)
+  path: ${store.path:}                            # backend=file 일 때 스냅샷 경로(비우면 로그 디렉터리 옆 jobs-state.json)
 
 dashboard:
   enabled: ${dashboard.enabled:true}              # / 모니터링 대시보드 사용 여부(읽기 전용)
@@ -75,6 +76,7 @@ executor:
   status_table: ${executor.status_table:executor_status} # self-report 상태 테이블
   status_interval_s: ${executor.status_interval_s:10}    # self-report 주기(초)
   max_concurrent_tasks: ${executor.max_concurrent_tasks:8}   # executor 1대가 동시에 실행하는 task 수(0=무제한)
+  shutdown_drain_timeout_s: ${executor.shutdown_drain_timeout_s:25}  # 종료(SIGTERM) 시 진행 중 task 완료를 기다리는 최대 시간(초)
   impala:
     host: ${impala.host:}                         # Impala 호스트(미설정 시 Mock 백엔드)
     port: ${impala.port:21050}
@@ -92,3 +94,4 @@ executor:
     dsn: ${greenplum.dsn:}                        # Greenplum 적재 대상 DSN(미설정 시 Mock 백엔드)
   copy:
     batch_size: ${copy.batch_size:10000}          # COPY 배치 크기(행)
+    preflight: ${copy.preflight:true}             # COPY 전 SELECT 컬럼이 대상 테이블에 있는지 사전검증(불일치 조기 실패)

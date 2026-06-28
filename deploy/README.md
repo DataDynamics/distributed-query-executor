@@ -120,8 +120,10 @@ sudo vi /appuser/query-executor/config/krb5.conf
 sudo chown -R appuser:appuser /appuser/query-executor/config
 sudo chmod 600 /appuser/query-executor/config/impala.keytab
 
-# 5) 티켓 발급(이후 cron 으로 주기 갱신: 예 0 */4 * * *)
+# 5) 티켓 발급(즉시 1회). 주기 갱신 cron(@reboot + 4시간)은 install.sh 가 자동 등록한다
+#    (keytab 이 비어 있으면 kinit-renew.sh 가 스스로 건너뛰므로, 실제 keytab 배치 후 동작).
 sudo -u appuser KRB5_PRINCIPAL=svc-query@EXAMPLE.LOCAL /appuser/query-executor/bin/kinit-renew.sh
+#    cron 확인: sudo crontab -u appuser -l
 ```
 
 동작 방식:

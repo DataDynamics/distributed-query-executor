@@ -135,6 +135,13 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
   아니면 `MockBackend`(실제 I/O 없음)로 폴백
 - **인증 범위**: TLS + Kerberos(GSSAPI)는 **Impala 접속에만** 적용된다. Greenplum 은
   TLS/Kerberos 없는 **일반 `postgresql://` DSN** 으로 접속한다.
+- **Job 저장소(`store.backend`)**: `memory`(휘발) / `file`(단일 노드 **파일 영속 →
+  크래시 복구**: 재기동 시 중단된 job 을 FAILED 로 정합 후 `retry` 로 재개) / `postgres`(멀티
+  coordinator 공유). file 경로는 `store.path`(기본 로그 디렉터리 옆 `jobs-state.json`).
+- **COPY 사전검증(`copy.preflight`, 기본 on)**: copy 모드에서 COPY 전에 SELECT 컬럼이 대상
+  테이블에 있는지 확인해 불일치를 조기 실패시킨다(대용량 스트리밍 전에 차단).
+- **graceful drain**: executor 종료(SIGTERM) 시 진행 중 task 를 강제 중단하지 않고
+  `executor.shutdown_drain_timeout_s`(기본 25초) 내에서 완료를 기다린다.
 - **coordinator admission control(동시 job 제한 + 대기 큐)**: 들어온 job 요청을
   - 실행 슬롯(`coordinator.max_concurrent_jobs`, 기본 16)이 비어 있으면 즉시 `RUNNING`,
   - 다 찼으면 `PENDING` 으로 **대기 큐**에 넣고(`coordinator.max_pending_jobs`, 기본 100),
@@ -270,6 +277,7 @@ curl -s localhost:8088/jobs/$JOB
 | `GET /jobs/{job_id}` | 전체 상태(태스크 목록 포함) |
 | `GET /jobs/{job_id}/result` | 적재 결과 요약 |
 | `POST /jobs/{job_id}/cancel` | 작업 취소(각 executor에 전파). 이미 종료면 409 |
+| `POST /jobs/{job_id}/retry` | **실패 파티션만 재실행**: 종료된 작업의 FAILED/CANCELLED task 만 새 작업으로 재실행 → 새 `job_id` 반환 |
 
 ### dry-run (쿼리 미리보기)
 

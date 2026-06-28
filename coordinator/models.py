@@ -231,6 +231,8 @@ class Job:
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     cancel_requested: bool = False
+    # 재실행으로 생성된 job 이면 원본 job_id 를 가리킨다(실패 파티션 재실행 추적용).
+    retry_of: Optional[str] = None
 
     @property
     def total_rows_written(self) -> int:
@@ -270,6 +272,7 @@ class Job:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "retry_of": self.retry_of,
             "tasks": [t.summary() for t in self.tasks],
         }
 
@@ -300,6 +303,7 @@ class Job:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "cancel_requested": self.cancel_requested,
+            "retry_of": self.retry_of,
             "tasks": [t.to_record() for t in self.tasks],
         }
 
@@ -332,6 +336,7 @@ class Job:
             started_at=d.get("started_at"),
             finished_at=d.get("finished_at"),
             cancel_requested=d.get("cancel_requested", False),
+            retry_of=d.get("retry_of"),
         )
         job.tasks = [Task.from_record(t) for t in d.get("tasks", [])]
         return job

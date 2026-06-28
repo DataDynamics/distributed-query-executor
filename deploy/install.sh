@@ -110,6 +110,20 @@ echo "==> 런처 스크립트 배치 -> $BIN_DIR"
 cp "$APP_HOME"/deploy/bin/*.sh "$BIN_DIR"/
 chmod +x "$BIN_DIR"/*.sh
 
+echo "==> Kerberos 티켓 자동 갱신 cron 등록($APP_USER, @reboot + 4시간마다)"
+if command -v crontab >/dev/null 2>&1; then
+    CRON_REBOOT="@reboot $BIN_DIR/kinit-renew.sh >> $LOG_DIR/kinit.log 2>&1"
+    CRON_EVERY4H="0 */4 * * * $BIN_DIR/kinit-renew.sh >> $LOG_DIR/kinit.log 2>&1"
+    # 기존 kinit-renew 항목을 제거하고 새로 등록(멱등). keytab 이 비어 있으면 스크립트가
+    # 스스로 건너뛰므로, 실제 keytab 배치 전까지는 무해하다.
+    { crontab -u "$APP_USER" -l 2>/dev/null | grep -v 'kinit-renew.sh'; \
+      echo "$CRON_REBOOT"; echo "$CRON_EVERY4H"; } | crontab -u "$APP_USER" -
+    echo "    등록됨 (crontab -u $APP_USER -l 로 확인)"
+else
+    echo "    crontab 미설치 → 수동 등록 필요: 'sudo dnf install -y cronie' 후"
+    echo "    (echo '0 */4 * * * $BIN_DIR/kinit-renew.sh') | crontab -u $APP_USER -"
+fi
+
 echo "==> 소유권/권한"
 chown -R "$APP_USER:$APP_USER" "$APP_BASE"
 chmod 750 "$CONF_DIR"
