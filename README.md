@@ -405,6 +405,13 @@ coordinator.orphan_reconcile_interval_s=30
 
 > 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 두면 된다.
 
+> **WarehousePG / Greenplum 7** 에 메타 저장소를 둘 때는 `postgresql.sql` 대신
+> `packaging/config/warehousepg.sql` 을 적용한다(테이블마다 `DISTRIBUTED BY`, history/metrics 는
+> 대리 PK 를 빼 `job_id`/`executor_url` 로 co-locate). GP7=PG12 라 앱 SQL(`ON CONFLICT`·`JSONB`·
+> `DISTINCT ON`)은 그대로 동작한다. 다만 heartbeat/예약 같은 고빈도 단일행 UPSERT 는 MPP 와 맞지
+> 않으니, 성능이 중요하면 이 메타 저장소는 PostgreSQL 에 두고 WarehousePG 는 데이터 적재 대상으로만
+> 쓰는 편이 낫다. 자세한 차이는 [`deploy/README.md`](deploy/README.md) 참고.
+
 ## 로컬 모드 (local mode)
 
 executor를 별도로 띄우지 않고 **coordinator 안에서 in-process로 직접 실행**한다. HTTP
