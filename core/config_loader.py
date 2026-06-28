@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 _VAR_PATTERN = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
 
 # config_dir 인자가 주어지지 않았을 때 사용할 운영 기본 설정 디렉터리.
-DEFAULT_CONFIG_DIR = Path("/etc/query-executor")
+DEFAULT_CONFIG_DIR = Path("/appuser/query-executor/config")
 
 
 def load_properties(path: Path) -> dict[str, str]:

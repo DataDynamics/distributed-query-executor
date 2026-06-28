@@ -1,23 +1,28 @@
-# systemd 배포 가이드 (RHEL 9.2)
+# 배포 가이드 (RHEL 9.2, /appuser 단일 트리)
 
-coordinator 1개와 executor 다수를 systemd 서비스로 운영하기 위한 구성이다.
-설정은 argus-catalog backend와 동일하게 **`config.properties` + `config.yml`** 방식을 쓴다.
+coordinator 1개와 executor 다수를 운영하기 위한 구성이다.
+설정은 **`config.properties` + `config.yml`** 방식을 쓴다.
+
+> **보안 정책**: `/etc`·`/opt`·`/var` 에 파일을 추가하지 않는다. 애플리케이션·설정·로그·
+> 런타임을 모두 **`/appuser/query-executor`** 아래에 두고, systemd 시스템 유닛 대신
+> **런처 스크립트(`bin/`)** 로 구동한다.
 
 ## 구성 파일
 
 | 파일 | 설명 |
 |---|---|
-| `systemd/query-coordinator.service` | coordinator 서비스 유닛 |
-| `systemd/query-executor@.service` | executor **템플릿** 유닛(인스턴스 이름 = 포트) |
-| `systemd/query-executor-kinit.service` | Impala Kerberos 티켓 발급(keytab → 공유 ccache) |
-| `systemd/query-executor-kinit.timer` | Kerberos 티켓 주기적 갱신(4시간) |
+| `bin/start.sh` / `stop.sh` / `status.sh` | coordinator + executor 기동/중지/상태(nohup + PID) |
+| `bin/kinit-renew.sh` | Impala Kerberos 티켓 발급/갱신(keytab → 공유 ccache) |
+| `bin/env.sh` | 런처 공통 환경(경로·`KRB5_CONFIG`·`KRB5CCNAME`·포트) |
 | `../packaging/config/config.properties` | Java 스타일 key=value 변수 정의 |
 | `../packaging/config/config.yml` | `${변수:기본값}` 치환을 쓰는 메인 YAML 설정 |
-| `install.sh` | 사용자/디렉터리/venv/설정/유닛을 한 번에 구성하는 설치 스크립트 |
+| `install.sh` | 사용자/디렉터리/venv/설정/런처를 한 번에 구성하는 설치 스크립트 |
 
-- **설정 디렉터리**: `/etc/query-executor/` (환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경 가능)
-- **로그**: `/var/log/query-executor/` (일 단위 롤링, `파일명_YYYYMMDD.log`)
-- **executor는 템플릿 유닛**이라 포트별로 여러 인스턴스를 띄운다: `query-executor@8087`, `query-executor@8086` ...
+- **앱 홈**: `/appuser/query-executor` (소스 + `.venv`)
+- **설정 디렉터리**: `/appuser/query-executor/config` (환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경 가능)
+- **로그**: `/appuser/query-executor/logs` (일 단위 롤링, `파일명_YYYYMMDD.log`)
+- **런타임**: `/appuser/query-executor/run` (PID, Kerberos ccache)
+- **executor는 포트별로 여러 인스턴스**를 띄운다(`EXECUTOR_PORTS="8087 8086"`).
 - coordinator·executor 모두 상태를 **프로세스 메모리**에 두므로 인스턴스당 **단일 워커**로 실행한다. 처리량 확장은 워커가 아니라 **executor 인스턴스 수**로 한다.
 
 ## 빠른 설치 (스크립트 사용)
@@ -26,24 +31,25 @@ coordinator 1개와 executor 다수를 systemd 서비스로 운영하기 위한 
 # 0) (최초 1회) Python 3.9(RHEL 9.2 기본) + rsync 설치
 sudo dnf install -y python3 python3-pip python3-devel rsync
 
-# 1) 저장소 루트에서 실행
+# 1) 저장소 루트에서 실행 (에어갭이면 WHEELHOUSE/INSTALL_EXECUTOR 지정)
 sudo ./deploy/install.sh
+#   에어갭 예: sudo WHEELHOUSE=/path/wheels INSTALL_EXECUTOR=1 ./deploy/install.sh
 
 # 2) 설정 확인/수정
-sudo vi /etc/query-executor/config.properties   # executors, impala.*, greenplum.dsn 등
+sudo vi /appuser/query-executor/config/config.properties   # executors, impala.*, greenplum.dsn 등
 
 # 3) 서비스 기동 (executor 2개 + coordinator)
-sudo systemctl enable --now query-executor@8087 query-executor@8086
-sudo systemctl enable --now query-coordinator
+sudo -u appuser /appuser/query-executor/bin/start.sh
+sudo -u appuser /appuser/query-executor/bin/status.sh
 ```
 
 `install.sh`가 하는 일:
-- 서비스 계정 `queryexec` 생성
-- 앱을 `/opt/query-executor` 로 복사(`.venv`/`.git`/`logs` 제외)
-- `/opt/query-executor/.venv` 가상환경 + `requirements.txt` 설치
-- `packaging/config/*` 를 `/etc/query-executor/` 로 배치(없을 때만), 운영 로그 경로를 `/var/log/query-executor` 로 설정
-- `/var/log/query-executor` 생성 후 소유권 설정
-- systemd 유닛 설치 후 `daemon-reload`
+- 서비스 계정 `appuser` 생성(홈 `/appuser`)
+- 앱을 `/appuser/query-executor` 로 복사(`.venv`/`.git`/`logs`/`config`/`run` 제외)
+- `/appuser/query-executor/.venv` 가상환경 + 의존성 설치(`WHEELHOUSE` 지정 시 오프라인)
+- `packaging/config/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/appuser/query-executor/logs` 로 설정
+- Kerberos+TLS 자리표시 파일 생성(`config/krb5.conf`·`impala-ca.pem`·`impala.keytab`)
+- 런처 스크립트를 `bin/` 으로 배치, 소유권/권한 설정
 
 ## 설정 항목 (config.properties)
 
@@ -71,9 +77,9 @@ impala.database=default
 impala.auth_mechanism=GSSAPI
 impala.kerberos_service_name=impala
 impala.use_ssl=true
-impala.ca_cert=/etc/query-executor/impala-ca.pem
+impala.ca_cert=/appuser/query-executor/config/impala-ca.pem
 
-# Executor - Greenplum (target). 비어 있으면 MockBackend 사용
+# Executor - Greenplum (target). 비어 있으면 MockBackend 사용. TLS/Kerberos 미적용(일반 DSN)
 greenplum.dsn=
 copy.batch_size=10000
 ```
@@ -89,42 +95,39 @@ copy.batch_size=10000
 
 ## Impala TLS + Kerberos
 
-executor만 Impala에 접속한다(coordinator는 무관). TLS 검증용 CA 인증서와 Kerberos
-keytab을 배치하고, systemd kinit 타이머로 티켓을 주기적으로 갱신한다.
+executor만 Impala에 접속한다(coordinator는 무관). **Impala 에만 TLS + Kerberos(GSSAPI)**
+가 적용되고, **Greenplum 은 TLS/Kerberos 없이 일반 DSN** 으로 접속한다. 시스템
+`/etc/krb5.conf` 대신 `/appuser/query-executor/config/krb5.conf` 를 `KRB5_CONFIG` 로 사용한다.
 
 ```bash
-# 0) 시스템 패키지 (RHEL 9.2)
+# 0) 시스템 패키지 (RHEL 9.2) — gssapi 빌드에 필요
 sudo dnf install -y krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi \
     gcc gcc-c++ make python3-devel
 
-# 1) executor 드라이버 + SASL/GSSAPI 설치
-sudo /opt/query-executor/.venv/bin/pip install -r /opt/query-executor/requirements-executor.txt
+# 1) executor 드라이버 + SASL/GSSAPI 설치(설치 시 INSTALL_EXECUTOR=1 했으면 생략)
+sudo /appuser/query-executor/.venv/bin/pip install -r /appuser/query-executor/requirements-executor.txt
 
-# 2) TLS CA 인증서 배치
-sudo cp impala-ca.pem /etc/query-executor/impala-ca.pem
-sudo chown root:queryexec /etc/query-executor/impala-ca.pem
-sudo chmod 644 /etc/query-executor/impala-ca.pem
+# 2) TLS CA 인증서 배치(임의 파일명 가능 — config.properties 의 impala.ca_cert 와 일치시킬 것)
+sudo cp impala-ca.pem /appuser/query-executor/config/impala-ca.pem
 
-# 3) Kerberos keytab 배치 (queryexec 만 읽도록 600)
-sudo cp impala.keytab /etc/query-executor/impala.keytab
-sudo chown queryexec:queryexec /etc/query-executor/impala.keytab
-sudo chmod 600 /etc/query-executor/impala.keytab
+# 3) Kerberos keytab 배치 (appuser 만 읽도록 600)
+sudo cp impala.keytab /appuser/query-executor/config/impala.keytab
 
-# 4) kinit 유닛의 principal/keytab 경로 수정
-sudo systemctl edit --full query-executor-kinit.service
-#   ExecStart=/usr/bin/kinit -kt /etc/query-executor/impala.keytab impala-user@EXAMPLE.COM
+# 4) krb5.conf 의 realm/KDC, kinit-renew.sh 의 principal/keytab 확인
+sudo vi /appuser/query-executor/config/krb5.conf
+sudo chown -R appuser:appuser /appuser/query-executor/config
+sudo chmod 600 /appuser/query-executor/config/impala.keytab
 
-# 5) 티켓 갱신 타이머 활성화 (부팅 1분 후 + 4시간마다 재발급)
-sudo systemctl enable --now query-executor-kinit.timer
+# 5) 티켓 발급(이후 cron 으로 주기 갱신: 예 0 */4 * * *)
+sudo -u appuser KRB5_PRINCIPAL=svc-query@EXAMPLE.LOCAL /appuser/query-executor/bin/kinit-renew.sh
 ```
 
 동작 방식:
-- `query-executor-kinit.service`(oneshot)가 keytab으로 `/var/lib/query-executor/krb5cc`
-  공유 자격증명 캐시에 티켓을 발급한다.
-- executor 유닛은 `KRB5CCNAME=FILE:/var/lib/query-executor/krb5cc` 를 사용하고
-  `Wants/After=query-executor-kinit.service` 로 기동 전에 티켓을 확보한다.
-- `query-executor-kinit.timer` 가 4시간마다 재발급해 만료를 방지한다.
-- 티켓 확인: `sudo -u queryexec KRB5CCNAME=FILE:/var/lib/query-executor/krb5cc klist`
+- `bin/kinit-renew.sh` 가 keytab 으로 `/appuser/query-executor/run/krb5cc`
+  공유 자격증명 캐시에 티켓을 발급한다(`KRB5_CONFIG`·`KRB5CCNAME` 는 `bin/env.sh` 가 export).
+- executor 프로세스도 동일한 `KRB5CCNAME=FILE:/appuser/query-executor/run/krb5cc` 를 상속한다.
+- 만료 방지를 위해 `kinit-renew.sh` 를 cron 으로 주기 실행한다(appuser crontab).
+- 티켓 확인: `sudo -u appuser KRB5CCNAME=FILE:/appuser/query-executor/run/krb5cc klist`
 
 ## 멀티 coordinator & 실행 이력 (PostgreSQL)
 
@@ -163,7 +166,7 @@ executor.status_interval_s=10
 
 ```bash
 PG="postgresql://user:pass@pg-host:5432/queryexec"
-psql "$PG" -f /opt/query-executor/packaging/config/postgresql.sql
+psql "$PG" -f /appuser/query-executor/packaging/config/postgresql.sql
 ```
 
 > 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 둔다.
@@ -172,26 +175,23 @@ psql "$PG" -f /opt/query-executor/packaging/config/postgresql.sql
 ## 운영 명령
 
 ```bash
-# 상태/로그(저널)
-systemctl status query-coordinator
-journalctl -u query-coordinator -f
-journalctl -u query-executor@8087 -f
+B=/appuser/query-executor/bin
+# 상태(프로세스 + health)
+sudo -u appuser $B/status.sh
 
 # 파일 로그(일 단위 롤링)
-tail -f /var/log/query-executor/query-coordinator-server.log
-tail -f /var/log/query-executor/query-executor-server-8087.log
+tail -f /appuser/query-executor/logs/query-coordinator-server.log
+tail -f /appuser/query-executor/logs/query-executor-server-8087.log
 
 # WARNING 이상만 모은 전용 로그(문제 추적용, *-warn.log)
-tail -f /var/log/query-executor/query-coordinator-server-warn.log
-tail -f /var/log/query-executor/query-executor-server-8087-warn.log
+tail -f /appuser/query-executor/logs/query-coordinator-server-warn.log
+tail -f /appuser/query-executor/logs/query-executor-server-8087-warn.log
 
-# 재시작 / 중지
-sudo systemctl restart query-coordinator
-sudo systemctl stop query-executor@8086
+# 재시작(전체) / 중지
+sudo -u appuser $B/stop.sh && sudo -u appuser $B/start.sh
 
 # executor 인스턴스 추가(포트 8003): config.properties 의 executors 에 추가 후
-sudo systemctl enable --now query-executor@8003
-sudo systemctl restart query-coordinator
+sudo -u appuser EXECUTOR_PORTS="8087 8086 8003" $B/start.sh
 ```
 
 ## 동작 확인
@@ -254,7 +254,7 @@ monitor.disk_path=/
 `packaging/config/postgresql.sql` 을 **먼저 적용**한다(`monitor.db_dsn` 이 다른 DB면 그 DB에도 적용):
 
 ```bash
-psql "postgresql://user:pass@pg-host:5432/monitoring" -f /opt/query-executor/packaging/config/postgresql.sql
+psql "postgresql://user:pass@pg-host:5432/monitoring" -f /appuser/query-executor/packaging/config/postgresql.sql
 
 # 최근 기록 조회
 psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_percent

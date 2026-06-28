@@ -2,7 +2,7 @@
 
 이 모듈은 분산 쿼리 실행기(coordinator·executor)가 공유하는 모든 설정값을
 한곳에 모아 ``Settings`` 객체로 노출한다. 설정은 설정 디렉터리
-(기본 /etc/query-executor, 환경변수 QUERY_EXECUTOR_CONFIG_DIR 로 변경 가능)의
+(기본 /appuser/query-executor/config, 환경변수 QUERY_EXECUTOR_CONFIG_DIR 로 변경 가능)의
 두 파일에서 로드된다:
 
 1. config.properties - Java 스타일 key=value 변수 정의. config.yml 안의
@@ -36,7 +36,7 @@ from core.config_loader import load_config
 
 # 설정 디렉터리는 환경변수로 우선 결정하고, 없으면 운영 기본 경로를 쓴다.
 # 모듈 로드 시점에 한 번 확정되며, init_settings() 로 재로딩해도 디렉터리는 유지된다.
-_CONFIG_DIR = Path(os.environ.get("QUERY_EXECUTOR_CONFIG_DIR", "/etc/query-executor"))
+_CONFIG_DIR = Path(os.environ.get("QUERY_EXECUTOR_CONFIG_DIR", "/appuser/query-executor/config"))
 _yaml_path: Path = _CONFIG_DIR / "config.yml"
 _properties_path: Path = _CONFIG_DIR / "config.properties"
 # _raw 는 properties 치환까지 끝난 "원시 설정 dict"(YAML 계층 구조 그대로).

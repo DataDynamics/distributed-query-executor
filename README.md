@@ -125,7 +125,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타일 key=value)의
 값으로 `config.yml`의 `${변수:기본값}` 자리표시자를 치환해 로드한다.
 
-- 설정 디렉터리: `/etc/query-executor/` (환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경)
+- 설정 디렉터리: `/appuser/query-executor/config` (환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경)
 - 로컬 개발 시: `QUERY_EXECUTOR_CONFIG_DIR=packaging/config` 로 저장소 기본값 사용
 - 핵심 항목: `coordinator.executors`, `coordinator.max_concurrent_jobs`/`max_pending_jobs`,
   `impala.*`, `greenplum.dsn`, `copy.batch_size`
@@ -139,8 +139,8 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
   (executor 단의 task 동시 제한은 `executor.max_concurrent_tasks` — 아래 "수평 확장" 참고)
 - Impala는 **TLS + Kerberos(GSSAPI)**: `impala.use_ssl`/`impala.ca_cert`,
   `impala.auth_mechanism=GSSAPI`/`impala.kerberos_service_name`. 티켓은 OS 자격증명
-  캐시(KRB5CCNAME)를 사용 → systemd kinit 서비스/타이머로 keytab 갱신 ([deploy/README.md](deploy/README.md))
-- 로깅: `/var/log/query-executor/` 에 일 단위 롤링. 작업 요청이 오면 **job_id 를 먼저
+  캐시(KRB5CCNAME)를 사용 → `bin/kinit-renew.sh`(keytab) + cron 으로 갱신 ([deploy/README.md](deploy/README.md))
+- 로깅: `/appuser/query-executor/logs` 에 일 단위 롤링. 작업 요청이 오면 **job_id 를 먼저
   생성**하고, 이후 모든 로그에 `[job_id][task_id]` 가 자동으로 붙는다(coordinator·executor 공통).
   - coordinator(job 단위): `... [job_531ab6f734ca][-] - 쿼리 실행 요청 수신 ...`
   - executor(task 단위): `... [job_demo999][t_demo123] - task ... 완료: 2행 적재`
@@ -442,15 +442,16 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 }'
 ```
 
-## 배포 (systemd, RHEL 9.2)
+## 배포 (RHEL 9.2, /appuser 단일 트리)
 
-coordinator 1개 + executor 다수를 systemd 서비스로 운영하는 구성과 설치 스크립트는
+보안 정책상 `/etc`·`/opt`·`/var` 를 쓰지 않고 모든 것을 `/appuser/query-executor` 아래에
+두며, systemd 시스템 유닛 대신 런처 스크립트로 구동한다. 설치 스크립트/상세는
 [`deploy/README.md`](deploy/README.md) 참고.
 
 ```bash
-sudo ./deploy/install.sh
-sudo systemctl enable --now query-executor@8087 query-executor@8086
-sudo systemctl enable --now query-coordinator
+sudo ./deploy/install.sh                              # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
+sudo -u appuser /appuser/query-executor/bin/start.sh
+sudo -u appuser /appuser/query-executor/bin/status.sh
 ```
 
 ## 쿼리 분할 모드

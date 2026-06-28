@@ -65,7 +65,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 
 `config.properties`(Java 스타일 key=value)의 값으로 `config.yml` 의 `${변수:기본값}`
 자리표시자를 치환해 로드한다(`core/config_loader.py`). 설정 디렉터리는
-`/etc/query-executor/`(환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경, 개발 시 `packaging/config`).
+`/appuser/query-executor/config`(환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경, 개발 시 `packaging/config`).
 
 - `core/config.py` 의 `_get("section","key")` 는 **YAML 의 섹션 구조**를 따라 읽는다. 새 설정을
   추가할 때 placeholder 이름(`${coordinator.x}`)이 아니라 **실제 YAML 중첩 위치**가 섹션과

@@ -13,7 +13,7 @@ query:
 # 일 단위 롤링(파일명_YYYYMMDD.log). INFO 메인 로그와 WARNING 전용 로그를 분리한다.
 logging:
   level: ${log.level:INFO}                        # 메인 로그 레벨(이 레벨 이상을 메인 파일에 기록)
-  dir: ${log.dir:/var/log/query-executor}         # 로그 디렉터리
+  dir: ${log.dir:/appuser/query-executor/logs}    # 로그 디렉터리
   rolling:
     type: daily                                   # 롤링 방식(일 단위)
     backup_count: ${log.backup_count:30}          # 보관 일수(초과분 자동 삭제)
