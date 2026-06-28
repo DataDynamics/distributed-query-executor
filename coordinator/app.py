@@ -107,6 +107,9 @@ def create_app(
     selection_enabled = _select_policy in ("least_loaded", "p2c")
     selector = ExecutorSelector(policy=_select_policy) if selection_enabled else None
     load_view = SharedLoadView(monitor.snapshot) if selection_enabled else None
+    # 이 coordinator 가 기동 후 executor 별로 배정한 누적 task 수(배정 분포 관측용, Phase 2).
+    # 멀티 coordinator 에선 인스턴스별 카운트다(전역 분포는 각 인스턴스 합산).
+    assign_counts: dict = {}
     if runner is None:
         # executor_mode 에 따라 디스패처 선택: local 은 in-process 직접 실행,
         # 그 외(http)는 원격 executor에 HTTP로 task를 분배한다.
@@ -162,6 +165,10 @@ def create_app(
     app.state.settings = settings
     app.state.monitor = monitor
     app.state.status_repo = status_repo
+    # 헬스 기반 선택 관련(관측/테스트용). 선택 비활성이면 selector/load_view 는 None.
+    app.state.selector = selector
+    app.state.load_view = load_view
+    app.state.assign_counts = assign_counts
 
     @app.exception_handler(QueryValidationError)
     async def _validation_handler(_: Request, exc: QueryValidationError):
@@ -258,8 +265,20 @@ def create_app(
             for sq in sub_queries:
                 sq.sql = wrap(sq.sql, req.wrapper_query, req.wrapper_placeholder)
 
-        # 분할된 task 수만큼 executor를 라운드로빈 배정(local 모드면 전부 None).
-        executor_urls = _assign_executors(len(sub_queries), settings.executors)
+        # 분할된 task 에 executor 배정. 헬스 기반 선택(least_loaded/p2c)이 켜져 있으면
+        # 부하 뷰를 보고 한가한 노드에 분산 배정(같은 job 의 task 가 한 노드로 몰리지 않도록
+        # 임시 부하 가산). 그 외에는 기존 라운드로빈. local 모드(executors 없음)면 전부 None.
+        if selection_enabled and load_view is not None and settings.executors:
+            # 배정용 selector 는 요청마다 새로 만든다(동기 핸들러는 스레드풀에서 돌아
+            # 디스패처의 selector 와 상태를 공유하지 않게 — 스레드 안전).
+            executor_urls = ExecutorSelector(policy=_select_policy).assign(
+                len(sub_queries), list(settings.executors), load_view.by_url()
+            )
+        else:
+            executor_urls = _assign_executors(len(sub_queries), settings.executors)
+        for _u in executor_urls:
+            if _u:
+                assign_counts[_u] = assign_counts.get(_u, 0) + 1
 
         # dry-run: executor 호출·작업 저장 없이 "이렇게 실행될 것"이라는 계획만 만들어
         # 200으로 반환한다. 실제 부작용이 없으므로 admission 체크 이전에 빠르게 빠져나간다.
@@ -594,6 +613,10 @@ def create_app(
                 "total": len(store.list()),
                 "by_status": by_status,
             },
+            # 이 coordinator 가 기동 후 executor 별로 배정한 누적 task 수(배정 분포 관측).
+            # 선택 정책이 균형을 맞추고 있는지 확인하는 용도. 멀티 coordinator 면 인스턴스별 값.
+            "assignment_counts": dict(assign_counts),
+            "executor_select": _select_policy,
         }
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")

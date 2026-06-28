@@ -144,8 +144,9 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
   `executor.shutdown_drain_timeout_s`(기본 25초) 내에서 완료를 기다린다.
 - **헬스 기반 executor 선택(`coordinator.executor_select`)**: `round_robin`(기본) /
   `least_loaded` / `p2c`. `least_loaded`·`p2c`는 HealthMonitor 스냅샷(헬스+`active_tasks`)을
-  보고 failover 시 **살아있는·한가한 executor 먼저** 시도한다. **HA(다중 coordinator)** 에서는
-  분산 스탬피드를 피하는 **`p2c`(Power-of-Two-Choices)** 권장.
+  보고 **초기 배정**과 **failover 순서**를 **살아있는·한가한 executor 먼저**로 정한다(한 job의
+  task가 한 노드로 몰리지 않게 분산 배정). **HA(다중 coordinator)** 에서는 분산 스탬피드를 피하는
+  **`p2c`(Power-of-Two-Choices)** 권장. 배정 분포는 `GET /cluster`의 `assignment_counts`로 확인.
 - **coordinator admission control(동시 job 제한 + 대기 큐)**: 들어온 job 요청을
   - 실행 슬롯(`coordinator.max_concurrent_jobs`, 기본 16)이 비어 있으면 즉시 `RUNNING`,
   - 다 찼으면 `PENDING` 으로 **대기 큐**에 넣고(`coordinator.max_pending_jobs`, 기본 100),
@@ -195,7 +196,9 @@ curl -s 'localhost:8088/cluster?refresh=false'   # 캐시 사용
       "disk_percent": 61.0, "disk_used_gb": 120.5, "disk_total_gb": 200.0 }
   ],
   "executors_summary": { "total": 1, "healthy": 1, "unhealthy": 0 },
-  "jobs": { "running": 1, "active": 1, "total": 1, "by_status": {"RUNNING": 1} }
+  "jobs": { "running": 1, "active": 1, "total": 1, "by_status": {"RUNNING": 1} },
+  "assignment_counts": { "http://127.0.0.1:8087": 12, "http://127.0.0.1:8086": 11 },
+  "executor_select": "p2c"
 }
 ```
 

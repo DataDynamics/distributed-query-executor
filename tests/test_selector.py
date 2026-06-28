@@ -128,3 +128,52 @@ def test_failover_disabled_returns_primary_only(monkeypatch):
                     load_view=SharedLoadView(lambda: [_load(A), _load(B), _load(C)]),
                     failover=False)
     assert d._failover_order(_task(A)) == [A]
+
+
+# ── Phase 2: 초기 배정(assign) ────────────────────────────────────────────
+
+def test_assign_round_robin_cycles():
+    s = ExecutorSelector(policy="round_robin")
+    assert s.assign(4, [A, B], {}) == [A, B, A, B]
+
+
+def test_assign_none_when_no_candidates():
+    s = ExecutorSelector(policy="p2c")
+    assert s.assign(3, [], _view(_load(A))) == [None, None, None]
+
+
+def test_assign_least_loaded_spreads_within_job():
+    # 동일 부하 2노드에 4 task → 한 노드로 몰리지 않고 2:2 분산(임시 부하 가산 덕분)
+    from collections import Counter
+    s = ExecutorSelector(policy="least_loaded")
+    view = _view(_load(A, active=0), _load(B, active=0))
+    assert Counter(s.assign(4, [A, B], view)) == {A: 2, B: 2}
+
+
+def test_assign_least_loaded_prefers_idle_node():
+    # A 거의 만석, B 한가 → 대부분 B 로, A 가 어느 정도 차오르면 A 도 일부
+    from collections import Counter
+    s = ExecutorSelector(policy="least_loaded")
+    view = _view(_load(A, active=7, mx=8), _load(B, active=0, mx=8))  # 잔여 1 vs 8
+    counts = Counter(s.assign(8, [A, B], view))
+    assert counts[B] > counts[A]  # 한가한 B 가 더 많이
+
+
+def test_assign_p2c_distributes_with_seed():
+    from collections import Counter
+    s = ExecutorSelector(policy="p2c", rng=random.Random(1))
+    view = _view(_load(A, active=0), _load(B, active=0), _load(C, active=0))
+    counts = Counter(s.assign(30, [A, B, C], view))
+    assert set(counts) == {A, B, C}  # 세 노드 모두 사용(분산)
+
+
+def test_cluster_reports_assignment_counts(client, valid_payload, monkeypatch):
+    # round_robin(기본)으로도 배정 카운트는 누적·노출된다.
+    from coordinator.config import settings
+    monkeypatch.setattr(settings, "executors", [A, B], raising=False)
+    r = client.post("/jobs", json={**valid_payload, "parallelism": 2})
+    assert r.status_code == 202
+    cl = client.get("/cluster?refresh=false").json()
+    assert "assignment_counts" in cl and "executor_select" in cl
+    assert sum(cl["assignment_counts"].values()) == 2
+    assert set(cl["assignment_counts"]) <= {A, B}

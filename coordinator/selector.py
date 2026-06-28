@@ -96,6 +96,30 @@ class ExecutorSelector:
             )
         return ordered_alive + rest
 
+    def assign(self, count: int, candidates: list, view: dict) -> list:
+        """``count`` 개 task 에 executor URL 을 **배정**한다(초기 배정, Phase 2).
+
+        한 job 의 N개 task 가 같은 '가장 한가한' 노드로 몰리지 않도록, view 의 ``active_tasks``
+        를 **가변 복사본**에 두고 배정할 때마다 +1 해서 다음 task 가 다른 노드를 보게 한다.
+        round_robin 정책이거나 부하 뷰가 없으면 후보를 순환(cycle) 배정한다.
+        후보가 없으면(local 모드 등) ``None`` 으로 채운다.
+        """
+        cand = [c for c in candidates if c]
+        if not cand:
+            return [None] * count
+        if self.policy == "round_robin" or not view:
+            return [cand[i % len(cand)] for i in range(count)]
+
+        local = {c: dict(view.get(c, {})) for c in cand}
+        out = []
+        for _ in range(count):
+            order = self.order(cand, local)
+            pick = order[0] if order else cand[0]
+            out.append(pick)
+            slot = local.setdefault(pick, {})
+            slot["active_tasks"] = (slot.get("active_tasks") or 0) + 1
+        return out
+
     def _round_robin(self, cand: list) -> list:
         n = len(cand)
         start = self._rr % n
