@@ -117,6 +117,8 @@ executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task �
   app.py               REST API (POST /tasks, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
   __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 packaging/config/    # config.properties + config.yml 기본값 + 스키마(*.sql)
+packaging/wheels/    # 에어갭 오프라인 설치용 cp39 휠 번들(coordinator/executor/dev, 유형별)
+deploy/              # install.sh + 런처 bin/(start·stop·status·kinit-renew) — /appuser 트리 배포
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
 
@@ -131,6 +133,8 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
   `impala.*`, `greenplum.dsn`, `copy.batch_size`
 - `impala.host` 와 `greenplum.dsn` 이 모두 설정되면 실제 `ImpalaToGreenplumBackend`,
   아니면 `MockBackend`(실제 I/O 없음)로 폴백
+- **인증 범위**: TLS + Kerberos(GSSAPI)는 **Impala 접속에만** 적용된다. Greenplum 은
+  TLS/Kerberos 없는 **일반 `postgresql://` DSN** 으로 접속한다.
 - **coordinator admission control(동시 job 제한 + 대기 큐)**: 들어온 job 요청을
   - 실행 슬롯(`coordinator.max_concurrent_jobs`, 기본 16)이 비어 있으면 즉시 `RUNNING`,
   - 다 찼으면 `PENDING` 으로 **대기 큐**에 넣고(`coordinator.max_pending_jobs`, 기본 100),
@@ -453,6 +457,34 @@ sudo ./deploy/install.sh                              # 에어갭: WHEELHOUSE=..
 sudo -u appuser /appuser/query-executor/bin/start.sh
 sudo -u appuser /appuser/query-executor/bin/status.sh
 ```
+
+`install.sh` 는 `appuser` 계정 + `/appuser/query-executor` 트리(`config`·`logs`·`run`·`bin`·
+`.venv`)를 구성하고, Kerberos+TLS 자리표시 파일(`config/krb5.conf`·`impala-ca.pem`·
+`impala.keytab`)을 만든다. Impala 티켓은 `bin/kinit-renew.sh`(keytab) 로 발급하고 cron 으로
+주기 갱신한다(`KRB5_CONFIG`/`KRB5CCNAME` 는 `bin/env.sh` 가 `/appuser` 아래로 export).
+
+### 에어갭(인터넷 차단) 설치
+
+타깃이 PyPI/인터넷에 접근할 수 없을 때 두 가지 방법이 있다.
+
+1. **사내 PyPI 프록시(Nexus 등)** 가 있으면 `pip.conf`(`/appuser/.config/pip/pip.conf`)에
+   `index-url`/`trusted-host` 를 지정하면 평소처럼 설치된다.
+2. **완전 오프라인**이면 저장소의 `packaging/wheels/` 휠 번들(cp39, 유형별 디렉터리)로
+   `--no-index` 설치한다. `WHEELHOUSE` 는 콜론으로 여러 디렉터리를 지정한다:
+
+   ```bash
+   # coordinator 만
+   sudo WHEELHOUSE=packaging/wheels/coordinator ./deploy/install.sh
+   # executor 포함(impyla·SASL·gssapi). gssapi 는 sdist 라 타깃에서 빌드된다.
+   sudo WHEELHOUSE=packaging/wheels/coordinator:packaging/wheels/executor \
+        INSTALL_EXECUTOR=1 ./deploy/install.sh
+   ```
+
+`gssapi`(Kerberos)는 manylinux 휠이 없어 타깃에서 빌드되므로, RHEL 9.2 빌드 도구가 필요하다
+(`gcc gcc-c++ make python3-devel krb5-devel cyrus-sasl-devel`). 인터넷이 없으면 **RHEL 9.2
+DVD ISO 를 루프백 마운트**해 yum 리포지토리로 쓴다(자세한 절차는
+[`deploy/README.md`](deploy/README.md)). 휠 번들 구성/사용은
+[`packaging/wheels/README.md`](packaging/wheels/README.md) 참고.
 
 ## 쿼리 분할 모드
 
