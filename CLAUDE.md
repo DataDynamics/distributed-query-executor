@@ -13,8 +13,8 @@ coordinator 로는 상태와 row count 만 흐른다.
 ## 명령어
 
 ```bash
-# 가상환경(파이썬 3.11+). 이 저장소는 .venv 를 사용한다.
-python3.11 -m venv .venv
+# 가상환경(파이썬 3.9+, RHEL 9.2 기본 python3). 이 저장소는 .venv 를 사용한다.
+python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
 # 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 178개.

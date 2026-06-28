@@ -186,22 +186,22 @@ curl -s 'localhost:8088/cluster?refresh=false'   # 캐시 사용
 
 ## 실행 환경 (RHEL 9.2)
 
-RHEL 9.2 기본 Python은 3.9이므로, **Python 3.11+** 를 별도 설치한다.
+RHEL 9.2 기본 Python 3.9 를 그대로 사용한다(별도 Python 설치 불필요).
 
 ```bash
-# 1) Python 3.11 및 빌드 도구 설치
-sudo dnf install -y python3.11 python3.11-pip python3.11-devel
+# 1) Python 3.9 및 빌드 도구 설치(이미 있으면 생략)
+sudo dnf install -y python3 python3-pip python3-devel
 
 # 2) (executor를 실제 Impala/Greenplum에 연결할 때만) impyla + Kerberos/TLS 의존성
 #    Impala 는 TLS + Kerberos(GSSAPI) 환경이다.
-sudo dnf install -y gcc gcc-c++ make python3.11-devel \
+sudo dnf install -y gcc gcc-c++ make python3-devel \
     krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi
 ```
 
 ## 설치 및 테스트
 
 ```bash
-python3.11 -m venv .venv
+python3.9 -m venv .venv
 .venv/bin/pip install --upgrade pip
 
 # coordinator + 테스트 의존성

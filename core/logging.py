@@ -13,6 +13,10 @@
 (argus-catalog backend의 logging 구조와 동일한 방식: 파일명_YYYYMMDD.log 롤링)
 """
 
+# Python 3.9 호환: PEP 604 (``X | None``) 유니언을 함수 시그니처에서 쓰므로,
+# 어노테이션 평가를 지연(문자열화)시켜 3.9 에서도 런타임 오류 없이 동작하게 한다.
+from __future__ import annotations
+
 import contextvars
 import logging
 from contextlib import contextmanager

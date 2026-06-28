@@ -1,6 +1,8 @@
-# Coordinator 런타임 의존성 (RHEL 9.2 / Python 3.11+ 기준)
-fastapi>=0.138,<1.0
-uvicorn[standard]>=0.49,<1.0
+# Coordinator 런타임 의존성 (RHEL 9.2 기본 Python 3.9+ 기준)
+# 0.129+ 는 Python 3.10+ 를 요구하므로 3.9 호환을 위해 0.128.x 로 상한을 둔다.
+fastapi>=0.110,<0.129
+# 0.40+ 는 Python 3.10+ 를 요구하므로 3.9 호환을 위해 0.39.x 로 상한을 둔다.
+uvicorn[standard]>=0.29,<0.40
 sqlglot>=30,<31
 httpx>=0.28,<1.0
 pydantic>=2.13,<3.0

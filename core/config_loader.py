@@ -10,6 +10,10 @@ core.config 모듈이 이 로더의 load_config() 를 호출해 원시 설정 di
 (argus-catalog backend의 config_loader 와 동일한 방식)
 """
 
+# Python 3.9 호환: PEP 604 (``X | None``) 유니언을 함수 시그니처에서 쓰므로,
+# 어노테이션 평가를 지연(문자열화)시켜 3.9 에서도 런타임 오류 없이 동작하게 한다.
+from __future__ import annotations
+
 import logging
 import re
 from pathlib import Path

@@ -8,7 +8,13 @@ APP_USER="queryexec"
 APP_DIR="/opt/query-executor"
 CONF_DIR="/etc/query-executor"
 LOG_DIR="/var/log/query-executor"
-PYTHON="${PYTHON:-python3.11}"
+# RHEL 9.2 기본 Python 은 3.9 이다. 별도 설치 없이 시스템 python3.9 를 그대로 쓴다.
+PYTHON="${PYTHON:-python3.9}"
+# 에어갭(인터넷 차단) 설치 지원: WHEELHOUSE 에 미리 받아 둔 wheel 디렉터리를 지정하면
+# PyPI 대신 그 디렉터리에서만(--no-index) 의존성을 설치한다.
+WHEELHOUSE="${WHEELHOUSE:-}"
+# executor 런타임 드라이버(impyla/gssapi 등)까지 설치하려면 INSTALL_EXECUTOR=1.
+INSTALL_EXECUTOR="${INSTALL_EXECUTOR:-0}"
 
 # 저장소 루트(이 스크립트의 상위 디렉터리)
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,9 +24,9 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-echo "==> Python 3.11 확인"
+echo "==> Python 3.9 확인"
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
-    echo "$PYTHON 가 없습니다. 먼저 설치하세요: sudo dnf install -y python3.11 python3.11-pip python3.11-devel rsync" >&2
+    echo "$PYTHON 가 없습니다. 먼저 설치하세요: sudo dnf install -y python3 python3-devel rsync" >&2
     exit 1
 fi
 
@@ -38,10 +44,22 @@ rsync -a --delete \
 
 echo "==> 가상환경 및 의존성 설치"
 "$PYTHON" -m venv "$APP_DIR/.venv"
-"$APP_DIR/.venv/bin/pip" install --upgrade pip
-"$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
-# executor를 실제 DB에 연결하려면 아래 주석을 해제:
-# "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements-executor.txt"
+PIP="$APP_DIR/.venv/bin/pip"
+# 설치할 requirements 선택: executor 드라이버 포함 여부.
+if [[ "$INSTALL_EXECUTOR" == "1" ]]; then
+    REQ="$APP_DIR/requirements-executor.txt"
+else
+    REQ="$APP_DIR/requirements.txt"
+fi
+if [[ -n "$WHEELHOUSE" ]]; then
+    # 에어갭: 미리 받아 둔 wheelhouse 에서만 설치(인터넷·PyPI 접근 없음).
+    echo "    (에어갭 모드) wheelhouse=$WHEELHOUSE"
+    "$PIP" install --no-index --find-links "$WHEELHOUSE" --upgrade pip
+    "$PIP" install --no-index --find-links "$WHEELHOUSE" -r "$REQ"
+else
+    "$PIP" install --upgrade pip
+    "$PIP" install -r "$REQ"
+fi
 
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 

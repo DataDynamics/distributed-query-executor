@@ -23,8 +23,8 @@ coordinator 1개와 executor 다수를 systemd 서비스로 운영하기 위한 
 ## 빠른 설치 (스크립트 사용)
 
 ```bash
-# 0) (최초 1회) Python 3.11 + rsync 설치
-sudo dnf install -y python3.11 python3.11-pip python3.11-devel rsync
+# 0) (최초 1회) Python 3.9(RHEL 9.2 기본) + rsync 설치
+sudo dnf install -y python3 python3-pip python3-devel rsync
 
 # 1) 저장소 루트에서 실행
 sudo ./deploy/install.sh
@@ -95,7 +95,7 @@ keytab을 배치하고, systemd kinit 타이머로 티켓을 주기적으로 갱
 ```bash
 # 0) 시스템 패키지 (RHEL 9.2)
 sudo dnf install -y krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi \
-    gcc gcc-c++ make python3.11-devel
+    gcc gcc-c++ make python3-devel
 
 # 1) executor 드라이버 + SASL/GSSAPI 설치
 sudo /opt/query-executor/.venv/bin/pip install -r /opt/query-executor/requirements-executor.txt

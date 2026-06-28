@@ -483,7 +483,7 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 
 | 영역 | 선택 |
 |---|---|
-| 언어/프레임워크 | Python 3.11+, **FastAPI**(coordinator·executor 공통) |
+| 언어/프레임워크 | Python 3.9+(RHEL 9.2 기본), **FastAPI**(coordinator·executor 공통) |
 | SQL 파싱 | **sqlglot**(기본 `read="hive"`, 요청별 방언 재정의) |
 | Impala 읽기 | **impyla**(HiveServer2, TLS+Kerberos) + 배치 fetch |
 | Greenplum 쓰기 | **psycopg** `COPY FROM STDIN` / INSERT |

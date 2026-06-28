@@ -1,7 +1,7 @@
 # Executor 런타임 의존성 (Impala 읽기 + Greenplum 적재용 드라이버 포함)
 #
-# RHEL 9.2 시스템 패키지(먼저 설치):
-#   sudo dnf install -y gcc gcc-c++ make python3.11-devel \
+# RHEL 9.2 시스템 패키지(먼저 설치). RHEL 9.2 기본 Python 3.9 를 그대로 사용한다:
+#   sudo dnf install -y gcc gcc-c++ make python3-devel \
 #       krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi
 #   - krb5-workstation: kinit (Kerberos 티켓 발급)
 #   - cyrus-sasl-gssapi / krb5-devel: impyla GSSAPI(Kerberos) 인증
