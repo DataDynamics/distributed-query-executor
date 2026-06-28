@@ -14,6 +14,7 @@ coordinator 1개와 executor 다수를 운영하기 위한 구성이다.
 | `bin/start.sh` / `stop.sh` / `status.sh` | **전체**(coordinator + executor) 기동/중지/상태(nohup + PID) |
 | `bin/start-coordinator.sh` / `stop-…` / `status-…` | **coordinator 만** 제어 |
 | `bin/start-executor.sh` / `stop-…` / `status-…` | **executor 만** 제어(포트 인자 선택, 생략 시 전체) |
+| `bin/check-prereqs.sh` | **사전 점검**: OS 패키지(rpm) + 파이썬 휠(.venv) 설치 여부 확인(설치는 안 함) |
 | `bin/kinit-renew.sh` | Impala Kerberos 티켓 발급/갱신(keytab → 공유 ccache) |
 | `bin/env.sh` | 런처 공통 환경 + 헬퍼 함수(경로·`KRB5_CONFIG`·`KRB5CCNAME`·포트) |
 | `../packaging/config/config.properties` | Java 스타일 key=value 변수 정의 |
@@ -52,6 +53,31 @@ sudo -u appuser /appuser/query-executor/bin/status.sh
 - `packaging/config/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/appuser/query-executor/logs` 로 설정
 - Kerberos+TLS 자리표시 파일 생성(`config/krb5.conf`·`impala-ca.pem`·`impala.keytab`)
 - 런처 스크립트를 `bin/` 으로 배치, 소유권/권한 설정
+
+## 사전 점검 (check-prereqs.sh)
+
+설치 전·후로 **OS 패키지**와 **파이썬 휠**이 갖춰졌는지 확인만 한다(설치는 하지 않음).
+종료코드는 모두 충족 시 `0`, 하나라도 누락이면 `1` 이라 CI/사전 점검 게이트로도 쓸 수 있다.
+
+```bash
+# OS 패키지(rpm) + coordinator,executor 휠(.venv) 점검
+./deploy/bin/check-prereqs.sh
+
+# 휠은 특정 그룹만(coordinator / executor / dev)
+./deploy/bin/check-prereqs.sh coordinator
+./deploy/bin/check-prereqs.sh coordinator executor dev
+
+# 한쪽만 점검
+OS_ONLY=1     ./deploy/bin/check-prereqs.sh   # OS 패키지만
+WHEELS_ONLY=1 ./deploy/bin/check-prereqs.sh   # 휠만
+```
+
+- **OS 패키지**: `rpm -q` 로 빌드 툴체인 + Kerberos/SASL 의존성 확인 —
+  `gcc gcc-c++ make python3-devel python3 python3-pip krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi`.
+- **파이썬 휠**: `packaging/wheels/<그룹>/` 의 `.whl`·`.tar.gz` 파일명에서 이름·버전을 뽑아
+  `.venv` 설치 목록과 대조한다. `[OK]`(일치) / `[MISSING]`(미설치) / `[VER ?]`(버전 차이, 경고만).
+- 경로는 환경변수로 덮어쓴다: `VENV_PY`(점검할 파이썬), `WHEELS_ROOT`(휠 묶음 루트).
+  배포 타깃에서는 보통 `VENV_PY=/appuser/query-executor/.venv/bin/python` 로 둔다.
 
 ## 설정 항목 (config.properties)
 
