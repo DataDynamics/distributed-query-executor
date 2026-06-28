@@ -21,10 +21,11 @@ logger = logging.getLogger(__name__)
 # updated_at 을 새 값으로 덮어쓴다. 즉 "마지막으로 본 상태" 한 줄만 항상 유지된다.
 _UPSERT = """
 INSERT INTO {table}
-    (executor_id, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
+    (executor_id, executor_url, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
      disk_percent, disk_used_gb, disk_total_gb, active_tasks, max_concurrent_tasks, updated_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
 ON CONFLICT (executor_id) DO UPDATE SET
+    executor_url=EXCLUDED.executor_url,
     cpu_percent=EXCLUDED.cpu_percent, memory_percent=EXCLUDED.memory_percent,
     memory_used_mb=EXCLUDED.memory_used_mb, memory_total_mb=EXCLUDED.memory_total_mb,
     disk_percent=EXCLUDED.disk_percent, disk_used_gb=EXCLUDED.disk_used_gb,
@@ -54,6 +55,8 @@ class ExecutorStatusReporter:
         self.interval: float = float(getattr(settings, "executor_status_interval_s", 10))
         self.disk_path: str = getattr(settings, "monitor_disk_path", "/")
         self.executor_id: str = _executor_id()
+        # HA 에서 coordinator 가 URL 키로 부하 뷰를 구성하도록 자기 base URL 도 함께 보고한다.
+        self.executor_url: str = getattr(settings, "executor_advertise_url", "") or ""
         # () -> (active, queued, max) 동시 처리 현황 제공자
         self.tasks_provider = tasks_provider
         self.enabled: bool = bool(self.dsn)
@@ -110,7 +113,8 @@ class ExecutorStatusReporter:
             counts = self.tasks_provider()
             active, mx = counts[0], counts[2]
         row = (
-            self.executor_id, m["cpu_percent"], mem["percent"], mem["used_mb"],
+            self.executor_id, self.executor_url or None,
+            m["cpu_percent"], mem["percent"], mem["used_mb"],
             mem["total_mb"], disk["percent"], disk["used_gb"], disk["total_gb"],
             active, mx,
         )

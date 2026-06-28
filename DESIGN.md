@@ -443,7 +443,21 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 - **executor liveness**: self-report 모드면 executor가 `status_interval_s`마다 `executor_status`에 upsert(heartbeat)하고, coordinator는 `updated_at` 신선도로 liveness를 판정한다.
 - **이력 2계층**: 하나의 `job_id` 아래 N개 task가 생기므로 `job_history`(coordinator, job 단위) + `task_history`(각 executor, task 단위, `executor_id`로 식별)로 기록. 제출 시 `username`을 넘기면 두 테이블 모두 기록된다.
 
-> 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 두면 된다.
+### HA 헬스 기반 선택 & 정합 (Phase 3)
+
+다중 coordinator에서 **여러 coordinator가 독립적으로, 공유된(약간 stale한) 부하 뷰를 보고** executor를 고른다. 중앙 스케줄러(SPOF) 없이 분산 결정한다.
+
+| 설정 | 효과 |
+|---|---|
+| `coordinator.executor_health_source=auto` | HA(self_report)면 **공유 `executor_status`(URL 키)** 를 부하 뷰로, 단일이면 monitor 폴링. executor는 `executor.advertise_url`로 자기 URL을 함께 self-report |
+| `coordinator.executor_select=p2c` | **Power-of-Two-Choices**: 살아있는 후보 무작위 2개 중 덜 바쁜 쪽 — 랜덤화로 결정을 탈상관시켜 **분산 스탬피드** 억제(무상태·무락) |
+| `coordinator.executor_reservation=true` | **TTL 보호 공유 예약**: dispatch 중 task를 `executor_reservation`에 예약 → 다른 coordinator가 `active_tasks + 예약`을 실시간 부하로 봄(엄격 균형). 죽은 coordinator의 예약은 `reservation_ttl_s`로 만료 |
+| `coordinator.orphan_reconcile_interval_s` | **죽은 coordinator 정합**: 각 coordinator가 `coordinator_status`에 heartbeat하고, 소유자가 stale(`coordinator_stale_s`)인 비종료 job을 주기적으로 `FAILED`로 정합 → `retry`로 재개 |
+
+- **왜 P2C인가**: heartbeat 간격 동안 단순 least-loaded는 모든 coordinator가 같은 한가한 노드로 몰린다(분산 herding). P2C는 분산 부하분산의 표준 해법으로, 무상태/무락이라 HA에 적합하다.
+- **예약 누수 방지**: 예약은 `(executor_url, coordinator_id)`별로 기록되고 TTL로 만료되므로, coordinator가 죽어도 예약이 영구 누수되지 않는다. 또한 executor의 실제 self-report `active_tasks`가 결국 진실이라 예약은 짧은 bias일 뿐이다.
+
+> 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`, `executor_select=round_robin`) 그대로 두면 된다.
 
 ---
 
@@ -507,7 +521,7 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 ## 17. 향후 확장
 
 - **실행 중 즉시 취소**: 백엔드 커서 취소(`cursor.cancel()`) + 트랜잭션 rollback으로 진행 중 Impala/COPY 즉시 중단.
-- **헬스 기반 executor 선택**(Phase 1·2 구현됨): `coordinator.executor_select=least_loaded|p2c`이면 HealthMonitor 스냅샷(헬스+`active_tasks`)을 보고 **failover 순서**(Phase 1)와 **초기 배정**(Phase 2, 한 job의 N task가 한 노드로 몰리지 않게 임시 부하 가산)을 살아있는·한가한 노드 먼저로 정한다. HA(다중 coordinator)에서는 분산 스탬피드를 피하는 **P2C**가 기본 권장이며, 배정 분포는 `GET /cluster`의 `assignment_counts`로 관측한다(`coordinator/selector.py`). 남은 단계: 엄격 균형용 공유 예약 + TTL 정합(Phase 3, 멀티 coordinator).
+- **헬스 기반 executor 선택**(Phase 1·2·3 구현 완료): `coordinator.executor_select=least_loaded|p2c`로 **초기 배정**과 **failover 순서**를 헬스/부하 기반으로 정한다(HA는 분산 스탬피드를 피하는 **P2C** 권장). HA 고도화로 **공유 self-report(URL 키 부하 뷰)·TTL 보호 공유 예약·죽은 coordinator 소유 job 정합**까지 지원한다 — §12 참고(`coordinator/selector.py`·`reservation.py`·`ha.py`).
 - **append 모드 재실행 안전화**: 현재 폴링 중 유실은 멱등(`overwrite_partitions`)일 때만 재배정한다. task 단위 staging+swap 등으로 `append`도 안전 재실행 가능하게.
 - **callback 기반 상태 전파**: polling 대신 executor→coordinator 콜백으로 부하 제거.
 - **집계/GROUP BY 쿼리 지원**: 소스 측 사전 집계 후 적재 또는 적재 후 재집계.

@@ -237,6 +237,24 @@ class Settings:
             os.getenv("COORDINATOR_EXECUTOR_SELECT")
             or _get("coordinator", "executor_select", "round_robin")
         ).lower()
+        # ── Phase 3: HA(다중 coordinator) 헬스 기반 선택 고도화 ──
+        # 부하 뷰 소스: auto(멀티=self_report 공유테이블, 단일=monitor) | monitor | self_report.
+        self.executor_health_source: str = _get(
+            "coordinator", "executor_health_source", "auto"
+        ).lower()
+        # 공유 예약(엄격 균형): true 면 executor_reservation 으로 dispatch 중 task 를 예약해
+        # 여러 coordinator 가 실시간 전역 부하를 공유한다(active_tasks + 예약). 누수는 TTL 로 방지.
+        self.executor_reservation: bool = _to_bool(
+            _get("coordinator", "executor_reservation", False)
+        )
+        self.reservation_ttl_s: float = float(_get("coordinator", "reservation_ttl_s", 60))
+        # coordinator 자기 heartbeat 주기/만료. 죽은 coordinator 소유 job 정합(orphan)에 쓰인다.
+        self.heartbeat_interval_s: float = float(_get("coordinator", "heartbeat_interval_s", 10))
+        self.coordinator_stale_s: float = float(_get("coordinator", "coordinator_stale_s", 30))
+        # 죽은 coordinator 소유의 비종료 job 을 FAILED 로 정합하는 주기(초). 0 이면 비활성.
+        self.orphan_reconcile_interval_s: float = float(
+            _get("coordinator", "orphan_reconcile_interval_s", 30)
+        )
 
         # ───────── Coordinator - executor 헬스 모니터링 & 메트릭 기록 ─────────
         self.monitor_enabled: bool = _to_bool(_get("monitor", "enabled", True))
@@ -266,6 +284,14 @@ class Settings:
         # executor self-report(멀티 coordinator): executor가 자기 상태를 공유 DB에 기록
         self.executor_self_report: bool = _to_bool(
             os.getenv("EXECUTOR_SELF_REPORT") or _get("executor", "self_report", False)
+        )
+        # executor 가 self-report 시 함께 기록하는 자기 base URL(coordinator 가 도달하는 주소).
+        # HA 에서 coordinator 가 executor_status 를 URL 키로 읽어 부하 뷰를 구성하게 한다.
+        # 미설정 시 self-report 는 URL 없이 기록되고, coordinator 는 monitor 폴링으로 폴백한다.
+        # coordinator.executors 의 해당 URL 과 정확히 일치시켜야 매칭된다.
+        self.executor_advertise_url: str = (
+            os.getenv("EXECUTOR_ADVERTISE_URL")
+            or _get("executor", "advertise_url", "")
         )
         # executor self-report 시 자기 상태를 기록할 테이블과 기록 주기(초).
         self.executor_status_table: str = _get("executor", "status_table", "executor_status")

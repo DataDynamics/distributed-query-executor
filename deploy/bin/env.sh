@@ -16,6 +16,9 @@ export PYTHONPATH="$APP_HOME${PYTHONPATH:+:$PYTHONPATH}"
 
 # 기동할 executor 포트(config 의 coordinator.executors 와 일치시킬 것)
 EXECUTOR_PORTS="${EXECUTOR_PORTS:-8087 8086}"
+# HA self-report 시 executor 가 알릴 자기 호스트(coordinator.executors 의 호스트와 일치).
+# EXECUTOR_ADVERTISE_URL=http://$ADVERTISE_HOST:$port 로 self-report 에 기록된다.
+ADVERTISE_HOST="${ADVERTISE_HOST:-127.0.0.1}"
 # coordinator health 확인용 포트(config 의 coordinator.port 와 일치)
 COORDINATOR_PORT="${COORDINATOR_PORT:-8088}"
 

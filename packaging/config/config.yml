@@ -49,6 +49,13 @@ coordinator:
   task_failover: ${coordinator.task_failover:true}        # 재시도 소진 시 다른 executor 로 재배정
 
   executor_select: ${coordinator.executor_select:round_robin}  # executor 선택: round_robin(기본) | least_loaded | p2c(HA 권장)
+  # Phase 3(HA): 부하 뷰 소스 auto(멀티=self_report, 단일=monitor) | monitor | self_report
+  executor_health_source: ${coordinator.executor_health_source:auto}
+  executor_reservation: ${coordinator.executor_reservation:false}   # 공유 예약(엄격 균형). true 면 dispatch 중 task 를 예약
+  reservation_ttl_s: ${coordinator.reservation_ttl_s:60}            # 예약 만료(죽은 coordinator 누수 방지)
+  heartbeat_interval_s: ${coordinator.heartbeat_interval_s:10}      # coordinator 자기 생존 heartbeat 주기
+  coordinator_stale_s: ${coordinator.coordinator_stale_s:30}        # coordinator 생존 판정 임계(초)
+  orphan_reconcile_interval_s: ${coordinator.orphan_reconcile_interval_s:30}  # 죽은 coordinator 소유 job 정합 주기(0=비활성)
 
 store:
   backend: ${store.backend:memory}                # 작업 저장소: memory(휘발) | file(단일 노드 파일 영속/크래시 복구) | postgres(멀티 coordinator 공유)
@@ -75,6 +82,8 @@ history:
 executor:
   host: ${executor.host:0.0.0.0}                          # 바인드 주소(포트는 EXECUTOR_PORT 환경변수)
   self_report: ${executor.self_report:false}             # 상태를 공유 DB에 self-report 할지(멀티 coordinator)
+  advertise_url: ${executor.advertise_url:}              # self-report 에 기록할 자기 base URL(HA URL 키 부하 뷰). coordinator.executors 의 URL 과 일치
+
   status_table: ${executor.status_table:executor_status} # self-report 상태 테이블
   status_interval_s: ${executor.status_interval_s:10}    # self-report 주기(초)
   max_concurrent_tasks: ${executor.max_concurrent_tasks:8}   # executor 1대가 동시에 실행하는 task 수(0=무제한)

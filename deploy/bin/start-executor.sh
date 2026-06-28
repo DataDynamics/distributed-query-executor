@@ -12,5 +12,6 @@ PORTS=("$@")
 
 for port in "${PORTS[@]}"; do
     EXECUTOR_PORT="$port" EXECUTOR_INSTANCE="$port" \
+        EXECUTOR_ADVERTISE_URL="http://$ADVERTISE_HOST:$port" \
         start_proc "executor-$port" "$VENV_PY" -m executor
 done

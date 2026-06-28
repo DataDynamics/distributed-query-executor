@@ -46,7 +46,8 @@ class ExecutorStatusRepository:
             "SELECT executor_id, cpu_percent, memory_percent, memory_used_mb, "
             "memory_total_mb, disk_percent, disk_used_gb, disk_total_gb, "
             "active_tasks, max_concurrent_tasks, "
-            "EXTRACT(EPOCH FROM (now() - updated_at)) AS age_s, updated_at "
+            "EXTRACT(EPOCH FROM (now() - updated_at)) AS age_s, updated_at, "
+            "executor_url "
             f"FROM {self.table}"
         )
         try:
@@ -65,6 +66,10 @@ class ExecutorStatusRepository:
             healthy = age is not None and age <= self.stale_seconds
             result.append({
                 "executor_id": r[0],
+                # executor_url(advertise_url). HA 에서 coordinator 가 URL 키로 부하 뷰를
+                # 구성한다(미보고 시 None → URL 매칭 불가로 폴백). 키 일관성을 위해
+                # executor_url 이 없으면 executor_id 를 대체 키로 노출한다.
+                "executor_url": r[12] or r[0],
                 "healthy": healthy,
                 "cpu_percent": r[1],
                 "memory_percent": r[2],

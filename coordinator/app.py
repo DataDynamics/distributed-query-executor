@@ -38,6 +38,7 @@ from .dashboard import DASHBOARD_HTML, masked_config
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .executor_status import ExecutorStatusRepository
+from .ha import CoordinatorHeartbeat, reconcile_orphaned_jobs
 from .history import JobHistoryRepository
 from .job_store import JobStore, build_job_store, reconcile_interrupted_jobs
 from .models import (
@@ -51,6 +52,7 @@ from .models import (
 )
 from .monitor import HealthMonitor
 from .parser import QueryValidationError, is_row_returning, validate_and_parse
+from .reservation import ReservationRepository, ReservingLoadView
 from .selector import ExecutorSelector, SharedLoadView
 from .splitter import split, wrap
 
@@ -101,23 +103,6 @@ def create_app(
     settings = settings or default_settings
     store = store or build_job_store(settings)
     monitor = HealthMonitor(settings)
-    # 헬스/부하 기반 executor 선택(Phase 1). round_robin(기본)이 아니면 monitor 스냅샷을
-    # 부하 뷰로 써서 failover 순서를 헬스 기반으로 정한다(p2c 권장 — HA 분산 스탬피드 방지).
-    _select_policy = getattr(settings, "executor_select", "round_robin")
-    selection_enabled = _select_policy in ("least_loaded", "p2c")
-    selector = ExecutorSelector(policy=_select_policy) if selection_enabled else None
-    load_view = SharedLoadView(monitor.snapshot) if selection_enabled else None
-    # 이 coordinator 가 기동 후 executor 별로 배정한 누적 task 수(배정 분포 관측용, Phase 2).
-    # 멀티 coordinator 에선 인스턴스별 카운트다(전역 분포는 각 인스턴스 합산).
-    assign_counts: dict = {}
-    if runner is None:
-        # executor_mode 에 따라 디스패처 선택: local 은 in-process 직접 실행,
-        # 그 외(http)는 원격 executor에 HTTP로 task를 분배한다.
-        runner = (
-            LocalDispatcher(settings, store=store)
-            if settings.executor_mode == "local"
-            else HttpDispatcher(settings, store=store, load_view=load_view, selector=selector)
-        )
     started_at = datetime.now(timezone.utc)
     start_monotonic = time.monotonic()
     # self-report 모드면 executor 상태를 공유 테이블에서 읽는다(coordinator 폴링/기록 안 함)
@@ -127,6 +112,49 @@ def create_app(
         else None
     )
 
+    # 헬스/부하 기반 executor 선택(Phase 1·2·3). round_robin(기본)이 아니면 부하 뷰를 보고
+    # 초기 배정과 failover 순서를 헬스 기반으로 정한다(p2c 권장 — HA 분산 스탬피드 방지).
+    _select_policy = getattr(settings, "executor_select", "round_robin")
+    selection_enabled = _select_policy in ("least_loaded", "p2c")
+    selector = ExecutorSelector(policy=_select_policy) if selection_enabled else None
+    # 부하 뷰 소스(Phase 3): HA(self_report 공유 테이블, URL 키) vs 단일(monitor 폴링).
+    #   auto    → status_repo 있으면 공유 테이블, 없으면 monitor
+    #   self_report → 공유 테이블(없으면 monitor 폴백)
+    #   monitor → 항상 monitor 폴링
+    _health_source = getattr(settings, "executor_health_source", "auto")
+    _use_shared = (
+        status_repo is not None and _health_source in ("auto", "self_report")
+    )
+    if selection_enabled:
+        load_view = SharedLoadView(status_repo.read_all) if _use_shared \
+            else SharedLoadView(monitor.snapshot)
+    else:
+        load_view = None
+    # 공유 예약(Phase 3-B, 엄격 균형): 켜져 있고 공유 DB 가 있으면 부하 뷰를 예약 합산 뷰로
+    # 감싸고, dispatch 중 task 를 예약/해제한다(active_tasks + 예약 = effective load).
+    reservations = None
+    if selection_enabled and getattr(settings, "executor_reservation", False) \
+            and settings.history_db_dsn:
+        reservations = ReservationRepository(settings.history_db_dsn, settings.coordinator_id)
+        load_view = ReservingLoadView(load_view, reservations, settings.reservation_ttl_s)
+    # 죽은 coordinator 소유 job 정합(Phase 3-C): 공유 postgres store + heartbeat 일 때만.
+    heartbeat = None
+    if getattr(settings, "store_backend", "memory") == "postgres" and settings.history_db_dsn \
+            and getattr(settings, "orphan_reconcile_interval_s", 0) > 0:
+        heartbeat = CoordinatorHeartbeat(settings.history_db_dsn, settings.coordinator_id)
+    # 이 coordinator 가 기동 후 executor 별로 배정한 누적 task 수(배정 분포 관측용, Phase 2).
+    # 멀티 coordinator 에선 인스턴스별 카운트다(전역 분포는 각 인스턴스 합산).
+    assign_counts: dict = {}
+    if runner is None:
+        # executor_mode 에 따라 디스패처 선택: local 은 in-process 직접 실행,
+        # 그 외(http)는 원격 executor에 HTTP로 task를 분배한다.
+        runner = (
+            LocalDispatcher(settings, store=store)
+            if settings.executor_mode == "local"
+            else HttpDispatcher(settings, store=store, load_view=load_view,
+                                selector=selector, reservations=reservations)
+        )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         # 앱 수명주기 훅: 기동 시 (1) 재기동 정합 — 영속 저장소(file/postgres)에서 비종료로
@@ -134,14 +162,40 @@ def create_app(
         # (2) 헬스 모니터를 켠다. status_repo 가 있으면 executor self-report 모드라 폴링 모니터는
         # 보통 띄우지 않지만, 헬스 기반 executor 선택이 켜져 있으면 선택용 부하 뷰를 위해 폴링한다.
         reconcile_interrupted_jobs(store)
-        need_monitor = status_repo is None or selection_enabled
+        # 모니터는 (a) self-report 가 아니어서 /executors 용 폴링이 필요하거나,
+        # (b) 헬스 기반 선택이 켜졌고 그 부하 소스가 monitor 일 때만 띄운다.
+        # HA self-report(_use_shared) 면 공유 테이블을 읽으므로 폴링이 불필요하다.
+        need_monitor = status_repo is None or (selection_enabled and not _use_shared)
         if need_monitor:
             await monitor.start()
+        # HA: coordinator heartbeat + 죽은 coordinator 소유 job 정합 백그라운드 루프.
+        ha_task = asyncio.create_task(_ha_loop()) if heartbeat is not None else None
         try:
             yield
         finally:
+            if ha_task is not None:
+                ha_task.cancel()
+                try:
+                    await ha_task
+                except asyncio.CancelledError:
+                    pass
             if need_monitor:
                 await monitor.stop()
+
+    async def _ha_loop() -> None:
+        # 주기적으로 자기 생존을 heartbeat 하고, 죽은 coordinator 소유의 비종료 job 을
+        # FAILED 로 정합한다(블로킹 DB 작업은 to_thread 로 이벤트 루프 비차단). 한 번의 오류가
+        # 루프를 멈추지 않도록 예외는 로깅만 한다.
+        interval = settings.orphan_reconcile_interval_s
+        while True:
+            try:
+                await asyncio.to_thread(heartbeat.beat)
+                await asyncio.to_thread(
+                    reconcile_orphaned_jobs, store, heartbeat, settings.coordinator_stale_s
+                )
+            except Exception:
+                logger.exception("HA heartbeat/reconcile 루프 오류")
+            await asyncio.sleep(interval)
 
     app = FastAPI(
         title="Distributed Query Coordinator",

@@ -276,6 +276,20 @@ class SqlJobStore:
             jobs.append(Job.from_record(data))
         return jobs
 
+    def list_owned(self) -> list:
+        """(job_id, status, coordinator_id) 목록을 돌려준다(HA orphan 정합용).
+
+        Job 본문(JSONB)을 복원하지 않고 가벼운 컬럼 3개만 읽어, 죽은 coordinator 소유의
+        비종료 job 을 빠르게 추려내는 데 쓴다(reconcile_orphaned_jobs 참고).
+        """
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT job_id, status, coordinator_id FROM {self.table}"
+                )
+                rows = cur.fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
+
     def request_cancel(self, job_id: str) -> bool:
         """취소 플래그 컬럼만 직접 UPDATE한다. 한 행이라도 갱신되면 True.
 

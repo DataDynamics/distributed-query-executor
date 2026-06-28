@@ -196,7 +196,7 @@ class _DispatcherBase:
     """
 
     def __init__(self, settings: Settings, history: Optional[JobHistoryRepository] = None,
-                 store=None, load_view=None, selector=None):
+                 store=None, load_view=None, selector=None, reservations=None):
         self.settings = settings
         # job 내부에서 동시에 진행할 수 있는 task 수 상한(예: executor 동시 호출 제한).
         # 위 admission(job 단위)과 층위가 다른, task 단위 동시성 제어다.
@@ -208,6 +208,9 @@ class _DispatcherBase:
         # 정한다. 미주입(기본)이면 기존 정적 순서를 그대로 쓴다.
         self.load_view = load_view
         self.selector = selector
+        # 공유 예약(Phase 3-B). 주입되면 task 실행 동안 배정 executor 를 예약/해제해
+        # 다른 coordinator 의 선택에 실시간 부하로 반영한다.
+        self.reservations = reservations
 
     def _save(self, job: Job) -> None:
         # store 가 주입된 경우에만 영속화한다(인메모리 모드면 no-op).
@@ -348,6 +351,11 @@ class HttpDispatcher(_DispatcherBase):
                 task.status = TaskStatus.CANCELLED
                 self._save(job)
                 return
+            # 공유 예약: 실행 동안 배정 executor 를 예약(다른 coordinator 의 선택에 반영).
+            # 배정 executor 기준으로 예약하고, 종료 시 해제한다(근사 — 실제 self-report 가 보정).
+            reserved_url = task.executor_url if self.reservations is not None else None
+            if reserved_url:
+                await asyncio.to_thread(self.reservations.reserve, reserved_url)
             try:
                 await self._dispatch_with_failover(client, job, task)
             except Exception as exc:
@@ -357,6 +365,9 @@ class HttpDispatcher(_DispatcherBase):
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
                 self._save(job)
+            finally:
+                if reserved_url:
+                    await asyncio.to_thread(self.reservations.release, reserved_url)
 
     async def _dispatch_with_failover(
         self, client: httpx.AsyncClient, job: Job, task: Task

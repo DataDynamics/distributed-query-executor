@@ -147,6 +147,9 @@ argus-catalog backend와 동일한 방식이다. `config.properties`(Java 스타
   보고 **초기 배정**과 **failover 순서**를 **살아있는·한가한 executor 먼저**로 정한다(한 job의
   task가 한 노드로 몰리지 않게 분산 배정). **HA(다중 coordinator)** 에서는 분산 스탬피드를 피하는
   **`p2c`(Power-of-Two-Choices)** 권장. 배정 분포는 `GET /cluster`의 `assignment_counts`로 확인.
+  HA 고도화: 공유 self-report URL 키 부하 뷰(`executor.advertise_url`), TTL 보호 **공유 예약**
+  (`coordinator.executor_reservation`), **죽은 coordinator 소유 job 정합**
+  (`coordinator.orphan_reconcile_interval_s`) — 아래 "멀티 coordinator" 참고.
 - **coordinator admission control(동시 job 제한 + 대기 큐)**: 들어온 job 요청을
   - 실행 슬롯(`coordinator.max_concurrent_jobs`, 기본 16)이 비어 있으면 즉시 `RUNNING`,
   - 다 찼으면 `PENDING` 으로 **대기 큐**에 넣고(`coordinator.max_pending_jobs`, 기본 100),
@@ -361,6 +364,10 @@ coordinator를 여러 대 둘 수 있다. 이때 두 가지를 공유 PostgreSQL
 |---|---|
 | `store.backend=postgres` | **공유 Job 저장소**(`jobs` 테이블). 어느 coordinator로 상태조회/취소 요청이 가도 동작 |
 | `executor.self_report=true` | **executor가 자기 상태를 직접 기록**(`executor_status` 테이블). coordinator는 읽기만 → 중복 폴링/기록 제거 |
+| `executor.advertise_url=http://h:8087` | self-report에 자기 URL 기록 → coordinator가 **URL 키 공유 부하 뷰**로 헬스 기반 선택(`coordinator.executors`의 URL과 일치) |
+| `coordinator.executor_select=p2c` | **헬스 기반 선택**: 분산 스탬피드를 피하는 Power-of-Two-Choices |
+| `coordinator.executor_reservation=true` | **TTL 보호 공유 예약**(엄격 균형): dispatch 중 task를 예약해 전역 부하를 실시간 공유 |
+| `coordinator.orphan_reconcile_interval_s=30` | **죽은 coordinator 소유 job 정합**: heartbeat 기반으로 stale 소유 job을 FAILED→retry |
 
 ```properties
 # 모든 coordinator/executor 공통
@@ -368,6 +375,12 @@ history.db_dsn=postgresql://user:pass@pg:5432/queryexec
 store.backend=postgres
 executor.self_report=true
 coordinator.id=coord-1     # 인스턴스마다 다르게(미지정 시 host:port)
+# HA 헬스 기반 선택(권장)
+coordinator.executor_select=p2c
+executor.advertise_url=http://<this-executor-host>:8087   # executor별로 자기 URL
+# (선택) 엄격 균형 + 정합
+coordinator.executor_reservation=true
+coordinator.orphan_reconcile_interval_s=30
 ```
 
 동작:
@@ -376,6 +389,9 @@ coordinator.id=coord-1     # 인스턴스마다 다르게(미지정 시 host:por
   스냅샷을 주기적으로 store에 저장한다.
 - **cross-coordinator 취소**: 다른 coordinator가 소유한 작업도 `cancel_requested` 플래그를
   공유 store에 세우면 소유 coordinator가 polling 중 감지해 중단한다.
+- **죽은 coordinator 정합**: 각 coordinator가 `coordinator_status`에 heartbeat하고, 소유자가
+  죽은(heartbeat stale) 비종료 job을 주기적으로 `FAILED`로 정합한다 → `POST /jobs/{id}/retry`로
+  실패 파티션만 재개. 헬스 기반 선택은 공유 `executor_status`(URL 키)·예약을 부하 뷰로 쓴다.
 - **executor 상태**: executor가 `executor.status_interval_s` 마다 `executor_status` 에
   upsert(heartbeat). coordinator의 `/executors`·`/cluster` 는 이 테이블을 읽고, liveness 는
   `updated_at` 신선도로 판정한다. (self_report 모드에선 coordinator 폴링/기록 미가동)

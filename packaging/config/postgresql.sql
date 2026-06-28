@@ -103,6 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_task_history_recorded_at ON task_history (recorde
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS executor_status (
     executor_id     TEXT PRIMARY KEY,
+    executor_url    TEXT,          -- executor.advertise_url (HA에서 coordinator가 URL 키로 부하 뷰 구성)
     cpu_percent     DOUBLE PRECISION,
     memory_percent  DOUBLE PRECISION,
     memory_used_mb  DOUBLE PRECISION,
@@ -113,6 +114,36 @@ CREATE TABLE IF NOT EXISTS executor_status (
     active_tasks         INTEGER,
     max_concurrent_tasks INTEGER,
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- 구버전 보강(executor_url 추가). 이미 있으면 무시된다.
+ALTER TABLE executor_status ADD COLUMN IF NOT EXISTS executor_url TEXT;
+
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 4b) executor_reservation — (Phase 3) 공유 예약: coordinator 가 dispatch 중인 task 를
+--     executor 별로 예약해, 여러 coordinator 가 실시간 전역 부하(active_tasks + 예약)를
+--     공유하게 한다. coordinator.executor_reservation=true 일 때만 사용. updated_at 으로
+--     TTL(누수 방지: 죽은 coordinator 의 예약은 만료시켜 무시).
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS executor_reservation (
+    executor_url   TEXT NOT NULL,
+    coordinator_id TEXT NOT NULL,
+    n              INTEGER NOT NULL DEFAULT 0,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (executor_url, coordinator_id)
+);
+CREATE INDEX IF NOT EXISTS idx_executor_reservation_updated_at
+    ON executor_reservation (updated_at);
+
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 4c) coordinator_status — (Phase 3) coordinator heartbeat. 죽은 coordinator 가 소유한
+--     비종료 job 을 다른 coordinator 가 정합(FAILED)할 수 있도록, 각 coordinator 가 자기
+--     생존을 주기적으로 upsert 한다. updated_at 신선도로 생존 판정.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS coordinator_status (
+    coordinator_id TEXT PRIMARY KEY,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 
