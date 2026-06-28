@@ -128,8 +128,16 @@ cat <<EOF
 Kerberos 티켓 발급(이후 cron 등으로 주기 갱신):
   sudo -u $APP_USER $BIN_DIR/kinit-renew.sh
 
-기동/중지/상태:
+기동/중지/상태(전체):
   sudo -u $APP_USER $BIN_DIR/start.sh
   sudo -u $APP_USER $BIN_DIR/stop.sh
   sudo -u $APP_USER $BIN_DIR/status.sh
+
+역할별(coordinator / executor 구분):
+  sudo -u $APP_USER $BIN_DIR/start-coordinator.sh
+  sudo -u $APP_USER $BIN_DIR/start-executor.sh [PORT...]   # 포트 생략 시 EXECUTOR_PORTS 전체
+  sudo -u $APP_USER $BIN_DIR/stop-coordinator.sh
+  sudo -u $APP_USER $BIN_DIR/stop-executor.sh  [PORT...]
+  sudo -u $APP_USER $BIN_DIR/status-coordinator.sh
+  sudo -u $APP_USER $BIN_DIR/status-executor.sh
 EOF

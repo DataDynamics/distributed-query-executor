@@ -1,17 +1,8 @@
 #!/usr/bin/env bash
-# run/ 의 PID 파일을 이용해 coordinator + executor 들을 중지한다.
+# 전체 중지: coordinator 먼저 → executor(전부). 역할별 제어는 stop-executor.sh /
+# stop-coordinator.sh 를 직접 쓴다.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$DIR/env.sh"
 
-for pidf in "$RUN_DIR"/coordinator.pid "$RUN_DIR"/executor-*.pid; do
-    [[ -e "$pidf" ]] || continue
-    pid="$(cat "$pidf" 2>/dev/null || true)"
-    name="$(basename "$pidf" .pid)"
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" && echo "중지: $name (pid $pid)"
-    else
-        echo "미실행: $name"
-    fi
-    rm -f "$pidf"
-done
+"$DIR/stop-coordinator.sh"
+"$DIR/stop-executor.sh"

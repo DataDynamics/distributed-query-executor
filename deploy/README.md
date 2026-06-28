@@ -11,9 +11,11 @@ coordinator 1개와 executor 다수를 운영하기 위한 구성이다.
 
 | 파일 | 설명 |
 |---|---|
-| `bin/start.sh` / `stop.sh` / `status.sh` | coordinator + executor 기동/중지/상태(nohup + PID) |
+| `bin/start.sh` / `stop.sh` / `status.sh` | **전체**(coordinator + executor) 기동/중지/상태(nohup + PID) |
+| `bin/start-coordinator.sh` / `stop-…` / `status-…` | **coordinator 만** 제어 |
+| `bin/start-executor.sh` / `stop-…` / `status-…` | **executor 만** 제어(포트 인자 선택, 생략 시 전체) |
 | `bin/kinit-renew.sh` | Impala Kerberos 티켓 발급/갱신(keytab → 공유 ccache) |
-| `bin/env.sh` | 런처 공통 환경(경로·`KRB5_CONFIG`·`KRB5CCNAME`·포트) |
+| `bin/env.sh` | 런처 공통 환경 + 헬퍼 함수(경로·`KRB5_CONFIG`·`KRB5CCNAME`·포트) |
 | `../packaging/config/config.properties` | Java 스타일 key=value 변수 정의 |
 | `../packaging/config/config.yml` | `${변수:기본값}` 치환을 쓰는 메인 YAML 설정 |
 | `install.sh` | 사용자/디렉터리/venv/설정/런처를 한 번에 구성하는 설치 스크립트 |
@@ -176,8 +178,10 @@ psql "$PG" -f /appuser/query-executor/packaging/config/postgresql.sql
 
 ```bash
 B=/appuser/query-executor/bin
-# 상태(프로세스 + health)
+# 상태(프로세스 + health) — 전체 / 역할별
 sudo -u appuser $B/status.sh
+sudo -u appuser $B/status-coordinator.sh
+sudo -u appuser $B/status-executor.sh
 
 # 파일 로그(일 단위 롤링)
 tail -f /appuser/query-executor/logs/query-coordinator-server.log
@@ -190,8 +194,13 @@ tail -f /appuser/query-executor/logs/query-executor-server-8087-warn.log
 # 재시작(전체) / 중지
 sudo -u appuser $B/stop.sh && sudo -u appuser $B/start.sh
 
+# 역할별 제어(coordinator / executor 따로)
+sudo -u appuser $B/stop-coordinator.sh        # coordinator 만 중지
+sudo -u appuser $B/start-executor.sh 8086     # executor 8086 만 기동/재기동
+sudo -u appuser $B/stop-executor.sh  8086     # executor 8086 만 중지
+
 # executor 인스턴스 추가(포트 8003): config.properties 의 executors 에 추가 후
-sudo -u appuser EXECUTOR_PORTS="8087 8086 8003" $B/start.sh
+sudo -u appuser $B/start-executor.sh 8003     # 또는 전체: EXECUTOR_PORTS="8087 8086 8003" $B/start.sh
 ```
 
 ## 동작 확인
