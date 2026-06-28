@@ -118,7 +118,7 @@ executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task �
   __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 packaging/config/    # config.properties + config.yml 기본값 + 스키마(*.sql)
 packaging/wheels/    # 에어갭 오프라인 설치용 cp39 휠 번들(coordinator/executor/dev, 유형별)
-deploy/              # install.sh + 런처 bin/(start·stop·status·kinit-renew) — /appuser 트리 배포
+deploy/              # install.sh + 런처 bin/(start/stop/status[-coordinator|-executor]·kinit-renew·env) — /appuser 트리 배포
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
 
@@ -485,8 +485,27 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 
 ```bash
 sudo ./deploy/install.sh                              # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
-sudo -u appuser /appuser/query-executor/bin/start.sh
-sudo -u appuser /appuser/query-executor/bin/status.sh
+B=/appuser/query-executor/bin
+sudo -u appuser $B/start.sh      # 전체 기동(executor 들 + coordinator)
+sudo -u appuser $B/status.sh     # 상태(프로세스 + health)
+sudo -u appuser $B/stop.sh       # 전체 중지
+```
+
+런처 스크립트(`/appuser/query-executor/bin/`)는 **전체**와 **역할별**로 나뉜다:
+
+| 스크립트 | 설명 |
+|---|---|
+| `start.sh` / `stop.sh` / `status.sh` | 전체(coordinator + executor 전부) 기동/중지/상태 |
+| `start-coordinator.sh` / `stop-coordinator.sh` / `status-coordinator.sh` | **coordinator만** 제어 |
+| `start-executor.sh [PORT...]` / `stop-executor.sh [PORT...]` / `status-executor.sh` | **executor만** 제어(포트 인자 생략 시 `EXECUTOR_PORTS` 전체, 특정 포트만도 가능) |
+| `kinit-renew.sh` | Impala Kerberos 티켓 발급/갱신(keytab) |
+| `env.sh` | 런처 공통 환경(경로·`KRB5_CONFIG`·`KRB5CCNAME`·포트)을 source |
+
+```bash
+# 역할별 예시
+sudo -u appuser $B/start-coordinator.sh     # coordinator만 기동
+sudo -u appuser $B/start-executor.sh 8086   # executor 8086만 기동/재기동
+sudo -u appuser $B/stop-executor.sh  8086   # executor 8086만 중지
 ```
 
 `install.sh` 는 `appuser` 계정 + `/appuser/query-executor` 트리(`config`·`logs`·`run`·`bin`·
