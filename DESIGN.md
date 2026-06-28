@@ -43,7 +43,7 @@ flowchart TB
         Admission["JobAdmission<br/>동시 슬롯 + 대기 큐(429)"]
         Dispatcher["Dispatcher<br/>비동기 디스패치/polling"]
         Monitor["HealthMonitor<br/>executor /health·/metrics 폴링"]
-        JobStore[("JobStore<br/>memory | postgres")]
+        JobStore[("JobStore<br/>memory | file | postgres")]
     end
 
     subgraph Executors["Executor Pool (N개, 독립 서비스)"]
@@ -86,7 +86,7 @@ flowchart TB
 | **Splitter** | IN 값 리스트를 `parallelism`개로 분할 → sub-query N개 재작성(원문 포맷 보존, `splitter.py`) |
 | **JobAdmission** | 동시 실행 슬롯 + 대기 큐 상한(과부하 시 429). `dispatcher.py` |
 | **Dispatcher** | sub-query를 executor에 분배, task 단위 동시성(Semaphore) 제어, 상태 polling, 종료 집계(`dispatcher.py`) |
-| **JobStore** | Job·Task 상태 + **sub-query 전문 저장**. `memory`(단일) / `postgres`(공유, JSONB) — `job_store.py` |
+| **JobStore** | Job·Task 상태 + **sub-query 전문 저장**. `memory`(휘발) / `file`(단일 노드 **파일 영속 → 크래시 복구**) / `postgres`(공유, JSONB) — `job_store.py` |
 | **JobHistory** | job 단위 실행 이력 PostgreSQL 기록·조회(`history.py`) |
 | **HealthMonitor** | executor `/health`·`/metrics` 주기 폴링, 메트릭 PostgreSQL 기록(`monitor.py`) |
 | **Dashboard** | 인라인 HTML 모니터링 UI(`/`) + 설정 마스킹(`dashboard.py`) |
@@ -95,11 +95,12 @@ flowchart TB
 | 컴포넌트 | 책임 |
 |---|---|
 | **Task API** | `POST /tasks`(수신·실행 시작), `GET /tasks`·`/tasks/{id}`(상태), `/cancel`, `/metrics` — `executor/app.py` |
-| **Backend** | `ImpalaToGreenplumBackend`(impyla read → psycopg COPY/INSERT) + `MockBackend`(`backend.py`) |
+| **Backend** | `ImpalaToGreenplumBackend`(impyla read → psycopg COPY/INSERT) + `MockBackend`. copy 모드는 COPY 전 **컬럼 사전검증(preflight)** 으로 불일치 조기 실패(`backend.py`) |
 | **Task Store** | 받은 task 상태(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED) + 누적 `rows_written`(인메모리 dict) |
 | **TaskHistory** | task 단위 상태 전이 이력 PostgreSQL 기록·조회(`history.py`) |
 | **StatusReporter** | 자기 상태(CPU/메모리/동시 task)를 공유 DB에 self-report(`status.py`) |
 | **동시 task 상한** | `executor.max_concurrent_tasks` 세마포어(admission control) |
+| **Graceful drain** | 종료(SIGTERM) 시 신규 task 거부(503) + 진행 중 task 를 `shutdown_drain_timeout_s` 내에서 완료 대기(`app.py` lifespan) |
 | **Dashboard** | remote 모드에서 `/`에 노출되는 self-view 대시보드(`dashboard.py`) |
 
 ---
@@ -150,6 +151,7 @@ classDiagram
         +str staging_ddl         // stage_insert 전용
         +str insert_sql          // stage_insert INSERT 문
         +bool cancel_requested
+        +str retry_of            // 재실행으로 생성된 job이면 원본 job_id
         +JobStatus status
         +int total_rows_written  // 모든 task 합산
         +datetime created_at
@@ -201,6 +203,8 @@ stateDiagram-v2
 - 검증/분할은 `POST /jobs` 핸들러에서 **동기로** 끝나므로(실패 시 즉시 4xx), 작업은 `SPLITTING`으로 생성되고 곧 백그라운드 `run()`이 받는다.
 - `run()`은 admission 실행 슬롯이 빌 때까지 job을 `PENDING`(대기 큐)으로 두었다가, 슬롯을 잡으면 `RUNNING`으로 전이한다. (입구에서 용량 초과면 애초에 `429`로 거부되어 작업이 생성되지 않는다 — §10)
 - 최종 상태는 `finalize_job()`이 하위 task를 집계해 결정한다: 취소 우선 → 실패 없음=DONE → best_effort=PARTIAL → 그 외=FAILED.
+- **재기동 정합(크래시 복구)**: 영속 저장소(`file`/`postgres`)면 기동 시 `reconcile_interrupted_jobs()`가 비종료(PENDING/SPLITTING/RUNNING)로 남은 job을 `FAILED`로 정합한다(실행 루프가 사라졌으므로). 진행 중이던 task도 FAILED로 표시돼 `retry` 대상이 된다.
+- **실패 파티션 재실행**: 종료된 job에 `POST /jobs/{id}/retry` → FAILED/CANCELLED task만 담은 **새 job**(`retry_of`=원본)이 SPLITTING부터 동일 흐름으로 실행된다.
 
 ### 6.2 Task 상태 (Coordinator 미러 ↔ Executor 원본)
 
@@ -306,7 +310,7 @@ flowchart LR
 
 | `exec_mode` | 동작 | 적합한 경우 |
 |---|---|---|
-| `copy` (기본) | Impala에서 sub-query를 **읽어** Greenplum에 `COPY FROM STDIN` 배치 적재 | 소스(Impala)/타깃(Greenplum)이 다른 엔진. COPY는 대상 테이블 컬럼과 정확히 일치해야 하며, wrapper는 **행을 반환하는 SELECT** 여야 한다 |
+| `copy` (기본) | Impala에서 sub-query를 **읽어** Greenplum에 `COPY FROM STDIN` 배치 적재. **사전검증(preflight)**: COPY 전에 SELECT 컬럼이 대상 테이블에 있는지 확인(`copy.preflight`, 기본 on) | 소스(Impala)/타깃(Greenplum)이 다른 엔진. COPY는 대상 테이블 컬럼과 정확히 일치해야 하며, wrapper는 **행을 반환하는 SELECT** 여야 한다 |
 | `statement` | wrapper로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB에서 **그대로 실행** | 소스/타깃이 같은 DB(Greenplum). INSERT 컬럼 목록이 매핑을 담당 |
 | `stage_insert` | Impala SELECT 결과를 Greenplum **TEMP staging에 COPY** → staging을 `FROM`으로 하는 **INSERT 실행** | SELECT은 Impala, INSERT은 Greenplum처럼 서로 다른 엔진을 INSERT로 연결 |
 
@@ -393,6 +397,7 @@ POST /jobs
 | `GET /jobs/{id}/result` | 적재 결과 요약(`total_rows_written`, per-task) |
 | `GET /jobs/{id}/tasks/{task_id}` | 태스크 상세(**sub-query 전문 포함**, 감사/디버깅) |
 | `POST /jobs/{id}/cancel` | 작업 취소(각 executor에 전파). 이미 종료면 409 |
+| `POST /jobs/{id}/retry` | **실패 파티션만 재실행**: 종료된 job의 FAILED/CANCELLED task만 새 job으로 복제·디스패치(`retry_of`로 추적) → 새 `job_id`(202). 대상 없으면 409 |
 | `GET /history` | 과거 실행 이력(PostgreSQL `job_history`, job_id별 최신 1건, 페이징) |
 | `GET /executors` | executor 헬스/메트릭 상태 |
 | `GET /cluster` | coordinator+executor health/metrics + 실행 중 job 수 한 번에 |
@@ -474,6 +479,10 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 | 실행 중 executor 유실 | 폴링 중 연결 끊김: **멱등(`overwrite_partitions`)이고 후보가 남았을 때만** 다른 executor 로 재실행. `append`는 중복 적재 위험이 있어 재배정하지 않고 FAILED |
 | 취소 | Job cancel → 비종료 task의 executor에 `POST /tasks/{id}/cancel` 전파. 협조적 취소(QUEUED는 즉시, 실행 중은 현재 작업 후 `CANCELLED` 마감) |
 | 타임아웃 | **접속은 `task_connect_timeout_s`(짧게), 전체는 `task_timeout_s`** 로 분리 적용 → 죽은 executor 에 오래 매달리지 않는다 |
+| COPY 컬럼 불일치 | copy 모드 **사전검증(preflight)** 이 대용량 스트리밍 전에 SELECT↔대상 컬럼 불일치를 잡아 명확한 에러로 조기 실패(`copy.preflight=false`로 끌 수 있음) |
+| 실패 파티션 재처리 | `POST /jobs/{id}/retry` 로 종료된 job의 **FAILED/CANCELLED task만** 새 job으로 재실행. copy 모드는 멱등(실패 task는 미커밋 / `overwrite_partitions` 선삭제)이라 안전 |
+| coordinator 재시작 | `store.backend=file`(또는 postgres)이면 재기동 시 **중단된 job을 FAILED로 정합**(`reconcile_interrupted_jobs`) → `retry`로 실패 파티션만 재개 |
+| executor 종료(SIGTERM) | **graceful drain**: 신규 task는 503으로 거부하고, 진행 중 task는 `shutdown_drain_timeout_s` 내에서 완료를 기다린 뒤 종료(강제 중단 안 함) |
 
 > 멱등성: `overwrite_partitions`는 task별 담당 파티션을 먼저 DELETE 후 COPY 하므로 같은 sub-query 재실행이 안전하다. executor 가 task 를 정상 접수해 `FAILED`로 보고한 **백엔드 오류는 재시도 대상이 아니다**(재시도해도 같은 결과). 재시도/failover 는 **연결 계열 실패에만** 발동한다.
 
@@ -489,7 +498,7 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 | Greenplum 쓰기 | **psycopg** `COPY FROM STDIN` / INSERT |
 | Coordinator↔Executor | **httpx**(AsyncClient) |
 | 동시성 | asyncio + Semaphore(admission/디스패치) + thread pool(동기 DB 호출 래핑) |
-| 상태/이력 저장 | 인메모리 dict 또는 **PostgreSQL**(`jobs`/`job_history`/`task_history`/`executor_status`/`executor_health_metrics`) |
+| 상태/이력 저장 | 인메모리 dict / **파일 영속(JSON 스냅샷, 단일 노드 크래시 복구)** / **PostgreSQL**(`jobs`/`job_history`/`task_history`/`executor_status`/`executor_health_metrics`) |
 | 대시보드 | 인라인 HTML + vanilla JS(빌드 도구 없음) |
 | 배포 | /appuser 트리 + 런처 스크립트로 coordinator 1 + executor N(`deploy/README.md`) |
 
@@ -504,4 +513,3 @@ coordinator를 여러 대 둘 수 있다. 공유 PostgreSQL(`history.db_dsn`)로
 - **집계/GROUP BY 쿼리 지원**: 소스 측 사전 집계 후 적재 또는 적재 후 재집계.
 - **IN 절 자동 합성**: IN이 없을 때 Impala `SHOW PARTITIONS`로 값 조회 후 합성.
 - **read/write 파이프라이닝 및 COPY 병렬도 튜닝**으로 throughput 최적화.
-```
