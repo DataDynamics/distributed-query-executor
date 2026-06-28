@@ -151,9 +151,9 @@ flowchart TB
     EX1["Executor 1"] -- "self-report (heartbeat)" --> PG
     EX2["Executor 2"] -- "self-report (heartbeat)" --> PG
     CA -. "P2C 선택·디스패치" .-> EX1
-    CA -. .-> EX2
-    CB -. .-> EX1
-    CB -. .-> EX2
+    CA -.-> EX2
+    CB -.-> EX1
+    CB -.-> EX2
 ```
 
 그림을 보면 두 coordinator(A, B)가 모두 같은 공유 PostgreSQL 을 바라보고, executor 들은
