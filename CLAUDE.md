@@ -37,7 +37,7 @@ COORDINATOR_EXECUTOR_MODE=local QUERY_EXECUTOR_CONFIG_DIR=packaging/config .venv
 core/         # 공용: 설정 로더/설정/로깅/메트릭 (coordinator·executor 공유)
 coordinator/  # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
 executor/     # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
-packaging/config/  # config.properties + config.yml 기본값 + 스키마(*.sql)
+packaging/config/  # config.properties + config.yml 기본값 + 스키마(postgresql.sql / warehousepg.sql)
 tests/        # pytest (coordinator·executor 검증/라이프사이클/admission/대시보드)
 ```
 
@@ -88,6 +88,11 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - 비동기 디스패처에서 블로킹 DB 호출(impyla/psycopg)은 `run_in_executor`/`to_thread` 로 감싸
   이벤트 루프를 막지 않는다.
 - 새 기능은 `tests/` 에 테스트를 추가한다. 실제 DB 없이 `MockBackend`/`FakeRunner` 로 검증.
+- **메타 저장소 스키마는 두 벌**: `packaging/config/postgresql.sql`(PostgreSQL) 과
+  `warehousepg.sql`(WarehousePG/Greenplum 7=PG12). 테이블/컬럼을 바꾸면 **두 파일을 함께**
+  고친다. WarehousePG 판은 테이블마다 `DISTRIBUTED BY` 가 붙고(PK 는 분산키를 포함해야 함),
+  history/metrics 는 대리 PK 를 빼 `job_id`/`executor_url` 로 co-locate 한다. 앱 SQL(`ON
+  CONFLICT`·`JSONB`·`DISTINCT ON`)은 GP7=PG12 라 양쪽 공통으로 동작한다.
 
 ## Git / PR
 
