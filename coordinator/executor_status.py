@@ -35,7 +35,7 @@ class ExecutorStatusRepository:
     def read_all(self) -> list[dict]:
         """모든 executor 의 최신 상태를 조회해 dict 리스트로 반환한다.
 
-        SQL 에서 'now() - updated_at' 을 초(EXTRACT EPOCH)로 계산해 age_s 로 함께 가져온 뒤,
+        SQL 에서 '(now() AT TIME ZONE 'Asia/Seoul') - updated_at' 을 초(EXTRACT EPOCH)로 계산해 age_s 로 함께 가져온 뒤,
         age_s <= stale_seconds 인지로 각 행의 healthy 를 판정한다. age_s 가 NULL 이면(갱신 기록
         없음) healthy=False 로 본다. 조회 자체가 실패하면 예외를 잡아 로그를 남기고 빈 리스트를
         반환해 호출 측(대시보드)이 깨지지 않게 한다.
@@ -46,7 +46,7 @@ class ExecutorStatusRepository:
             "SELECT executor_id, cpu_percent, memory_percent, memory_used_mb, "
             "memory_total_mb, disk_percent, disk_used_gb, disk_total_gb, "
             "active_tasks, max_concurrent_tasks, "
-            "EXTRACT(EPOCH FROM (now() - updated_at)) AS age_s, updated_at, "
+            "EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'Asia/Seoul') - updated_at)) AS age_s, updated_at, "
             "executor_url "
             f"FROM {self.table}"
         )

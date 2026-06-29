@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+
+from core.timeutil import now_iso
 from pathlib import Path
 from typing import Optional
 
@@ -160,7 +162,7 @@ def reconcile_interrupted_jobs(store) -> int:
     except Exception:
         logger.exception("재기동 정합용 job 조회 실패")
         return 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = now_iso()
     reconciled = 0
     for job in jobs:
         if job.status not in _NON_TERMINAL_JOB:
@@ -226,10 +228,10 @@ class SqlJobStore:
         sql = (
             f"INSERT INTO {self.table} "
             "(job_id, coordinator_id, status, cancel_requested, updated_at, data) "
-            "VALUES (%s, %s, %s, %s, now(), %s) "
+            "VALUES (%s, %s, %s, %s, (now() AT TIME ZONE 'Asia/Seoul'), %s) "
             "ON CONFLICT (job_id) DO UPDATE SET "
             "status=EXCLUDED.status, cancel_requested=EXCLUDED.cancel_requested, "
-            "updated_at=now(), data=EXCLUDED.data"
+            "updated_at=(now() AT TIME ZONE 'Asia/Seoul'), data=EXCLUDED.data"
         )
         with self._conn() as conn:
             with conn.cursor() as cur:
@@ -300,7 +302,7 @@ class SqlJobStore:
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"UPDATE {self.table} SET cancel_requested=TRUE, updated_at=now() "
+                    f"UPDATE {self.table} SET cancel_requested=TRUE, updated_at=(now() AT TIME ZONE 'Asia/Seoul') "
                     "WHERE job_id=%s",
                     (job_id,),
                 )

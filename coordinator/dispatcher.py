@@ -39,9 +39,7 @@ from .models import Job, JobStatus, Task, TaskStatus
 logger = logging.getLogger(__name__)
 
 
-def _now_iso() -> str:
-    """현재 시각을 UTC ISO-8601 문자열로 반환(타임스탬프 기록용 헬퍼)."""
-    return datetime.now(timezone.utc).isoformat()
+from core.timeutil import now_iso as _now_iso  # KST(naive) ISO 시각 생성
 
 
 # task가 더 이상 변하지 않는 종료 상태 집합. 폴링 종료 조건, 취소 전파 대상 선별,

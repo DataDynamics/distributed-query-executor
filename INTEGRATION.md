@@ -172,7 +172,7 @@ DDL 이므로, 뒤따르는 COPY 가 채울 컬럼을 가진 테이블을 만들
 ```
 
 참고로 응답 JSON 에서 이름이 `_at` 로 끝나는 필드(`created_at`·`started_at`·`finished_at`
-등)는 모두 시각이며, **`yyyy-MM-dd HH:mm:ss.sss`**(밀리초 3자리, UTC 기준) 형식의 문자열로
+등)는 모두 시각이며, **`yyyy-MM-dd HH:mm:ss.sss`**(밀리초 3자리, KST 기준) 형식의 문자열로
 내려옵니다. 아직 해당 사건이 일어나지 않았으면 `null` 입니다(예: 시작 전 `started_at`).
 
 여기서 핵심은 `status` 값입니다. 작업의 상태는 다음 일곱 가지 중 하나이며, 그중 **종료

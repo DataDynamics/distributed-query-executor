@@ -34,7 +34,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
-from core.timeutil import format_at_fields
+from core.timeutil import format_at_fields, now_dt
 from .dashboard import DASHBOARD_HTML, masked_config
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
@@ -104,7 +104,7 @@ def create_app(
     settings = settings or default_settings
     store = store or build_job_store(settings)
     monitor = HealthMonitor(settings)
-    started_at = datetime.now(timezone.utc)
+    started_at = now_dt()
     start_monotonic = time.monotonic()
     # self-report 모드면 executor 상태를 공유 테이블에서 읽는다(coordinator 폴링/기록 안 함)
     status_repo = (

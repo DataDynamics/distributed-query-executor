@@ -25,13 +25,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-
-def _now_iso() -> str:
-    """현재 시각을 UTC 기준 ISO-8601 문자열로 반환한다.
-
-    저장/직렬화 시 타임존 모호성을 없애기 위해 항상 UTC(``timezone.utc``)를 쓴다.
-    """
-    return datetime.now(timezone.utc).isoformat()
+from core.timeutil import now_iso as _now_iso  # KST(naive) ISO 시각 생성
 
 
 class JobStatus(str, enum.Enum):
@@ -205,7 +199,7 @@ class Job:
         status          : 현재 ``JobStatus``.
         tasks           : 분할된 Task 목록.
         error           : 작업 수준 오류 메시지.
-        created_at / started_at / finished_at : ISO-8601(UTC) 타임스탬프.
+        created_at / started_at / finished_at : ISO-8601(KST, 타임존 없는 naive) 타임스탬프.
         cancel_requested: 취소 요청 플래그(executor 루프가 폴링하여 중단 판단).
     """
 

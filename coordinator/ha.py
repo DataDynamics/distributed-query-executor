@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from core.timeutil import now_iso
+
 from .models import JobStatus, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -60,8 +62,8 @@ class CoordinatorHeartbeat:
 
     def beat(self) -> None:
         sql = (
-            f"INSERT INTO {self.table} (coordinator_id, updated_at) VALUES (%s, now()) "
-            "ON CONFLICT (coordinator_id) DO UPDATE SET updated_at = now()"
+            f"INSERT INTO {self.table} (coordinator_id, updated_at) VALUES (%s, (now() AT TIME ZONE 'Asia/Seoul')) "
+            "ON CONFLICT (coordinator_id) DO UPDATE SET updated_at = (now() AT TIME ZONE 'Asia/Seoul')"
         )
         try:
             with self._conn() as conn:
@@ -74,7 +76,7 @@ class CoordinatorHeartbeat:
     def fresh_ids(self, stale_s: float) -> set:
         sql = (
             f"SELECT coordinator_id FROM {self.table} "
-            "WHERE now() - updated_at <= make_interval(secs => %s)"
+            "WHERE (now() AT TIME ZONE 'Asia/Seoul') - updated_at <= make_interval(secs => %s)"
         )
         try:
             with self._conn() as conn:
@@ -108,7 +110,7 @@ def reconcile_orphaned_jobs(store, heartbeat: "CoordinatorHeartbeat", stale_s: f
     if not orphan_ids:
         return 0
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = now_iso()
     reconciled = 0
     for jid in orphan_ids:
         job = store.get(jid)

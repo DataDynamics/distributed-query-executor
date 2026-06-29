@@ -64,8 +64,8 @@ class Task:
         rows_written: 지금까지 적재된 행 수(진행률 콜백으로 갱신, 완료 시 최종값).
         error: 실패 시 예외 메시지(FAILED 일 때만 설정).
         cancel_requested: 취소 요청 플래그. 실행 루프가 안전 지점에서 확인해 CANCELLED 로 전이.
-        started_at: 실행(READING) 시작 시각(ISO8601 UTC 문자열).
-        finished_at: 종료(DONE/FAILED/CANCELLED) 시각(ISO8601 UTC 문자열).
+        started_at: 실행(READING) 시작 시각(ISO8601 KST naive 문자열).
+        finished_at: 종료(DONE/FAILED/CANCELLED) 시각(ISO8601 KST naive 문자열).
     """
 
     task_id: str

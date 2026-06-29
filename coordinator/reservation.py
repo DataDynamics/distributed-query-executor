@@ -60,9 +60,9 @@ class ReservationRepository:
     def reserve(self, url: str) -> None:
         sql = (
             f"INSERT INTO {self.table} (executor_url, coordinator_id, n, updated_at) "
-            "VALUES (%s, %s, 1, now()) "
+            "VALUES (%s, %s, 1, (now() AT TIME ZONE 'Asia/Seoul')) "
             "ON CONFLICT (executor_url, coordinator_id) DO UPDATE SET "
-            f"n = {self.table}.n + 1, updated_at = now()"
+            f"n = {self.table}.n + 1, updated_at = (now() AT TIME ZONE 'Asia/Seoul')"
         )
         try:
             with self._conn() as conn:
@@ -74,7 +74,7 @@ class ReservationRepository:
 
     def release(self, url: str) -> None:
         sql = (
-            f"UPDATE {self.table} SET n = GREATEST(n - 1, 0), updated_at = now() "
+            f"UPDATE {self.table} SET n = GREATEST(n - 1, 0), updated_at = (now() AT TIME ZONE 'Asia/Seoul') "
             "WHERE executor_url = %s AND coordinator_id = %s"
         )
         try:
@@ -88,7 +88,7 @@ class ReservationRepository:
     def load_by_url(self, ttl_s: float) -> dict:
         sql = (
             f"SELECT executor_url, SUM(n) FROM {self.table} "
-            "WHERE now() - updated_at <= make_interval(secs => %s) "
+            "WHERE (now() AT TIME ZONE 'Asia/Seoul') - updated_at <= make_interval(secs => %s) "
             "GROUP BY executor_url"
         )
         try:

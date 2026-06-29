@@ -24,6 +24,8 @@ from typing import Optional
 
 import httpx
 
+from core.timeutil import now_iso
+
 logger = logging.getLogger(__name__)
 
 
@@ -164,7 +166,7 @@ class HealthMonitor:
         """
         rec = self.executors[url]
         # 시도 시각을 먼저 기록해 둔다(성공/실패와 무관하게 "마지막으로 본 시각"을 남김).
-        rec.last_checked = datetime.now(timezone.utc).isoformat()
+        rec.last_checked = now_iso()
         try:
             health = await client.get(f"{url}/health")
             health.raise_for_status()

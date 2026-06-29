@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse
 from core.config import settings
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
-from core.timeutil import format_at_fields
+from core.timeutil import format_at_fields, now_dt, now_iso
 from .backend import Backend, build_backend
 from .dashboard import DASHBOARD_HTML, masked_config
 from .history import TaskHistoryRepository, _executor_id
@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
-    """현재 시각을 ISO8601(UTC, tz 포함) 문자열로 반환. started_at/finished_at 기록용."""
-    return datetime.now(timezone.utc).isoformat()
+    """현재 시각을 KST(타임존 없는) ISO 문자열로 반환. started_at/finished_at 기록용."""
+    return now_iso()
 
 
 # "활성"(처리중)으로 간주하는 task 상태: 처리중 Task 탭 집계 기준.
@@ -387,7 +387,7 @@ def create_app(
     # 대시보드 활성화 시에만 UI 및 보조 조회 엔드포인트(/, /history, /config, /info)를 등록.
     # started_at/start_monotonic 은 /info 의 uptime 계산 기준점(monotonic 은 시계 변경에 둔감).
     if settings.dashboard_enabled:
-        started_at = datetime.now(timezone.utc)
+        started_at = now_dt()
         start_monotonic = time.monotonic()
         history_reader = TaskHistoryRepository(settings)
 

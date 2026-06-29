@@ -6,6 +6,12 @@
 --
 -- 적용:  psql "postgresql://user:pass@pg-host:5432/queryexec" -f postgresql.sql
 --
+-- 시각 컬럼은 모두 KST(Asia/Seoul) 기준의 타임존 없는 TIMESTAMP 다(이 시스템은 한국 단일
+-- 리전이라 UTC/타임존이 필요 없다). 기본값은 now() AT TIME ZONE 'Asia/Seoul' 로 KST 벽시계를
+-- 넣는다. 앱이 직접 넣는 시각도 KST naive 문자열이다.
+--   기존(TIMESTAMPTZ) DB 를 옮긴다면:
+--     ALTER TABLE <t> ALTER COLUMN <col> TYPE TIMESTAMP USING (<col> AT TIME ZONE 'Asia/Seoul');
+--
 -- 테이블별 사용 DSN/설정:
 --   jobs                    : store.backend=postgres (멀티 coordinator 공유 Job 저장소)
 --   job_history             : history.db_dsn         (coordinator, job 단위 실행 이력)
@@ -25,7 +31,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     coordinator_id   TEXT,
     status           TEXT,
     cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul'),
     data             JSONB NOT NULL
 );
 
@@ -39,7 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON jobs (updated_at);
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS job_history (
     id                 BIGSERIAL PRIMARY KEY,
-    recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    recorded_at        TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul'),
     job_id             TEXT NOT NULL,
     username           TEXT,
     status             TEXT NOT NULL,
@@ -50,9 +56,9 @@ CREATE TABLE IF NOT EXISTS job_history (
     completed_tasks    INTEGER,
     total_rows_written BIGINT,
     error              TEXT,
-    created_at         TIMESTAMPTZ,
-    started_at         TIMESTAMPTZ,
-    finished_at        TIMESTAMPTZ,
+    created_at         TIMESTAMP,
+    started_at         TIMESTAMP,
+    finished_at        TIMESTAMP,
     original_sql       TEXT
 );
 
@@ -67,7 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_job_history_recorded_at ON job_history (recorded_
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS task_history (
     id           BIGSERIAL PRIMARY KEY,
-    recorded_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    recorded_at  TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul'),
     job_id       TEXT NOT NULL,
     task_id      TEXT NOT NULL,
     username     TEXT,
@@ -75,8 +81,8 @@ CREATE TABLE IF NOT EXISTS task_history (
     status       TEXT NOT NULL,
     rows_written BIGINT,
     error        TEXT,
-    started_at   TIMESTAMPTZ,   -- task 가 READING 을 시작한 시각
-    finished_at  TIMESTAMPTZ,   -- task 가 종료(DONE/FAILED/CANCELLED)된 시각
+    started_at   TIMESTAMP,   -- task 가 READING 을 시작한 시각
+    finished_at  TIMESTAMP,   -- task 가 종료(DONE/FAILED/CANCELLED)된 시각
     sub_query    TEXT,          -- 이 task 가 실행한 SELECT sub-query 전문
     exec_mode    TEXT,          -- 적재 방식: copy | statement | stage_insert
     staging_ddl  TEXT,          -- stage_insert 의 staging(TEMP) 생성 DDL
@@ -84,8 +90,8 @@ CREATE TABLE IF NOT EXISTS task_history (
 );
 
 -- 구버전 테이블 보강(앱도 자동 수행). 이미 있으면 무시된다.
-ALTER TABLE task_history ADD COLUMN IF NOT EXISTS started_at  TIMESTAMPTZ;
-ALTER TABLE task_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE task_history ADD COLUMN IF NOT EXISTS started_at  TIMESTAMP;
+ALTER TABLE task_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP;
 ALTER TABLE task_history ADD COLUMN IF NOT EXISTS sub_query   TEXT;
 ALTER TABLE task_history ADD COLUMN IF NOT EXISTS exec_mode   TEXT;
 ALTER TABLE task_history ADD COLUMN IF NOT EXISTS staging_ddl TEXT;
@@ -113,7 +119,7 @@ CREATE TABLE IF NOT EXISTS executor_status (
     disk_total_gb        DOUBLE PRECISION,
     active_tasks         INTEGER,
     max_concurrent_tasks INTEGER,
-    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at           TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul')
 );
 -- 구버전 보강(executor_url 추가). 이미 있으면 무시된다.
 ALTER TABLE executor_status ADD COLUMN IF NOT EXISTS executor_url TEXT;
@@ -129,7 +135,7 @@ CREATE TABLE IF NOT EXISTS executor_reservation (
     executor_url   TEXT NOT NULL,
     coordinator_id TEXT NOT NULL,
     n              INTEGER NOT NULL DEFAULT 0,
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul'),
     PRIMARY KEY (executor_url, coordinator_id)
 );
 CREATE INDEX IF NOT EXISTS idx_executor_reservation_updated_at
@@ -143,7 +149,7 @@ CREATE INDEX IF NOT EXISTS idx_executor_reservation_updated_at
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS coordinator_status (
     coordinator_id TEXT PRIMARY KEY,
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at     TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul')
 );
 
 
@@ -153,7 +159,7 @@ CREATE TABLE IF NOT EXISTS coordinator_status (
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS executor_health_metrics (
     id              BIGSERIAL PRIMARY KEY,
-    recorded_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    recorded_at     TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul'),
     executor_url    TEXT NOT NULL,
     healthy         BOOLEAN NOT NULL,
     cpu_percent     DOUBLE PRECISION,

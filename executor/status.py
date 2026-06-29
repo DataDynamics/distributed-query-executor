@@ -23,14 +23,14 @@ _UPSERT = """
 INSERT INTO {table}
     (executor_id, executor_url, cpu_percent, memory_percent, memory_used_mb, memory_total_mb,
      disk_percent, disk_used_gb, disk_total_gb, active_tasks, max_concurrent_tasks, updated_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, (now() AT TIME ZONE 'Asia/Seoul'))
 ON CONFLICT (executor_id) DO UPDATE SET
     executor_url=EXCLUDED.executor_url,
     cpu_percent=EXCLUDED.cpu_percent, memory_percent=EXCLUDED.memory_percent,
     memory_used_mb=EXCLUDED.memory_used_mb, memory_total_mb=EXCLUDED.memory_total_mb,
     disk_percent=EXCLUDED.disk_percent, disk_used_gb=EXCLUDED.disk_used_gb,
     disk_total_gb=EXCLUDED.disk_total_gb, active_tasks=EXCLUDED.active_tasks,
-    max_concurrent_tasks=EXCLUDED.max_concurrent_tasks, updated_at=now()
+    max_concurrent_tasks=EXCLUDED.max_concurrent_tasks, updated_at=(now() AT TIME ZONE 'Asia/Seoul')
 """
 
 
