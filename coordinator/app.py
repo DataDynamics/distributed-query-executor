@@ -34,6 +34,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
+from core.timeutil import format_at_fields
 from .dashboard import DASHBOARD_HTML, masked_config
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
@@ -452,7 +453,7 @@ def create_app(
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
-        return job.status_view()
+        return format_at_fields(job.status_view())
 
     @app.get(
         "/jobs/{job_id}/status",
@@ -465,7 +466,7 @@ def create_app(
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
-        return job.progress_view()
+        return format_at_fields(job.progress_view())
 
     @app.post(
         "/jobs/{job_id}/cancel",
@@ -494,7 +495,7 @@ def create_app(
         await runner.cancel(job)
         job.status = JobStatus.CANCELLED
         store.save(job)
-        return job.progress_view()
+        return format_at_fields(job.progress_view())
 
     @app.post(
         "/jobs/{job_id}/retry",
@@ -651,7 +652,7 @@ def create_app(
         )
         healthy = sum(1 for e in executors if e.get("healthy"))
 
-        return {
+        return format_at_fields({
             "coordinator": {
                 "service": "coordinator",
                 "status": "ok",
@@ -673,7 +674,7 @@ def create_app(
             # 선택 정책이 균형을 맞추고 있는지 확인하는 용도. 멀티 coordinator 면 인스턴스별 값.
             "assignment_counts": dict(assign_counts),
             "executor_select": _select_policy,
-        }
+        })
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
@@ -733,7 +734,9 @@ def create_app(
             }
             for j in (jobs if limit <= 0 else jobs[:limit])
         ]
-        return {"jobs": rows, "total": total_all, "running": running, "active": active}
+        return format_at_fields(
+            {"jobs": rows, "total": total_all, "running": running, "active": active}
+        )
 
     history_reader = JobHistoryRepository(settings)
 
@@ -743,7 +746,7 @@ def create_app(
         # 과도한 페이지 크기나 음수 입력으로 인한 DB 부하/오류를 방지한다.
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
-        return history_reader.read(limit=limit, offset=offset)
+        return format_at_fields(history_reader.read(limit=limit, offset=offset))
 
     # 대시보드는 설정으로 끌 수 있다(예: 외부 노출 환경에서 비활성화).
     # 활성화된 경우에만 루트 HTML 및 설정/정보 API 라우트를 등록한다.
@@ -766,7 +769,7 @@ def create_app(
             by_status: dict[str, int] = {}
             for j in all_jobs:
                 by_status[j.status.value] = by_status.get(j.status.value, 0) + 1
-            return {
+            return format_at_fields({
                 "version": "0.1.0",
                 "coordinator_id": settings.coordinator_id,
                 "executor_mode": settings.executor_mode,
@@ -783,7 +786,7 @@ def create_app(
                 "max_pending_jobs": settings.max_pending_jobs,
                 "max_dispatch_concurrency": settings.max_dispatch_concurrency,
                 "jobs_by_status": by_status,
-            }
+            })
 
     return app
 

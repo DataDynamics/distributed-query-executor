@@ -165,11 +165,15 @@ DDL 이므로, 뒤따르는 COPY 가 채울 컬럼을 가진 테이블을 만들
   "total_rows_written": 18234,
   "error": null,
   "cancel_requested": false,
-  "created_at": "2026-06-29T07:01:11.123456+00:00",
-  "started_at": "2026-06-29T07:01:11.456789+00:00",
+  "created_at": "2026-06-29 07:01:11.123",
+  "started_at": "2026-06-29 07:01:11.456",
   "finished_at": null
 }
 ```
+
+참고로 응답 JSON 에서 이름이 `_at` 로 끝나는 필드(`created_at`·`started_at`·`finished_at`
+등)는 모두 시각이며, **`yyyy-MM-dd HH:mm:ss.sss`**(밀리초 3자리, UTC 기준) 형식의 문자열로
+내려옵니다. 아직 해당 사건이 일어나지 않았으면 `null` 입니다(예: 시작 전 `started_at`).
 
 여기서 핵심은 `status` 값입니다. 작업의 상태는 다음 일곱 가지 중 하나이며, 그중 **종료
 상태(terminal)** 네 가지에 도달하면 더 이상 변하지 않으므로 폴링을 멈추면 됩니다.
@@ -226,9 +230,9 @@ DDL 이므로, 뒤따르는 COPY 가 채울 컬럼을 가진 테이블을 만들
   "total_rows_written": 30360,
   "error": "1개 파티션 실패",
   "cancel_requested": false,
-  "created_at": "2026-06-29T07:01:11.123456+00:00",
-  "started_at": "2026-06-29T07:01:11.456789+00:00",
-  "finished_at": "2026-06-29T07:03:42.987654+00:00",
+  "created_at": "2026-06-29 07:01:11.123",
+  "started_at": "2026-06-29 07:01:11.456",
+  "finished_at": "2026-06-29 07:03:42.987",
   "retry_of": null,
   "tasks": [
     { "task_id": "t_a1b2c3d4e5f6", "executor_url": "http://10.0.0.11:8087", "status": "DONE",   "rows_written": 10120, "attempt": 0, "partition_values": ["A"], "error": null },

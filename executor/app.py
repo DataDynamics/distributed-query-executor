@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse
 from core.config import settings
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
+from core.timeutil import format_at_fields
 from .backend import Backend, build_backend
 from .dashboard import DASHBOARD_HTML, masked_config
 from .history import TaskHistoryRepository, _executor_id
@@ -300,12 +301,12 @@ def create_app(
                 rows = [t for t in rows if t.status.value.lower() == s]
         if limit and limit > 0:
             rows = rows[:limit]
-        return {
+        return format_at_fields({
             "tasks": [t.view() for t in rows],
             "total": total,
             "active": active,
             "running": running,
-        }
+        })
 
     @app.get("/tasks/{task_id}", tags=["Tasks"], summary="태스크 상태 조회")
     def get_task(task_id: str):
@@ -313,7 +314,7 @@ def create_app(
         task = tasks.get(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
-        return task.view()
+        return format_at_fields(task.view())
 
     @app.get("/tasks/{task_id}/result", tags=["Tasks"], summary="태스크 결과(적재 행수) 조회")
     def get_task_result(task_id: str):
@@ -340,14 +341,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="task not found")
         terminal = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
         if task.status in terminal:
-            return task.view()  # 이미 종료 — 변경 없음
+            return format_at_fields(task.view())  # 이미 종료 — 변경 없음
         task.cancel_requested = True
         # 아직 시작 전이면 즉시 취소 확정, 실행 중이면 _run 이 완료 후 CANCELLED 처리
         if task.status == TaskStatus.QUEUED:
             task.status = TaskStatus.CANCELLED
             task.finished_at = _now_iso()
             await history.record(task)
-        return task.view()
+        return format_at_fields(task.view())
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
@@ -404,7 +405,7 @@ def create_app(
             """
             limit = max(1, min(limit, 200))
             offset = max(0, offset)
-            return history_reader.read(limit=limit, offset=offset)
+            return format_at_fields(history_reader.read(limit=limit, offset=offset))
 
         @app.get("/config", tags=["Monitoring"], summary="환경설정(비밀값 마스킹)")
         def get_config():
@@ -418,7 +419,7 @@ def create_app(
             for t in tasks.values():
                 by_status[t.status.value] = by_status.get(t.status.value, 0) + 1
             active, queued, mx = _task_counts()
-            return {
+            return format_at_fields({
                 "version": "0.1.0",
                 "executor_id": _executor_id(),
                 "self_report": settings.executor_self_report,
@@ -430,7 +431,7 @@ def create_app(
                 "uptime_seconds": round(time.monotonic() - start_monotonic, 1),
                 "tasks_total": len(tasks),
                 "tasks_by_status": by_status,
-            }
+            })
 
     return app
 
