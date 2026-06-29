@@ -788,16 +788,21 @@ Greenplum 세션 안에서 아래 세 단계를 차례로 수행하며, 임시 �
 자동으로 정리됩니다.
 
 ```
-CREATE TEMP TABLE <staging>  ─ staging_ddl
+(CREATE TEMP TABLE <staging>  ─ staging_ddl, 선택)
    → COPY <staging> FROM STDIN  ─ Impala SELECT(분할) 결과 적재
    → INSERT INTO <target> ... SELECT ... FROM <staging>  ─ wrapper_query
 ```
 
-이 모드를 쓰려면 세 가지 필드가 필요합니다. `staging_table`(임시 테이블 이름),
-`staging_ddl`(그 테이블을 만드는 DDL), 그리고 `wrapper_query`(임시 테이블을 FROM 으로 하는
-INSERT)입니다. 여기서 주의할 점은, 이 `wrapper_query` 는 `{{SUBQUERY}}` 가 아니라 **staging
-테이블명**을 참조한다는 것입니다. 분할된 SELECT 의 결과는 이미 staging 으로 적재되어 있기
-때문입니다.
+이 모드를 쓰려면 **두 가지 필드가 필수**입니다. `staging_table`(적재할 staging 테이블 이름)과
+`wrapper_query`(그 staging 테이블을 FROM 으로 하는 INSERT)입니다. 여기서 주의할 점은, 이
+`wrapper_query` 는 `{{SUBQUERY}}` 가 아니라 **staging 테이블명**을 참조한다는 것입니다. 분할된
+SELECT 의 결과는 이미 staging 으로 적재되어 있기 때문입니다.
+
+세 번째 필드인 `staging_ddl`(테이블을 만드는 DDL)은 **선택**입니다. 주면 COPY 전에 그 DDL 로
+테이블을 만들고(보통 `CREATE TEMP TABLE`), **생략하면 첫 단계를 건너뛰고 이미 존재하는
+`staging_table` 을 그대로 사용**합니다. 다만 DDL 을 생략해 영구 테이블을 재사용할 때는 여러
+파티션 task 가 같은 테이블을 공유하지 않도록(job·파티션별 고유 테이블 등) 격리에 유의해야
+합니다 — 그렇지 않으면 동시 COPY/INSERT 가 서로 간섭할 수 있습니다.
 
 ```bash
 curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
@@ -812,9 +817,9 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 }'
 ```
 
-> 필수 필드(`staging_table`/`staging_ddl`/`wrapper_query`)가 빠지면 422
-> (`STAGE_INSERT_REQUIRES_FIELDS`). staging 은 `CREATE TEMP TABLE` 권장(세션별 격리 →
-> 병렬 task 간 이름 충돌 없음, 자동 정리).
+> 필수 필드(`staging_table`/`wrapper_query`)가 빠지면 422(`STAGE_INSERT_REQUIRES_FIELDS`).
+> `staging_ddl` 은 선택이며, 생략하면 테이블 생성을 건너뛰고 기존 `staging_table` 을 쓴다.
+> DDL 을 줄 때는 `CREATE TEMP TABLE` 권장(세션별 격리 → 병렬 task 간 이름 충돌 없음, 자동 정리).
 
 `statement` 모드는 COPY 를 거치지 않고 INSERT 래퍼를 대상 DB 에서 직접 실행합니다. 아래가 그
 예시입니다.
