@@ -5,3 +5,4 @@ __pycache__/
 *.egg-info/
 .env
 logs/
+CLAUDE.md
