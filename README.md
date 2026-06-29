@@ -8,7 +8,9 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 도�
 `IN` 목록을 기준으로 쿼리를 여러 조각으로 쪼갭니다. 그리고 각 조각을 여러 executor 가
 동시에 읽어서 Greenplum 에 적재합니다. 이렇게 하면 한 번에 처리하기 버거운 양도 여러
 Executor이 나눠 맡아 병렬로 처리할 수 있습니다. 설계 배경과 더 깊은 내용이 궁금하다면
-[DESIGN.md](DESIGN.md) 를 참고하세요.
+[DESIGN.md](DESIGN.md) 를, 성능·확장·고가용성 운영은 [PERFORMANCE.md](PERFORMANCE.md) 를,
+애플리케이션(예: C#)에서 HTTP API 로 작업을 실행·확인하는 방법은
+[INTEGRATION.md](INTEGRATION.md) 를 참고하세요.
 
 ## 아키텍처
 

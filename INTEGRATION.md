@@ -23,9 +23,23 @@
 거치지 않는다는 것입니다. Coordinator 와 주고받는 것은 상태와 적재된 행 수(row count) 뿐이라,
 응답은 항상 가볍고 빠릅니다.
 
-Coordinator 의 기본 주소는 `http://<coordinator-host>:8088` 입니다(`coordinator.port` 설정값).
-API 자체에는 인증 계층이 없으므로, 망 분리·방화벽·리버스 프록시 등 네트워크 수준에서 접근을
-통제하는 것을 전제로 합니다.
+Coordinator 의 **기본 주소(base URL)** 는 `http://<coordinator-host>:8088` 입니다
+(`coordinator.host`/`coordinator.port` 설정값). 아래의 모든 호출 URL 은 이 기본 주소 뒤에 경로를
+붙인 것입니다. 예를 들어 작업 제출은 `http://<coordinator-host>:8088/jobs` 가 됩니다. API 자체에는
+인증 계층이 없으므로, 망 분리·방화벽·리버스 프록시 등 네트워크 수준에서 접근을 통제하는 것을
+전제로 합니다.
+
+이 가이드에서 사용하는 엔드포인트는 다음과 같습니다. `{base}` 는 위 기본 주소,
+`{job_id}` 는 제출 응답으로 받은 작업 식별자입니다.
+
+| 동작 | 메서드 · URL |
+|---|---|
+| 작업 제출 | `POST {base}/jobs` |
+| 진행 상태 폴링(경량) | `GET {base}/jobs/{job_id}/status` |
+| 전체 상태(태스크 포함) | `GET {base}/jobs/{job_id}` |
+| 결과 요약 | `GET {base}/jobs/{job_id}/result` |
+| 작업 취소 | `POST {base}/jobs/{job_id}/cancel` |
+| 실패 파티션 재실행 | `POST {base}/jobs/{job_id}/retry` |
 
 아래 그림은 C# 애플리케이션과 Coordinator 사이에 오가는 호출의 전체 흐름입니다.
 
@@ -75,6 +89,14 @@ DDL), 그리고 `wrapper_query`(staging 에서 target 으로 옮기는 INSERT �
 은 그 쿼리의 `IN` 목록을 N등분해 병렬로 나눌 기준 컬럼이며, `parallelism` 은 몇 갈래로
 나눌지(기본 4, 허용 범위 1~128)를 정합니다. `username` 은 실행 주체를 기록용으로 남기는
 값으로, 이력 테이블 추적에 쓰이니 가급적 채워 주는 것이 좋습니다.
+
+이 본문을 기본 주소 뒤의 `/jobs` 로 POST 합니다. curl 로 표현하면 다음과 같습니다.
+
+```bash
+curl -X POST http://<coordinator-host>:8088/jobs \
+  -H "Content-Type: application/json" \
+  -d @job.json
+```
 
 제출이 받아들여지면 **202** 와 함께 작업 식별자만 돌아옵니다. 이 `job_id`(형식은
 `job_<랜덤12자리>`)를 잘 보관했다가 이후 단계에서 사용합니다.
