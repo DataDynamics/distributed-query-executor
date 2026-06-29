@@ -504,7 +504,7 @@ public static class Example
   `store.backend=memory` 에서는 작업을 접수한 그 Coordinator 만 상태를 압니다. 제출과 폴링이
   서로 다른 인스턴스로 라우팅되면 폴링이 **404** 를 받을 수 있습니다. 이런 구성에서는
   `store.backend=postgres` 와 공유 `history.db_dsn` 을 설정해 어느 인스턴스로 가도 조회되게
-  하세요(자세한 내용은 [README.md](README.md)·[Performance.md](Performance.md) 참고).
+  하세요(자세한 내용은 [README.md](README.md)·[PERFORMANCE.md](PERFORMANCE.md) 참고).
 - **stage_insert 의 세 필드는 모두 필수**입니다. `staging_table`·`staging_ddl`·`wrapper_query`
   중 하나라도 빠지면 제출이 422(`STAGE_INSERT_REQUIRES_FIELDS`)로 거부됩니다.
 - **stage_insert 의 컬럼을 맞추세요.** `sql` 의 SELECT 컬럼과 `staging_ddl` 로 만든 임시 테이블
