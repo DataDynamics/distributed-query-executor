@@ -196,7 +196,7 @@ classDiagram
         +str failure_policy      // fail_fast | best_effort
         +str username            // 제출자(이력/대시보드 표시)
         +str staging_table       // stage_insert 전용
-        +str staging_ddl         // stage_insert 전용
+        +str staging_ddl         // stage_insert 전용(선택 — 없으면 생성 건너뜀)
         +str insert_sql          // stage_insert INSERT 문
         +bool cancel_requested
         +str retry_of            // 재실행으로 생성된 job이면 원본 job_id
@@ -412,9 +412,9 @@ flowchart LR
 |---|---|---|
 | `copy` (기본) | Impala에서 sub-query를 **읽어** Greenplum에 `COPY FROM STDIN` 배치 적재. **사전검증(preflight)**: COPY 전에 SELECT 컬럼이 대상 테이블에 있는지 확인(`copy.preflight`, 기본 on) | 소스(Impala)/타깃(Greenplum)이 다른 엔진. COPY는 대상 테이블 컬럼과 정확히 일치해야 하며, wrapper는 **행을 반환하는 SELECT** 여야 한다 |
 | `statement` | wrapper로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB에서 **그대로 실행** | 소스/타깃이 같은 DB(Greenplum). INSERT 컬럼 목록이 매핑을 담당 |
-| `stage_insert` | Impala SELECT 결과를 Greenplum **TEMP staging에 COPY** → staging을 `FROM`으로 하는 **INSERT 실행** | SELECT은 Impala, INSERT은 Greenplum처럼 서로 다른 엔진을 INSERT로 연결 |
+| `stage_insert` | (선택적으로 `staging_ddl`로 staging 테이블 생성 →) Impala SELECT 결과를 Greenplum **staging에 COPY** → staging을 `FROM`으로 하는 **INSERT 실행** | SELECT은 Impala, INSERT은 Greenplum처럼 서로 다른 엔진을 INSERT로 연결 |
 
-표를 풀어 설명하면 이렇습니다. 기본값인 `copy`는 Impala에서 읽은 데이터를 Greenplum에 통째로 밀어 넣는 가장 빠른 방식으로, 소스와 타깃 엔진이 서로 다를 때 잘 맞습니다. 다만 COPY는 컬럼이 대상 테이블과 정확히 들어맞아야 하므로, COPY를 시작하기 전에 SELECT의 컬럼들이 대상 테이블에 실제로 있는지 미리 확인하는 **사전검증(preflight)**을 합니다(이 검증은 `copy.preflight` 설정으로 켜고 끌 수 있으며 기본은 켜짐입니다). `statement`는 `INSERT ... SELECT` 같은 문장을 대상 DB에서 그대로 실행하는 방식으로, 소스와 타깃이 같은 Greenplum일 때 적합합니다. `stage_insert`는 Impala에서 읽은 결과를 일단 Greenplum의 임시 테이블(TEMP staging)에 COPY로 넣어 둔 다음, 그 임시 테이블을 바탕으로 INSERT를 실행하는 방식으로, 서로 다른 엔진을 INSERT 문으로 이어 주고 싶을 때 씁니다.
+표를 풀어 설명하면 이렇습니다. 기본값인 `copy`는 Impala에서 읽은 데이터를 Greenplum에 통째로 밀어 넣는 가장 빠른 방식으로, 소스와 타깃 엔진이 서로 다를 때 잘 맞습니다. 다만 COPY는 컬럼이 대상 테이블과 정확히 들어맞아야 하므로, COPY를 시작하기 전에 SELECT의 컬럼들이 대상 테이블에 실제로 있는지 미리 확인하는 **사전검증(preflight)**을 합니다(이 검증은 `copy.preflight` 설정으로 켜고 끌 수 있으며 기본은 켜짐입니다). `statement`는 `INSERT ... SELECT` 같은 문장을 대상 DB에서 그대로 실행하는 방식으로, 소스와 타깃이 같은 Greenplum일 때 적합합니다. `stage_insert`는 Impala에서 읽은 결과를 일단 Greenplum의 staging 테이블에 COPY로 넣어 둔 다음, 그 staging 테이블을 바탕으로 INSERT를 실행하는 방식으로, 서로 다른 엔진을 INSERT 문으로 이어 주고 싶을 때 씁니다. 이때 staging 테이블을 만드는 `staging_ddl`은 **선택**입니다. 주면 COPY 전에 그 DDL(보통 `CREATE TEMP TABLE`)로 테이블을 만들고, 생략하면 테이블 생성을 건너뛰고 이미 존재하는 `staging_table`을 그대로 씁니다(이 경우 영구 테이블을 여러 task가 공유하지 않도록 격리에 유의).
 
 **write_mode**(`copy`/적재 공통):
 

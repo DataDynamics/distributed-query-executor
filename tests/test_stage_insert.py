@@ -112,8 +112,33 @@ def test_coordinator_stage_insert_job(client, store):
 
 
 def test_coordinator_stage_insert_missing_fields_rejected(client):
+    # staging_table(또는 wrapper_query)이 빠지면 거부된다.
     payload = _job_payload()
-    del payload["staging_ddl"]
+    del payload["staging_table"]
     resp = client.post("/jobs", json=payload)
     assert resp.status_code == 422
     assert resp.json()["error_code"] == "STAGE_INSERT_REQUIRES_FIELDS"
+
+
+def test_coordinator_stage_insert_without_ddl_accepted(client, store):
+    # staging_ddl 은 선택: 없어도 작업이 수용되고, staging_ddl 은 None 으로 전달된다
+    # (executor 는 테이블 생성을 건너뛰고 기존 staging_table 을 사용).
+    payload = _job_payload()
+    del payload["staging_ddl"]
+    resp = client.post("/jobs", json=payload)
+    assert resp.status_code == 202
+    job = store.get(resp.json()["job_id"])
+    assert job.exec_mode == "stage_insert"
+    assert job.staging_table == "stg_t"
+    assert job.staging_ddl is None
+
+
+async def test_stage_insert_skips_ddl_when_absent():
+    # staging_ddl 이 없으면 backend.stage_and_insert 에 None 으로 전달된다.
+    backend = _RecordingBackend()
+    payload = _payload("tn")
+    del payload["staging_ddl"]
+    st = await _run(create_executor_app(backend=backend), payload)
+    assert st["status"] == "DONE"
+    _impala_select, _staging_table, staging_ddl, _insert_sql = backend.staged
+    assert staging_ddl is None

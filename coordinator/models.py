@@ -401,7 +401,8 @@ class CreateJobRequest(BaseModel):
     )
     staging_ddl: Optional[str] = Field(
         default=None,
-        description="stage_insert 모드: staging 테이블 생성 DDL(예: CREATE TEMP TABLE ...).",
+        description="stage_insert 모드: staging 테이블 생성 DDL(예: CREATE TEMP TABLE ...). "
+        "선택 — 비우면 테이블 생성을 건너뛰고 기존 staging_table 을 사용한다.",
     )
     dry_run: bool = Field(
         default=False,

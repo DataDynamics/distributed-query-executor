@@ -66,10 +66,13 @@ sequenceDiagram
 그 staging 에서 최종 대상 테이블로 `INSERT ... SELECT` 를 실행하는 2단계 방식입니다. 서로 다른
 엔진 사이에서 컬럼 변환·형 변환·집계 같은 가공을 INSERT 단계에 맡기고 싶을 때 적합합니다.
 
-`stage_insert` 모드에서는 기본 필드(`sql`·`partition_column`·`target_table`) 외에 **세 필드가
-모두 필수** 입니다. `staging_table`(임시 테이블 이름), `staging_ddl`(그 임시 테이블을 만드는
-DDL), 그리고 `wrapper_query`(staging 에서 target 으로 옮기는 INSERT 문)입니다. 하나라도 빠지면
-제출이 **422** 로 거부됩니다(아래 5.2 참고). 요청 본문 예시는 다음과 같습니다.
+`stage_insert` 모드에서는 기본 필드(`sql`·`partition_column`·`target_table`) 외에 **두 필드가
+필수** 입니다. `staging_table`(적재할 staging 테이블 이름)과 `wrapper_query`(staging 에서 target
+으로 옮기는 INSERT 문)입니다. 이 둘 중 하나라도 빠지면 제출이 **422** 로 거부됩니다(아래 5.2
+참고). 세 번째 필드인 `staging_ddl`(staging 테이블을 만드는 DDL)은 **선택** 입니다. 주면
+executor 가 COPY 전에 그 DDL 로 테이블을 만들고, **주지 않으면 테이블 생성을 건너뛰고 이미
+존재하는 `staging_table` 을 그대로 사용**합니다. 요청 본문 예시는 다음과 같습니다(여기서는
+`staging_ddl` 까지 포함한 형태).
 
 ```json
 {
@@ -112,22 +115,30 @@ curl -X POST http://<coordinator-host>:8088/jobs \
 ### 2.1 stage_insert 가 내부에서 하는 일
 
 각 분할된 파티션(task)마다 executor 는 하나의 Greenplum 세션 안에서 다음 세 단계를 순서대로
-수행합니다. 이 그림을 머릿속에 두면 세 필드를 어떻게 채워야 하는지 자연스럽게 이해됩니다.
+수행합니다. 이 그림을 머릿속에 두면 각 필드를 어떻게 채워야 하는지 자연스럽게 이해됩니다.
+①단계는 `staging_ddl` 을 줬을 때만 실행되고, 생략하면 건너뜁니다.
 
 ```mermaid
 flowchart LR
-    A["① staging_ddl 실행<br/>CREATE TEMP TABLE 생성"] --> B["② Impala SELECT(분할 sub_query)<br/>결과를 staging 으로 COPY"]
+    A["① staging_ddl 실행 (선택)<br/>CREATE TEMP TABLE 생성"] --> B["② Impala SELECT(분할 sub_query)<br/>결과를 staging 으로 COPY"]
     B --> C["③ wrapper_query 실행<br/>INSERT INTO target SELECT ... FROM staging"]
 ```
 
-세 필드의 역할을 다시 한 줄씩 짚으면 이렇습니다. `staging_ddl` 은 ①단계에서 그대로 실행되는
-DDL 이므로, 뒤따르는 COPY 가 채울 컬럼을 가진 임시 테이블을 만들어야 합니다. 위 예시처럼
+각 필드의 역할을 다시 한 줄씩 짚으면 이렇습니다. `staging_ddl` 은 ①단계에서 그대로 실행되는
+DDL 이므로, 뒤따르는 COPY 가 채울 컬럼을 가진 테이블을 만들어야 합니다. 위 예시처럼
 `CREATE TEMP TABLE stg_sales (LIKE warehouse.sales)` 로 대상 테이블의 컬럼을 그대로 복제하면
-간단합니다. `staging_table` 은 그 임시 테이블의 이름으로, COPY 대상과 INSERT 의 `FROM` 절이
+간단합니다. 이 필드를 생략하면 ①단계를 건너뛰므로, 그때는 `staging_table` 이 **미리 만들어져
+있어야** 합니다. `staging_table` 은 그 테이블의 이름으로, COPY 대상과 INSERT 의 `FROM` 절이
 모두 이 이름을 가리킵니다. `wrapper_query` 는 ③단계에서 실행되는 INSERT 문으로, **`staging_table`
 에서 읽어 `target_table` 로 넣는 완성된 SQL** 이어야 합니다. 이때 `wrapper_query` 는 copy 모드와
 달리 sub-query 를 끼워 넣는 자리표시자(`{{SUBQUERY}}`)가 필요 없습니다 — staging 테이블을 직접
 참조하는 온전한 INSERT 문을 그대로 적으면 됩니다.
+
+`staging_ddl` 을 생략해 기존 테이블을 재사용할 때는 한 가지 주의가 필요합니다. DDL 로 만드는
+`CREATE TEMP TABLE` 은 세션 단위라 task 마다 격리되지만, 미리 만들어 둔 **영구 테이블을 여러
+파티션 task 가 공유**하면 COPY 와 INSERT 가 서로 섞일 수 있습니다. 그러므로 DDL 을 생략할
+때는 job·파티션마다 고유한 `staging_table` 을 쓰거나, 동시 실행이 겹치지 않도록 호출 측에서
+격리를 보장해야 합니다.
 
 한 가지 더, COPY(②단계)는 Impala SELECT 가 돌려준 컬럼 이름을 그대로 사용합니다. 따라서
 `sql` 의 SELECT 컬럼과 `staging_ddl` 로 만든 임시 테이블의 컬럼이 **이름·개수·순서로 맞아야**
@@ -264,11 +275,11 @@ DDL 이므로, 뒤따르는 COPY 가 채울 컬럼을 가진 임시 테이블을
 반면 요청 본문이 스키마에 어긋나 **FastAPI 가 자동으로 막는** 경우(예: `sql` 누락)는 `detail`
 배열 형태의 표준 응답이 옵니다. 두 형태를 모두 처리하도록 코드를 작성하는 것이 안전합니다.
 
-도메인 검증 실패(422) 응답의 예입니다. `stage_insert` 모드에서 필수 세 필드 중 하나라도
-빠지면 다음과 같은 응답이 옵니다.
+도메인 검증 실패(422) 응답의 예입니다. `stage_insert` 모드에서 필수 필드(`staging_table`,
+`wrapper_query`)가 빠지면 다음과 같은 응답이 옵니다.
 
 ```json
-{ "error_code": "STAGE_INSERT_REQUIRES_FIELDS", "message": "stage_insert 모드는 staging_table, staging_ddl, wrapper_query(INSERT) 가 모두 필요합니다." }
+{ "error_code": "STAGE_INSERT_REQUIRES_FIELDS", "message": "stage_insert 모드는 staging_table 과 wrapper_query(INSERT) 가 필요합니다. staging_ddl 은 선택이며, 없으면 기존 staging_table 을 사용합니다(생성 건너뜀)." }
 ```
 
 용량 초과(429)는 일시적인 거부이므로, 응답의 `Retry-After` 헤더(초 단위)만큼 기다렸다가 다시
@@ -318,7 +329,8 @@ public record CreateJobRequest(
     [property: JsonPropertyName("username")] string? Username = null,
     [property: JsonPropertyName("parallelism")] int Parallelism = 4,
     [property: JsonPropertyName("exec_mode")] string ExecMode = "stage_insert",
-    // stage_insert 모드 필수 3종(임시 테이블 이름·생성 DDL·staging→target INSERT 문)
+    // stage_insert 모드: staging_table·wrapper_query 는 필수, staging_ddl 은 선택
+    // (생략 시 executor 가 테이블 생성을 건너뛰고 기존 staging_table 사용)
     [property: JsonPropertyName("staging_table")] string? StagingTable = null,
     [property: JsonPropertyName("staging_ddl")] string? StagingDdl = null,
     [property: JsonPropertyName("wrapper_query")] string? WrapperQuery = null)
@@ -527,8 +539,11 @@ public static class Example
   서로 다른 인스턴스로 라우팅되면 폴링이 **404** 를 받을 수 있습니다. 이런 구성에서는
   `store.backend=postgres` 와 공유 `history.db_dsn` 을 설정해 어느 인스턴스로 가도 조회되게
   하세요(자세한 내용은 [README.md](README.md)·[PERFORMANCE.md](PERFORMANCE.md) 참고).
-- **stage_insert 의 세 필드는 모두 필수**입니다. `staging_table`·`staging_ddl`·`wrapper_query`
-  중 하나라도 빠지면 제출이 422(`STAGE_INSERT_REQUIRES_FIELDS`)로 거부됩니다.
+- **stage_insert 의 필수 필드는 `staging_table` 과 `wrapper_query` 두 개**입니다. 둘 중 하나라도
+  빠지면 제출이 422(`STAGE_INSERT_REQUIRES_FIELDS`)로 거부됩니다. `staging_ddl` 은 선택으로,
+  생략하면 executor 가 테이블 생성을 건너뛰고 **이미 존재하는** `staging_table` 을 사용합니다.
+  이때는 영구 staging 테이블을 여러 task 가 공유하지 않도록(job·파티션별 고유 테이블 등) 격리를
+  보장하세요 — 그렇지 않으면 동시 COPY/INSERT 가 서로 간섭할 수 있습니다.
 - **stage_insert 의 컬럼을 맞추세요.** `sql` 의 SELECT 컬럼과 `staging_ddl` 로 만든 임시 테이블
   컬럼이 이름·개수·순서로 일치해야 COPY 가 성공합니다(`CREATE TEMP TABLE ... (LIKE 대상)` 이
   가장 안전). `wrapper_query` 의 INSERT 는 `staging_table` 에서 읽어 `target_table` 로 넣는

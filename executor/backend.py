@@ -143,6 +143,11 @@ class ImpalaToGreenplumBackend:
         SELECT(Impala)과 INSERT(Greenplum)이 서로 다른 엔진일 때의 표준 패턴.
         query_options 는 Impala SELECT 에만 적용된다(INSERT 는 Greenplum).
         반환: INSERT 영향 행 수(미지원 시 적재 행 수).
+
+        staging_ddl 이 비어 있으면 테이블 생성을 건너뛰고 **이미 존재하는** staging_table 에
+        곧장 COPY 한다. 이 경우 staging_table 은 세션 임시(TEMP)가 아니므로, 여러 task 가
+        같은 영구 테이블을 공유하면 COPY/INSERT 가 서로 간섭할 수 있다 — 호출자가 격리를
+        보장해야 한다(예: job·파티션별 고유 staging_table 사용).
         """
         from impala.dbapi import connect as impala_connect  # 지연 임포트
         import psycopg  # 지연 임포트
@@ -156,7 +161,9 @@ class ImpalaToGreenplumBackend:
 
             with psycopg.connect(self.greenplum_dsn) as gp:
                 with gp.cursor() as gp_cur:
-                    gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
+                    if staging_ddl:
+                        gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
+                    # staging_ddl 이 없으면 생성을 건너뛰고 기존 staging_table 에 그대로 COPY.
                     copy_sql = f"COPY {staging_table} ({', '.join(columns)}) FROM STDIN"
                     with gp_cur.copy(copy_sql) as copy:
                         for batch in _batches(cur, self.batch_size):

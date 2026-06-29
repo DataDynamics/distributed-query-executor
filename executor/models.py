@@ -114,7 +114,8 @@ class CreateTaskRequest(BaseModel):
 
     외부 입력이므로 ``write_mode``/``exec_mode`` 는 Literal 로 허용값을 제한해 잘못된
     값이 들어오면 FastAPI 가 422 로 거절하도록 한다. 필드 의미는 ``Task`` 와 동일하다.
-    stage_insert 모드에서만 staging_table/staging_ddl/insert_sql 이 필요하다.
+    stage_insert 모드에서만 staging_table/insert_sql 이 필요하다. staging_ddl 은
+    선택이며, 비어 있으면 executor 가 테이블 생성을 건너뛰고 기존 staging_table 을 쓴다.
     """
 
     task_id: str

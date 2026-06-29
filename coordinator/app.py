@@ -286,12 +286,14 @@ def create_app(
             # stage_insert: Impala SELECT 결과를 Greenplum staging 테이블에 적재한 뒤
             # INSERT 로 최종 테이블에 반영하는 2단계 모드. 분할된 SELECT(sub-query)는
             # 변형하지 않고 그대로 두며, staging DDL/테이블/INSERT 문은 task 에 함께 실어
-            # executor 로 전달한다. 세 필드가 모두 있어야 단계가 성립하므로 여기서 강제.
-            if not (req.staging_table and req.staging_ddl and req.wrapper_query):
+            # executor 로 전달한다. staging_table(적재 대상)과 wrapper_query(INSERT)는 단계가
+            # 성립하려면 반드시 필요하므로 강제한다. staging_ddl 은 선택이며, 비어 있으면
+            # executor 가 테이블 생성을 건너뛰고 이미 존재하는 staging_table 을 그대로 쓴다.
+            if not (req.staging_table and req.wrapper_query):
                 raise QueryValidationError(
                     "STAGE_INSERT_REQUIRES_FIELDS",
-                    "stage_insert 모드는 staging_table, staging_ddl, wrapper_query(INSERT) "
-                    "가 모두 필요합니다.",
+                    "stage_insert 모드는 staging_table 과 wrapper_query(INSERT) 가 필요합니다. "
+                    "staging_ddl 은 선택이며, 없으면 기존 staging_table 을 사용합니다(생성 건너뜀).",
                 )
         elif req.wrapper_query:
             # stage_insert 가 아니면서 래퍼 쿼리가 주어진 경우: 분할된 각 sub-query를
