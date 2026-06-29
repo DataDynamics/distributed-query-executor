@@ -101,14 +101,16 @@ coordinator.max_dispatch_concurrency=32 # 동시 task 디스패치 상한(코루
 # Executor 동시 task 상한(executor 1대 기준, admission control)
 executor.max_concurrent_tasks=8
 
-# Executor - Impala (source). 비어 있으면 MockBackend 사용. TLS + Kerberos(GSSAPI)
+# Executor - Impala (source). 비어 있으면 MockBackend 사용. 기본 TLS + LDAP 인증
 impala.host=
 impala.port=21050
 impala.database=default
-impala.auth_mechanism=GSSAPI
-impala.kerberos_service_name=impala
+impala.auth_mechanism=LDAP        # LDAP(기본) | GSSAPI(Kerberos) | PLAIN | NOSASL
+impala.kerberos_service_name=impala   # GSSAPI 일 때만 사용
 impala.use_ssl=true
 impala.ca_cert=/appuser/query-executor/config/impala-ca.pem
+impala.user=                      # LDAP 바인드 사용자
+impala.password=                  # LDAP 비밀번호
 
 # Executor - Greenplum (target). 비어 있으면 MockBackend 사용. TLS/Kerberos 미적용(일반 DSN)
 greenplum.dsn=
@@ -128,7 +130,13 @@ copy.batch_size=10000
 > `executor.max_concurrent_tasks` 를 분배하고, `max_dispatch_concurrency` 는 그 이상으로
 > 두어 coordinator 가 병목이 되지 않게 한다.
 
-## Impala TLS + Kerberos
+## Impala TLS + 인증 (기본 LDAP / 선택 Kerberos)
+
+> **기본 인증은 LDAP 입니다.** `impala.auth_mechanism=LDAP`(기본값)이면 `impala.user`/
+> `impala.password` 에 LDAP 바인드 자격증명만 채우면 되고, 비밀번호 보호를 위해
+> `impala.use_ssl=true` + `impala.ca_cert` 로 TLS 를 함께 쓰는 것을 권장합니다. 이 경우
+> 아래의 keytab·kinit 등 Kerberos 절차는 **필요 없습니다**. 아래 내용은
+> `impala.auth_mechanism=GSSAPI`(Kerberos)로 바꿔 쓸 때만 해당합니다.
 
 이 부분은 보안 접속이 걸려 있는 Impala 에 연결할 때만 필요합니다. 먼저 큰 그림을 잡고 갑시다. 데이터의 원천인 Impala 에 실제로 접속하는 쪽은 executor 이고, coordinator 는 여기에 관여하지 않습니다. 그리고 보안 방식이 양쪽이 다릅니다. **Impala 에만 TLS(통신 암호화) 와 Kerberos(GSSAPI, 티켓 기반 인증)** 가 적용되고, 데이터를 적재하는 **Greenplum 은 TLS·Kerberos 없이 일반 DSN** 으로 접속합니다. 또한 보안 정책에 따라 시스템 공용 파일인 `/etc/krb5.conf` 를 건드리지 않고, 대신 우리 앱 트리 안의 `/appuser/query-executor/config/krb5.conf` 를 `KRB5_CONFIG` 환경변수로 가리켜 사용합니다.
 

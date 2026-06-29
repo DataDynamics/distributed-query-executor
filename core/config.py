@@ -306,12 +306,12 @@ class Settings:
         self.executor_shutdown_drain_timeout_s: float = float(
             _get("executor", "shutdown_drain_timeout_s", 25)
         )
-        # Impala (source) — 데이터를 읽어오는 원본. TLS + Kerberos(GSSAPI) 환경 기준 기본값.
+        # Impala (source) — 데이터를 읽어오는 원본. TLS + LDAP 인증 기준 기본값(GSSAPI 도 지원).
         self.impala_host: str = _get_nested("executor", "impala", "host", "")
         self.impala_port: int = int(_get_nested("executor", "impala", "port", 21050))
         self.impala_database: str = _get_nested("executor", "impala", "database", "default")
         self.impala_auth_mechanism: str = _get_nested(
-            "executor", "impala", "auth_mechanism", "GSSAPI"
+            "executor", "impala", "auth_mechanism", "LDAP"
         )
         self.impala_kerberos_service_name: str = _get_nested(
             "executor", "impala", "kerberos_service_name", "impala"

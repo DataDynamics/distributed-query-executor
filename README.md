@@ -178,9 +178,9 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 
 조금 더 깊은 설정 주제들도 미리 짚어 두면 운영할 때 당황하지 않습니다.
 
-- **인증 범위**: TLS + Kerberos(GSSAPI)는 **Impala 접속에만** 적용된다. Greenplum 은
-  TLS/Kerberos 없는 **일반 `postgresql://` DSN** 으로 접속한다. 즉 보안 인증은 원본인
-  Impala 쪽에만 필요하고, 적재 대상인 Greenplum 은 평범한 접속 문자열을 씁니다.
+- **인증 범위**: TLS + Impala 인증(기본 **LDAP**, 선택적으로 Kerberos/GSSAPI)은 **Impala
+  접속에만** 적용된다. Greenplum 은 TLS/인증 없는 **일반 `postgresql://` DSN** 으로 접속한다.
+  즉 보안 인증은 원본인 Impala 쪽에만 필요하고, 적재 대상인 Greenplum 은 평범한 접속 문자열을 씁니다.
 - **Job 저장소(`store.backend`)**: 작업 정보를 어디에 보관할지 고릅니다. `memory` 는 메모리에만
   두어 재기동하면 사라지고(휘발), `file` 은 단일 노드에서 파일로 영속화해 **크래시 복구**가
   가능합니다(재기동 시 중단된 job 을 FAILED 로 정합한 뒤 `retry` 로 재개). `postgres` 는 여러
@@ -213,9 +213,11 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
   슬롯이 나면 대기 중이던 job 이 들어온 순서대로(FIFO) 실행됩니다. `max_concurrent_jobs<=0`
   으로 두면 한도를 두지 않습니다. 한편 Executor 한 대가 동시에 처리할 task 수를 제한하는 것은
   `executor.max_concurrent_tasks` 인데, 이는 아래 "수평 확장" 에서 다룹니다.
-- Impala 접속은 **TLS + Kerberos(GSSAPI)** 를 씁니다. 관련 설정은 `impala.use_ssl`/
-  `impala.ca_cert`, `impala.auth_mechanism=GSSAPI`/`impala.kerberos_service_name` 입니다.
-  인증 티켓은 OS 자격증명 캐시(KRB5CCNAME)에서 가져오므로, `bin/kinit-renew.sh`(keytab) 를
+- Impala 접속은 기본으로 **TLS + LDAP(사용자/비밀번호)** 인증을 씁니다. 관련 설정은
+  `impala.use_ssl`/`impala.ca_cert` 와 `impala.auth_mechanism=LDAP`, 그리고 LDAP 바인드용
+  `impala.user`/`impala.password` 입니다(비밀번호 보호를 위해 TLS 권장). Kerberos 환경이면
+  `impala.auth_mechanism=GSSAPI` + `impala.kerberos_service_name` 으로 바꿀 수 있는데, 이때는
+  인증 티켓을 OS 자격증명 캐시(KRB5CCNAME)에서 가져오므로 `bin/kinit-renew.sh`(keytab) 를
   cron 으로 주기 실행해 갱신합니다([deploy/README.md](deploy/README.md) 참고).
 - 로깅은 `/appuser/Distributed Query Executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
   들어오면 **job_id 를 먼저 만들고**, 그 이후의 모든 로그 줄 앞에 `[job_id][task_id]` 가
@@ -285,8 +287,8 @@ Kerberos·TLS 관련 드라이버 의존성을 설치합니다.
 # 1) Python 3.9 및 빌드 도구 설치(이미 있으면 생략)
 sudo dnf install -y python3 python3-pip python3-devel
 
-# 2) (executor를 실제 Impala/Greenplum에 연결할 때만) impyla + Kerberos/TLS 의존성
-#    Impala 는 TLS + Kerberos(GSSAPI) 환경이다.
+# 2) (executor를 실제 Impala/Greenplum에 연결할 때만) impyla + SASL/TLS 의존성
+#    Impala 는 기본 TLS + LDAP 인증(선택적으로 Kerberos/GSSAPI)이다.
 sudo dnf install -y gcc gcc-c++ make python3-devel \
     krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi
 ```
