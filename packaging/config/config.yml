@@ -103,6 +103,7 @@ executor:
     query_options: ${impala.query_options:}
   greenplum:
     dsn: ${greenplum.dsn:}                        # Greenplum 적재 대상 DSN(미설정 시 Mock 백엔드)
+    pool_max: ${greenplum.pool_max:0}             # GP 커넥션 풀 최대 크기(0=executor.max_concurrent_tasks 와 동일)
   copy:
     batch_size: ${copy.batch_size:10000}          # COPY 배치 크기(행)
     preflight: ${copy.preflight:true}             # COPY 전 SELECT 컬럼이 대상 테이블에 있는지 사전검증(불일치 조기 실패)

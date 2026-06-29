@@ -8,9 +8,99 @@
 from __future__ import annotations
 
 import logging
+import queue
+import threading
+from contextlib import contextmanager
 from typing import Iterator, Protocol
 
 logger = logging.getLogger(__name__)
+
+
+class _GreenplumPool:
+    """executor 1대용 간단한 Greenplum(psycopg) 커넥션 풀 — 외부 의존성 없이 표준 라이브러리로 구현.
+
+    왜 필요한가: 풀이 없으면 task 마다 새로 connect 하므로 (1) 동시 GP 연결 수가 제어되지
+    않고(다운스트림 max_connections 압박), (2) task 마다 인증·핸드셰이크 비용을 다시 치른다.
+    이 풀은 **동시 연결을 maxsize 로 제한**(BoundedSemaphore)하고, 유휴 연결을 재사용한다.
+
+    재사용 안전성(중요): stage_insert 는 세션 전용 ``CREATE TEMP TABLE`` 을 쓰므로, 연결을
+    그대로 재사용하면 이전 task 의 TEMP 가 남아 다음 ``CREATE TEMP TABLE`` 이 충돌한다.
+    그래서 **반납 시 ``DISCARD ALL`` 로 세션을 초기화**(TEMP 테이블·GUC·준비문 등 제거)한다.
+    초기화에 실패한 연결(드라이버/엔진 미지원·끊김 등)은 재사용하지 않고 닫아 버린다(안전 폴백).
+
+    blocking psycopg 호출은 executor 가 ``to_thread`` 로 감싸 실행하므로, 스레드 안전한
+    ``BoundedSemaphore`` + ``LifoQueue`` 조합으로 충분하다(이벤트 루프와 무관).
+    """
+
+    def __init__(self, dsn: str, maxsize: int, *, connect=None):
+        self._dsn = dsn
+        self._maxsize = max(1, int(maxsize))
+        # 동시 "사용 중" 연결 수를 maxsize 로 제한. 슬롯이 없으면 반납될 때까지 대기.
+        self._sema = threading.BoundedSemaphore(self._maxsize)
+        # 유휴(반납되어 재사용 가능한) 연결 보관. LIFO 라 최근 쓴 연결을 우선 재사용(캐시 친화).
+        self._idle: "queue.LifoQueue" = queue.LifoQueue()
+        self._connect = connect or self._default_connect
+
+    def _default_connect(self):
+        import psycopg  # 지연 임포트(드라이버 선택 설치)
+
+        return psycopg.connect(self._dsn)
+
+    def _reset(self, conn) -> bool:
+        """반납된 연결의 세션 상태를 깨끗이 비운다. 성공하면 True(재사용 가능)."""
+        try:
+            conn.rollback()  # 혹시 열린 트랜잭션이 있으면 정리(autocommit 전환 위해 선행)
+            prev = conn.autocommit
+            conn.autocommit = True  # DISCARD ALL 은 트랜잭션 블록 밖에서만 실행 가능
+            try:
+                conn.execute("DISCARD ALL")  # TEMP 테이블·SET·준비문 등 세션 상태 전부 제거
+            finally:
+                conn.autocommit = prev
+            return True
+        except Exception:
+            logger.warning("GP 커넥션 초기화(DISCARD ALL) 실패 — 해당 연결은 폐기", exc_info=True)
+            return False
+
+    @staticmethod
+    def _safe_close(conn) -> None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    @contextmanager
+    def connection(self):
+        """풀에서 연결을 하나 빌려 준다(없으면 생성, maxsize 도달 시 반납 대기)."""
+        self._sema.acquire()  # 동시 연결 상한 확보(필요 시 블로킹)
+        conn = None
+        try:
+            try:
+                conn = self._idle.get_nowait()  # 유휴 연결 재사용
+            except queue.Empty:
+                conn = self._connect()  # 없으면 새로 연결(슬롯을 이미 잡았으니 상한 내)
+            try:
+                yield conn
+            except Exception:
+                # 작업 중 오류 → 트랜잭션 상태가 불확실하므로 재사용하지 않고 폐기
+                self._safe_close(conn)
+                conn = None
+                raise
+            # 정상 종료 → 세션 초기화 후 유휴 풀에 반납(초기화 실패면 폐기)
+            if self._reset(conn):
+                self._idle.put(conn)
+            else:
+                self._safe_close(conn)
+            conn = None
+        finally:
+            self._sema.release()
+
+    def close(self) -> None:
+        """풀에 남은 유휴 연결을 모두 닫는다(종료 시)."""
+        while True:
+            try:
+                self._safe_close(self._idle.get_nowait())
+            except queue.Empty:
+                break
 
 
 class Backend(Protocol):
@@ -98,7 +188,8 @@ class ImpalaToGreenplumBackend:
     """
 
     def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000,
-                 query_options: dict | None = None, copy_preflight: bool = True):
+                 query_options: dict | None = None, copy_preflight: bool = True,
+                 pool_max: int = 8):
         self.impala_dsn = impala_dsn
         self.greenplum_dsn = greenplum_dsn
         self.batch_size = batch_size
@@ -107,6 +198,9 @@ class ImpalaToGreenplumBackend:
         # copy 모드 COPY 전에 SELECT 컬럼이 대상 테이블에 존재하는지 사전검증할지 여부.
         # 대용량 스트리밍을 시작하기 전에 컬럼 불일치를 잡아 빠르게 실패시킨다.
         self.copy_preflight = copy_preflight
+        # Greenplum 커넥션 풀: 동시 GP 연결을 pool_max 로 제한하고 연결을 재사용한다.
+        # (Impala 쪽은 task 마다 새로 연결한다 — 읽기 커서가 연결에 묶여 풀링이 까다로움.)
+        self._gp_pool = _GreenplumPool(greenplum_dsn, pool_max)
 
     def _impala_execute(self, cur, sql: str, query_options) -> None:
         """Impala 커서로 sql 을 실행한다. 전역+요청별 옵션을 병합해 configuration 으로 넘긴다.
@@ -126,9 +220,7 @@ class ImpalaToGreenplumBackend:
         COPY를 쓰지 않으므로 컬럼 매핑은 SQL(INSERT 컬럼 목록/SELECT)이 책임진다.
         반환값은 cursor.rowcount(영향받은 행 수, 미지원 시 0).
         """
-        import psycopg  # 지연 임포트
-
-        with psycopg.connect(self.greenplum_dsn) as conn:
+        with self._gp_pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql)
                 affected = cur.rowcount
@@ -150,7 +242,6 @@ class ImpalaToGreenplumBackend:
         보장해야 한다(예: job·파티션별 고유 staging_table 사용).
         """
         from impala.dbapi import connect as impala_connect  # 지연 임포트
-        import psycopg  # 지연 임포트
 
         loaded = 0
         impala_conn = impala_connect(**self.impala_dsn)
@@ -159,7 +250,7 @@ class ImpalaToGreenplumBackend:
             self._impala_execute(cur, impala_select, query_options)
             columns = [d[0] for d in cur.description]
 
-            with psycopg.connect(self.greenplum_dsn) as gp:
+            with self._gp_pool.connection() as gp:
                 with gp.cursor() as gp_cur:
                     if staging_ddl:
                         gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
@@ -194,7 +285,6 @@ class ImpalaToGreenplumBackend:
         반환: COPY 로 적재한 총 행 수.
         """
         from impala.dbapi import connect as impala_connect  # 지연 임포트
-        import psycopg  # 지연 임포트
 
         rows_written = 0
         impala_conn = impala_connect(**self.impala_dsn)
@@ -203,7 +293,7 @@ class ImpalaToGreenplumBackend:
             self._impala_execute(cur, sub_query, query_options)
             columns = [d[0] for d in cur.description]
 
-            with psycopg.connect(self.greenplum_dsn) as gp:
+            with self._gp_pool.connection() as gp:
                 with gp.cursor() as gp_cur:
                     # 사전검증(preflight): COPY 로 한 행도 흘려보내기 전에, Impala SELECT 가
                     # 내는 컬럼이 모두 대상 테이블에 존재하는지 확인한다. 불일치면 여기서
@@ -334,6 +424,7 @@ def build_backend(settings) -> Backend:
             batch_size=settings.copy_batch_size,
             query_options=getattr(settings, "impala_query_options", None),
             copy_preflight=getattr(settings, "copy_preflight", True),
+            pool_max=getattr(settings, "greenplum_pool_max", 8),
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()

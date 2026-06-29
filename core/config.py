@@ -339,6 +339,17 @@ class Settings:
         self.copy_preflight: bool = _to_bool(
             _get_nested("executor", "copy", "preflight", True)
         )
+        # Greenplum 커넥션 풀 최대 크기(executor 1대가 동시에 여는 GP 연결 상한).
+        # 0/미설정이면 동시 task 당 1 연결이 되도록 executor.max_concurrent_tasks 와 맞춘다
+        # (무제한(0)이면 8 로 폴백). 다운스트림 max_connections 보호의 직접 손잡이다.
+        _pool_default = (
+            self.executor_max_concurrent_tasks
+            if self.executor_max_concurrent_tasks > 0
+            else 8
+        )
+        self.greenplum_pool_max: int = int(
+            _get_nested("executor", "greenplum", "pool_max", 0)
+        ) or _pool_default
 
 
 def init_settings(

@@ -80,6 +80,8 @@ def masked_config(settings) -> list[dict]:
          "Impala 쿼리 옵션 전역 기본값(SET). 요청별 옵션이 이 위에 병합됨"),
         ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn),
          "Greenplum(타깃) 적재 DSN. 미설정 시 MockBackend"),
+        ("greenplum", "pool_max", settings.greenplum_pool_max,
+         "GP 커넥션 풀 최대 크기(동시 GP 연결 상한). 0이면 max_concurrent_tasks 와 동일"),
         ("greenplum", "copy_batch_size", settings.copy_batch_size, "COPY 배치 크기(행)"),
         ("greenplum", "copy_preflight", settings.copy_preflight,
          "COPY 전 SELECT 컬럼이 대상 테이블에 있는지 사전검증(불일치 조기 실패)"),

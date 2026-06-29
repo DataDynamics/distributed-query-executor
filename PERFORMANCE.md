@@ -358,6 +358,7 @@ executor 마다 따로 적용되는지를 알려 줍니다.
 
 | 파라미터 | 기본 | 의미 |
 |---|---|---|
+| `greenplum.pool_max` | 0 | GP 커넥션 풀 크기(동시 GP 연결 상한). 0=`executor.max_concurrent_tasks` 와 동일 |
 | `copy.batch_size` | 10000 | COPY 배치 크기(행). 클수록 처리량↑·메모리↑ |
 | `copy.preflight` | true | COPY 전 컬럼 사전검증(불일치 조기 실패) |
 | `impala.query_options` | (빈값) | Impala SET 전역 기본값. 예: `MEM_LIMIT=2g,REQUEST_POOL=etl` |
@@ -406,6 +407,16 @@ task 수의 실효 상한은 다음 세 값 중 가장 작은 값으로 결정�
 기준이 됩니다. task 하나는 Impala 커넥션 하나, Greenplum 커넥션 하나, 그리고 `copy.batch_size`
 만큼의 버퍼를 잡아먹습니다. 그래서 메모리가 빡빡한 환경이라면 다른 값보다 이 값을 먼저 줄이는
 것이 좋습니다.
+
+executor 는 Greenplum 연결을 **커넥션 풀**로 재사용합니다. 예전에는 task 마다 새로 연결을
+맺어 동시 연결 수가 제어되지 않고 인증·핸드셰이크 비용도 매번 치렀지만, 지금은 풀이 동시
+연결을 **`greenplum.pool_max`** 개로 제한하고 유휴 연결을 다시 씁니다(stage_insert 의 세션
+전용 TEMP 테이블은 반납 시 `DISCARD ALL` 로 비워져 재사용이 안전합니다). 기본값은 0이며,
+이때 풀 크기는 `executor.max_concurrent_tasks` 와 같아져 "동시 task 당 GP 연결 하나"가 됩니다.
+**Greenplum 의 `max_connections` 를 직접 보호하는 손잡이**가 바로 이 값입니다. 클러스터 전체
+동시 GP 연결은 `Σ executor.greenplum.pool_max` 이므로, 이 합이 Greenplum 이 허용하는 동시 세션
+수를 넘지 않게 잡습니다. 동시 task 수보다 작게 두면 task 가 연결을 기다리며 추가로 throttle 되고,
+크게 두어 봐야 동시 task 수가 천장이라 의미가 없습니다.
 
 다음으로 **`coordinator.max_dispatch_concurrency`** 는 모든 executor 의 동시 task 수를 합한
 값(`Σ executor.max_concurrent_tasks`) 이상으로 둡니다(기본 32). 이 값이 너무 작으면 executor 가
