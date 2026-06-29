@@ -1,13 +1,13 @@
-# query-executor
+# Distributed Query Executor
 
-query-executor 는 큰 데이터를 빠르게 옮기기 위한 도구입니다. 한 대가 모든 일을 하는 대신,
+Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 도구입니다. 한 대가 모든 일을 하는 대신,
 일을 지휘하는 **coordinator**(요청을 받아 작업을 나눠 주는 지휘자 역할의 서비스)와 실제로
-데이터를 읽고 쓰는 여러 대의 **executor**(나눠 받은 일을 직접 수행하는 일꾼 서비스)로
+데이터를 읽고 쓰는 여러 대의 **executor**(나눠 받은 일을 직접 수행하는 Executor 서비스)로
 구성됩니다. 핵심 아이디어는 단순합니다. 하나의 Impala `SELECT` 쿼리를 그대로 한 번에
 실행하는 대신, 파티션 컬럼(데이터를 날짜나 지역처럼 일정한 기준으로 미리 나눠 둔 컬럼)의
 `IN` 목록을 기준으로 쿼리를 여러 조각으로 쪼갭니다. 그리고 각 조각을 여러 executor 가
 동시에 읽어서 Greenplum 에 적재합니다. 이렇게 하면 한 번에 처리하기 버거운 양도 여러
-일꾼이 나눠 맡아 병렬로 처리할 수 있습니다. 설계 배경과 더 깊은 내용이 궁금하다면
+Executor이 나눠 맡아 병렬로 처리할 수 있습니다. 설계 배경과 더 깊은 내용이 궁금하다면
 [DESIGN.md](DESIGN.md) 를 참고하세요.
 
 ## 아키텍처
@@ -101,7 +101,7 @@ sequenceDiagram
     CO-->>C: {status, progress_percent, completed/total, ...}
 ```
 
-작업 처리와는 별개로, coordinator 는 일꾼들이 잘 살아 있는지도 꾸준히 챙깁니다. 아래
+작업 처리와는 별개로, coordinator 는 Executor들이 잘 살아 있는지도 꾸준히 챙깁니다. 아래
 설명대로 coordinator 는 `monitor.health_interval_s` 마다 각 executor 의 `/health` 와
 `/metrics`(CPU·메모리·디스크 사용량)를 폴링해 두었다가 `GET /executors` 로 보여 주고,
 `monitor.record_interval_s` 마다 그 값을 PostgreSQL(`executor_health_metrics`)에 기록해
@@ -114,9 +114,9 @@ sequenceDiagram
 ## 디렉터리 구조
 
 이제 코드가 어디에 어떻게 놓여 있는지 살펴봅시다. 크게 보면 coordinator 와 executor 가
-공통으로 쓰는 `core/`, 지휘자 역할의 `coordinator/`, 일꾼 역할의 `executor/`, 그리고 설정과
+공통으로 쓰는 `core/`, 지휘자 역할의 `coordinator/`, Executor 역할의 `executor/`, 그리고 설정과
 배포를 담는 디렉터리들로 나뉩니다. 아래 목록에서 왼쪽은 파일 경로, 오른쪽은 그 파일이 맡은
-일입니다. 처음에는 전부 외울 필요 없이, "공용 → 지휘자 → 일꾼" 순서로 큰 덩어리만 눈에
+일입니다. 처음에는 전부 외울 필요 없이, "공용 → 지휘자 → Executor" 순서로 큰 덩어리만 눈에
 익혀 두면 충분합니다.
 
 ```
@@ -162,11 +162,11 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 
 설정과 관련해 처음에 알아 두면 좋은 점들을 하나씩 풀어 보겠습니다.
 
-- 설정 파일들은 기본적으로 `/appuser/query-executor/config` 디렉터리에서 읽습니다. 다른
+- 설정 파일들은 기본적으로 `/appuser/Distributed Query Executor/config` 디렉터리에서 읽습니다. 다른
   위치를 쓰고 싶으면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 바꿀 수 있습니다.
 - 내 컴퓨터에서 개발하며 돌려볼 때는 `QUERY_EXECUTOR_CONFIG_DIR=packaging/config` 로
   지정해 저장소에 들어 있는 기본값을 그대로 쓰면 편합니다.
-- 가장 자주 손대는 핵심 항목은 `coordinator.executors`(일꾼 목록),
+- 가장 자주 손대는 핵심 항목은 `coordinator.executors`(Executor 목록),
   `coordinator.max_concurrent_jobs`/`max_pending_jobs`(동시 처리·대기 한도), `impala.*`(원본
   접속 정보), `greenplum.dsn`(적재 대상 접속 정보), `copy.batch_size`(한 번에 보낼 행 수)
   입니다.
@@ -189,12 +189,12 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
   스트리밍이 시작되기 전에 일찍 실패시켜 시간과 자원을 아낍니다.
 - **graceful drain**: executor 를 종료(SIGTERM)할 때 진행 중인 task 를 곧바로 끊어 버리지
   않고, `executor.shutdown_drain_timeout_s`(기본 25초) 동안은 마무리를 기다립니다.
-- **헬스 기반 executor 선택(`coordinator.executor_select`)**: 어느 일꾼에게 일을 줄지 고르는
+- **헬스 기반 executor 선택(`coordinator.executor_select`)**: 어느 Executor에게 일을 줄지 고르는
   방식입니다. `round_robin`(기본)은 차례대로 돌아가며 배정하고, `least_loaded` 와 `p2c` 는
   HealthMonitor 가 모아 둔 스냅샷(헬스 상태와 `active_tasks`)을 보고 **살아 있고 한가한
   executor 를 먼저** 골라 **초기 배정**과 **failover 순서**를 정합니다(한 job 의 task 가 한
   노드로 몰리지 않게 분산). coordinator 를 여러 대 두는 **HA(다중 coordinator)** 환경에서는
-  여러 지휘자가 동시에 같은 일꾼으로 몰리는 분산 스탬피드를 피하기 위해
+  여러 지휘자가 동시에 같은 Executor으로 몰리는 분산 스탬피드를 피하기 위해
   **`p2c`(Power-of-Two-Choices, 무작위로 둘을 뽑아 덜 바쁜 쪽을 고르는 방식)** 를 권장합니다.
   실제 배정이 얼마나 고르게 퍼졌는지는 `GET /cluster` 의 `assignment_counts` 로 확인합니다.
   HA 를 더 정교하게 다루기 위한 장치로는 공유 self-report 의 URL 키 부하 뷰
@@ -209,13 +209,13 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
   - 실행+대기 합(=capacity)을 넘는 요청은 **`429 Too Many Requests`** (`Retry-After: 5`)로 거부한다.
 
   슬롯이 나면 대기 중이던 job 이 들어온 순서대로(FIFO) 실행됩니다. `max_concurrent_jobs<=0`
-  으로 두면 한도를 두지 않습니다. 한편 일꾼 한 대가 동시에 처리할 task 수를 제한하는 것은
+  으로 두면 한도를 두지 않습니다. 한편 Executor 한 대가 동시에 처리할 task 수를 제한하는 것은
   `executor.max_concurrent_tasks` 인데, 이는 아래 "수평 확장" 에서 다룹니다.
 - Impala 접속은 **TLS + Kerberos(GSSAPI)** 를 씁니다. 관련 설정은 `impala.use_ssl`/
   `impala.ca_cert`, `impala.auth_mechanism=GSSAPI`/`impala.kerberos_service_name` 입니다.
   인증 티켓은 OS 자격증명 캐시(KRB5CCNAME)에서 가져오므로, `bin/kinit-renew.sh`(keytab) 를
   cron 으로 주기 실행해 갱신합니다([deploy/README.md](deploy/README.md) 참고).
-- 로깅은 `/appuser/query-executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
+- 로깅은 `/appuser/Distributed Query Executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
   들어오면 **job_id 를 먼저 만들고**, 그 이후의 모든 로그 줄 앞에 `[job_id][task_id]` 가
   자동으로 붙습니다(coordinator·executor 공통). 예를 들면 다음과 같습니다.
   - coordinator(job 단위): `... [job_531ab6f734ca][-] - 쿼리 실행 요청 수신 ...`
@@ -248,7 +248,7 @@ curl -s 'localhost:8088/cluster?refresh=false'   # 캐시 사용
 ```
 
 응답은 아래와 같은 JSON 입니다. `coordinator` 아래에는 지휘자 자신의 자원 상태가, `executors`
-배열에는 일꾼별 상태가 들어 있고, `executors_summary` 와 `jobs` 는 그것들을 요약한 숫자입니다.
+배열에는 Executor별 상태가 들어 있고, `executors_summary` 와 `jobs` 는 그것들을 요약한 숫자입니다.
 `assignment_counts` 는 어느 executor 에 task 가 몇 개 배정됐는지를 보여 주어 부하가 고르게
 퍼졌는지 확인하는 데 쓰고, `executor_select` 는 현재 어떤 선택 방식을 쓰는지를 알려 줍니다.
 
@@ -319,7 +319,7 @@ executor 를 흉내가 아니라 실제 클러스터에 연결하려면, Impala�
 
 의존성은 역할에 따라 세 개의 파일로 나눠 두었습니다. 어느 역할로 설치하느냐에 따라 필요한
 파일이 다르므로, 아래 표에서 파일 이름과 그 용도를 확인하세요. 지휘자만 띄울 거라면 첫 번째,
-실제 데이터를 다루는 일꾼까지 띄울 거라면 두 번째, 개발하며 테스트할 거라면 세 번째가
+실제 데이터를 다루는 Executor까지 띄울 거라면 두 번째, 개발하며 테스트할 거라면 세 번째가
 필요합니다.
 
 | 파일 | 용도 |
@@ -332,7 +332,7 @@ executor 를 흉내가 아니라 실제 클러스터에 연결하려면, Impala�
 
 설치를 마쳤다면 내 컴퓨터에서 실제로 서비스를 띄워 봅시다. 설정은 `packaging/config/` 의
 기본값을 그대로 쓰므로(`coordinator.executors`, 포트 등) 별도 설정 없이도 동작합니다.
-순서는 간단합니다. 먼저 일꾼인 executor 를 한 대 이상 띄우고, 그다음 지휘자인 coordinator 를
+순서는 간단합니다. 먼저 Executor인 executor 를 한 대 이상 띄우고, 그다음 지휘자인 coordinator 를
 띄웁니다. executor 의 포트는 `EXECUTOR_PORT` 환경변수로 정하며, 포트만 달리해 여러 대를
 나란히 띄울 수 있습니다.
 
@@ -634,20 +634,20 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 ## 배포 (RHEL 9.2, /appuser 단일 트리)
 
 실제 서버에 배포할 때 이 프로젝트는 조금 독특한 규칙을 따릅니다. 보안 정책상 `/etc`·`/opt`·
-`/var` 같은 시스템 디렉터리를 건드리지 않고, 모든 것을 `/appuser/query-executor` 한 트리
+`/var` 같은 시스템 디렉터리를 건드리지 않고, 모든 것을 `/appuser/Distributed Query Executor` 한 트리
 아래에 모아 둡니다. 또한 systemd 시스템 유닛 대신 런처 스크립트로 서비스를 켜고 끕니다.
 설치 스크립트와 자세한 절차는 [`deploy/README.md`](deploy/README.md) 를 참고하세요. 가장
 기본적인 흐름은 아래와 같습니다.
 
 ```bash
 sudo ./deploy/install.sh                              # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
-B=/appuser/query-executor/bin
+B=/appuser/Distributed Query Executor/bin
 sudo -u appuser $B/start.sh      # 전체 기동(executor 들 + coordinator)
 sudo -u appuser $B/status.sh     # 상태(프로세스 + health)
 sudo -u appuser $B/stop.sh       # 전체 중지
 ```
 
-런처 스크립트(`/appuser/query-executor/bin/`)는 **전체**를 한꺼번에 다루는 것과 **역할별**로
+런처 스크립트(`/appuser/Distributed Query Executor/bin/`)는 **전체**를 한꺼번에 다루는 것과 **역할별**로
 나눠 다루는 것으로 구성됩니다. 한 번에 전부 켜고 끄려면 전체 스크립트를, coordinator 만 또는
 특정 executor 만 손보려면 역할별 스크립트를 쓰면 됩니다. 각 스크립트의 쓰임은 아래 표와
 같습니다.
@@ -671,7 +671,7 @@ sudo -u appuser $B/stop-executor.sh  8086   # executor 8086만 중지
 ```
 
 설치 스크립트가 무엇을 해 주는지도 알아 두면 좋습니다. `install.sh` 는 `appuser` 계정과
-`/appuser/query-executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, Kerberos·TLS
+`/appuser/Distributed Query Executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, Kerberos·TLS
 용 자리표시 파일(`config/krb5.conf`·`impala-ca.pem`·`impala.keytab`)을 생성합니다. Impala
 티켓은 `bin/kinit-renew.sh`(keytab) 로 발급하며 cron 으로 주기 갱신합니다(`KRB5_CONFIG`/
 `KRB5CCNAME` 은 `bin/env.sh` 가 `/appuser` 아래 경로로 export 해 줍니다).
