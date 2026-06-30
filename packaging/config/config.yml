@@ -33,7 +33,7 @@ coordinator:
   host: ${coordinator.host:0.0.0.0}                       # 바인드 주소
   port: ${coordinator.port:8088}                          # 수신 포트
   executor_mode: ${coordinator.executor_mode:remote}      # remote(HTTP 디스패치) | local(in-process 직접 실행)
-  id: ${coordinator.id:}                                  # 멀티 coordinator 식별자(미지정 시 host:port)
+  id: ${coordinator.id:}                                  # 멀티 coordinator 식별자(미지정 시 coordinator-<랜덤숫자>)
   executors: ${coordinator.executors:}                    # executor 베이스 URL 목록(쉼표 구분)
   # 동시 실행 슬롯 + 대기 큐(admission control)
   max_concurrent_jobs: ${coordinator.max_concurrent_jobs:16}   # 동시에 RUNNING 가능한 job 수(실행 슬롯)

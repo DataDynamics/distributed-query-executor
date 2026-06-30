@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 import os
-import socket
+import random
 import uuid
 from pathlib import Path
 
@@ -182,14 +182,14 @@ class Settings:
             os.getenv("COORDINATOR_EXECUTOR_MODE")
             or _get("coordinator", "executor_mode", "remote")
         ).lower()
-        # 멀티 coordinator 식별자(로그/공유 store 소유 표기). 미지정 시 host:port 기반.
-        # 우선순위: 환경변수 COORDINATOR_ID > 설정 파일 값 > "호스트명:포트" 자동 생성.
+        # 멀티 coordinator 식별자(로그/공유 store 소유 표기). 미지정 시 랜덤 생성.
+        # 우선순위: 환경변수 COORDINATOR_ID > 설정 파일 값 > "coordinator-<랜덤숫자>" 자동 생성.
         # 여러 coordinator 가 같은 공유 store 를 쓸 때 어느 인스턴스가 소유/처리 중인지
         # 구분하기 위한 값이라 충돌 없이 유일해야 한다. (or 연쇄로 빈 문자열도 폴백됨)
         self.coordinator_id: str = (
             os.getenv("COORDINATOR_ID")
             or _get("coordinator", "id", "")
-            or f"{socket.gethostname()}:{self.coordinator_port}"
+            or f"coordinator-{random.randint(100000, 999999)}"
         )
 
         # ───────── 공유 상태 저장소(멀티 coordinator) ─────────
