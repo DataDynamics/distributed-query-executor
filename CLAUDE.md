@@ -85,6 +85,12 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - **대시보드는 빌드 도구 없는 인라인 HTML 문자열**(`coordinator/dashboard.py`,
   `executor/dashboard.py` 의 `DASHBOARD_HTML`). 이 문자열 내부 HTML/CSS/JS 를 수정할 때 따옴표/
   중괄호를 깨뜨리지 않도록 주의하고, 수정 후 `import` 로 무결성을 확인한다.
+- **에어갭(외부 차단) 전제 → 웹 에셋은 내장**. 런타임에 외부 CDN/폰트로 나가면 안 된다.
+  Swagger UI(`/docs`)·ReDoc(`/redoc`)·대시보드 폰트(Roboto Condensed)는 모두
+  `core/static/` 에 vendoring 하고 `core/webassets.py`(`mount_static`/`register_offline_docs`)
+  가 `/assets` 로 서빙한다. 두 앱은 `FastAPI(docs_url=None, redoc_url=None)` 로 기본
+  CDN docs 를 끄고 이 헬퍼로 재등록한다. 대시보드 HTML 에 `fonts.googleapis.com` 등
+  외부 `<link>` 를 다시 넣지 말 것(회귀 방지: `tests/test_offline_assets.py`).
 - **인메모리 상태 → 단일 워커**. coordinator·executor 모두 `workers=1`. 처리량 확장은
   executor 인스턴스 수로 한다.
 - 비동기 디스패처에서 블로킹 DB 호출(impyla/psycopg)은 `run_in_executor`/`to_thread` 로 감싸

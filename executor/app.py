@@ -31,6 +31,7 @@ from core.config import settings
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.timeutil import format_at_fields, now_dt, now_iso
+from core.webassets import mount_static, register_offline_docs
 from .backend import Backend, build_backend
 from .dashboard import DASHBOARD_HTML, masked_config
 from .history import TaskHistoryRepository, _executor_id
@@ -120,11 +121,18 @@ def create_app(
             "적재한다. 자신의 task 상태와 시스템 메트릭을 노출한다.\n\n"
             "- Swagger UI: `/docs`, ReDoc: `/redoc`, OpenAPI 스키마: `/openapi.json`"
         ),
+        # 에어갭: 기본 docs 라우트는 외부 CDN 을 참조하므로 끄고, 아래에서
+        # register_offline_docs 로 내장 에셋 기반 /docs·/redoc 를 다시 등록한다.
+        docs_url=None,
+        redoc_url=None,
         openapi_tags=[
             {"name": "Tasks", "description": "sub-query 태스크 접수·상태·결과"},
             {"name": "Monitoring", "description": "헬스 체크, 시스템 메트릭"},
         ],
     )
+    # 에어갭: 내장 정적 에셋(/assets)과 오프라인 docs(/docs·/redoc)를 등록한다.
+    mount_static(app)
+    register_offline_docs(app)
     app.state.backend = backend
     app.state.tasks = tasks
     app.state.task_history = history

@@ -35,3 +35,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["core", "coordinator", "executor"]
+
+# 에어갭 내장 웹 에셋(swagger-ui·redoc·폰트). wheel 로 빌드할 때도 포함되도록
+# 명시한다(배포는 보통 rsync 로 소스 트리를 그대로 복사하지만 안전장치).
+[tool.setuptools.package-data]
+core = ["static/*", "static/fonts/*"]

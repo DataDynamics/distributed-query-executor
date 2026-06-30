@@ -35,6 +35,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.timeutil import format_at_fields, now_dt
+from core.webassets import mount_static, register_offline_docs
 from .dashboard import DASHBOARD_HTML, masked_config
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
@@ -207,12 +208,19 @@ def create_app(
             "- 검증/분할/디스패치/상태추적, executor 헬스 모니터링\n"
             "- Swagger UI: `/docs`, ReDoc: `/redoc`, OpenAPI 스키마: `/openapi.json`"
         ),
+        # 에어갭: 기본 docs 라우트는 외부 CDN 을 참조하므로 끄고, 아래에서
+        # register_offline_docs 로 내장 에셋 기반 /docs·/redoc 를 다시 등록한다.
+        docs_url=None,
+        redoc_url=None,
         openapi_tags=[
             {"name": "Jobs", "description": "쿼리 작업 생성·조회·결과·태스크 상세"},
             {"name": "Monitoring", "description": "헬스 체크, 시스템 메트릭, executor 상태"},
         ],
         lifespan=lifespan,
     )
+    # 에어갭: 내장 정적 에셋(/assets)과 오프라인 docs(/docs·/redoc)를 등록한다.
+    mount_static(app)
+    register_offline_docs(app)
     # 핸들러들이 클로저로 직접 참조하지만, 미들웨어/디버깅/테스트에서 꺼내 쓸 수
     # 있도록 핵심 의존성을 app.state 에도 보관해 둔다.
     app.state.store = store
