@@ -32,6 +32,9 @@ from typing import Optional
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+import httpx
+
+from core.dbprobe import clamp_limit, run_postgres_select
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.timeutil import format_at_fields, now_dt
@@ -46,6 +49,7 @@ from .job_store import JobStore, build_job_store, reconcile_interrupted_jobs
 from .models import (
     CreateJobRequest,
     CreateJobResponse,
+    DatasourceQueryRequest,
     Job,
     JobStatus,
     Task,
@@ -137,13 +141,17 @@ def create_app(
     reservations = None
     if selection_enabled and getattr(settings, "executor_reservation", False) \
             and settings.history_db_dsn:
-        reservations = ReservationRepository(settings.history_db_dsn, settings.coordinator_id)
+        reservations = ReservationRepository(
+            settings.history_db_dsn, settings.coordinator_id, table=settings.reservation_table
+        )
         load_view = ReservingLoadView(load_view, reservations, settings.reservation_ttl_s)
     # 죽은 coordinator 소유 job 정합(Phase 3-C): 공유 postgres store + heartbeat 일 때만.
     heartbeat = None
     if getattr(settings, "store_backend", "memory") == "postgres" and settings.history_db_dsn \
             and getattr(settings, "orphan_reconcile_interval_s", 0) > 0:
-        heartbeat = CoordinatorHeartbeat(settings.history_db_dsn, settings.coordinator_id)
+        heartbeat = CoordinatorHeartbeat(
+            settings.history_db_dsn, settings.coordinator_id, table=settings.coordinator_status_table
+        )
     # 이 coordinator 가 기동 후 executor 별로 배정한 누적 task 수(배정 분포 관측용, Phase 2).
     # 멀티 coordinator 에선 인스턴스별 카운트다(전역 분포는 각 인스턴스 합산).
     assign_counts: dict = {}
@@ -755,6 +763,82 @@ def create_app(
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
         return format_at_fields(history_reader.read(limit=limit, offset=offset))
+
+    @app.get("/datasources", tags=["Monitoring"], summary="테스트 가능한 데이터소스 목록")
+    def list_datasources():
+        """coordinator 가 SELECT 테스트할 수 있는 데이터소스를 반환한다.
+
+        history/greenplum 은 coordinator 가 직접(psycopg) 테스트하고, impala 는 드라이버가
+        없어 ``executor_url`` 을 지정해 executor 로 프록시해야 한다.
+        """
+        return {
+            "local": [
+                {"name": "history", "configured": bool(settings.history_db_dsn)},
+                {"name": "greenplum", "configured": bool(settings.greenplum_dsn)},
+            ],
+            "via_executor": ["impala", "greenplum", "history"],
+            "executors": list(settings.executors),
+        }
+
+    @app.post(
+        "/datasources/{name}/query",
+        tags=["Monitoring"],
+        summary="데이터소스에 임의 SELECT 실행(연결 확인 + 결과 미리보기)",
+    )
+    async def query_datasource(name: str, req: DatasourceQueryRequest):
+        """``name`` 데이터소스에 임의 SQL 을 실행해 상위 N행을 반환한다.
+
+        ``executor_url`` 이 있으면 그 executor 의 동일 엔드포인트로 프록시한다(impala 등
+        coordinator 에 드라이버가 없는 데이터소스용). 없으면 coordinator 가 직접 접속
+        가능한 history/greenplum 만 로컬 실행한다.
+        """
+        limit = clamp_limit(req.limit)
+
+        # 1) executor 프록시: impala 처럼 coordinator 가 직접 못 붙는 데이터소스를 executor 경유.
+        if req.executor_url:
+            target = req.executor_url.rstrip("/") + f"/datasources/{name}/query"
+            timeout = httpx.Timeout(settings.task_timeout_s, connect=settings.task_connect_timeout_s)
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(target, json={"sql": req.sql, "limit": limit})
+            except httpx.HTTPError as e:
+                raise HTTPException(status_code=502, detail=f"executor 프록시 실패({req.executor_url}): {e}")
+            if resp.status_code >= 400:
+                # executor 가 돌려준 에러 본문(detail)을 그대로 전달한다.
+                try:
+                    payload = resp.json()
+                    detail = payload.get("detail") if isinstance(payload, dict) else None
+                except Exception:
+                    detail = None
+                if detail is None:
+                    detail = resp.text
+                raise HTTPException(status_code=resp.status_code, detail=detail)
+            body = resp.json()
+            body["proxied_to"] = req.executor_url
+            return body
+
+        # 2) 로컬 실행: coordinator 가 직접 접속 가능한 데이터소스만.
+        try:
+            if name == "greenplum":
+                if not settings.greenplum_dsn:
+                    raise HTTPException(status_code=400, detail="greenplum.dsn 미설정")
+                result = await asyncio.to_thread(run_postgres_select, settings.greenplum_dsn, req.sql, limit=limit)
+            elif name == "history":
+                if not settings.history_db_dsn:
+                    raise HTTPException(status_code=400, detail="history.db_dsn(또는 monitor.db_dsn) 미설정")
+                result = await asyncio.to_thread(run_postgres_select, settings.history_db_dsn, req.sql, limit=limit)
+            elif name == "impala":
+                raise HTTPException(
+                    status_code=400,
+                    detail="impala 는 coordinator 에서 직접 테스트할 수 없습니다 — executor_url 을 지정하세요",
+                )
+            else:
+                raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {name}")
+        except HTTPException:
+            raise
+        except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
+            raise HTTPException(status_code=502, detail=f"{name} 쿼리 실패: {e}")
+        return {"datasource": name, "limit": limit, **result.to_dict()}
 
     # 대시보드는 설정으로 끌 수 있다(예: 외부 노출 환경에서 비활성화).
     # 활성화된 경우에만 루트 HTML 및 설정/정보 API 라우트를 등록한다.

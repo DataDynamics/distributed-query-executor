@@ -2,7 +2,7 @@
 
 이 모듈은 분산 쿼리 실행기(coordinator·executor)가 공유하는 모든 설정값을
 한곳에 모아 ``Settings`` 객체로 노출한다. 설정은 설정 디렉터리
-(기본 /appuser/query-executor/config, 환경변수 QUERY_EXECUTOR_CONFIG_DIR 로 변경 가능)의
+(기본 /data1/query-executor/config, 환경변수 QUERY_EXECUTOR_CONFIG_DIR 로 변경 가능)의
 두 파일에서 로드된다:
 
 1. config.properties - Java 스타일 key=value 변수 정의. config.yml 안의
@@ -36,7 +36,7 @@ from core.config_loader import load_config
 
 # 설정 디렉터리는 환경변수로 우선 결정하고, 없으면 운영 기본 경로를 쓴다.
 # 모듈 로드 시점에 한 번 확정되며, init_settings() 로 재로딩해도 디렉터리는 유지된다.
-_CONFIG_DIR = Path(os.environ.get("QUERY_EXECUTOR_CONFIG_DIR", "/appuser/query-executor/config"))
+_CONFIG_DIR = Path(os.environ.get("QUERY_EXECUTOR_CONFIG_DIR", "/data1/query-executor/config"))
 _yaml_path: Path = _CONFIG_DIR / "config.yml"
 _properties_path: Path = _CONFIG_DIR / "config.properties"
 # _raw 는 properties 치환까지 끝난 "원시 설정 dict"(YAML 계층 구조 그대로).
@@ -61,6 +61,19 @@ def _get_nested(section: str, subsection: str, key: str, default=None):
     (예: logging.rolling.type, executor.impala.host 처럼 계층이 깊은 값)
     """
     return _raw.get(section, {}).get(subsection, {}).get(key, default)
+
+
+def _qualify_table(schema: str, table: str) -> str:
+    """테이블명에 메타 저장소 스키마를 붙인다(``public.jobs`` 형태).
+
+    앱 런타임 SQL(각 repo 의 ``self.table`` f-string)과 DDL 파일이 같은 스키마를 쓰도록,
+    설정에서 읽은 기본 테이블명을 ``schema`` 로 한정한다. 단:
+    - ``schema`` 가 비어 있으면 한정하지 않는다(검색 경로/기본 스키마에 위임).
+    - 설정값이 이미 ``myschema.t`` 처럼 ``.`` 로 한정돼 있으면 중복 한정하지 않는다.
+    """
+    if not schema or "." in table:
+        return table
+    return f"{schema}.{table}"
 
 
 def _to_bool(value) -> bool:
@@ -187,7 +200,14 @@ class Settings:
         self.store_backend: str = (
             os.getenv("STORE_BACKEND") or _get("store", "backend", "memory")
         ).lower()
-        self.store_table: str = _get("store", "table", "jobs")
+        # 메타 저장소 스키마(jobs/*_history/executor_*/coordinator_status 공통). 기본 public.
+        # 아래 모든 메타 테이블명을 이 스키마로 한정하므로, 앱 런타임 SQL 과 DDL(postgresql.sql/
+        # warehousepg.sql)이 같은 스키마를 가리킨다. search_path 가 비표준이어도 안전하다.
+        self.db_schema: str = _get("db", "schema", "public")
+        self.store_table: str = _qualify_table(self.db_schema, _get("store", "table", "jobs"))
+        # coordinator HA 보조 테이블(설정 키는 없고 스키마만 한정). app.py 에서 repo 에 주입.
+        self.coordinator_status_table: str = _qualify_table(self.db_schema, "coordinator_status")
+        self.reservation_table: str = _qualify_table(self.db_schema, "executor_reservation")
         # store.backend=file 일 때 스냅샷 파일 경로(비우면 로그 디렉터리 옆 jobs-state.json).
         self.store_path: str = _get("store", "path", "")
         # 모니터링 대시보드(읽기 전용 웹 UI) 노출 여부.
@@ -268,16 +288,16 @@ class Settings:
         )
         # 기록 대상 PostgreSQL DSN(비어 있으면 DB 기록 비활성, 폴링만 수행)
         self.monitor_db_dsn: str = _get("monitor", "db_dsn", "")
-        self.monitor_table: str = _get("monitor", "table", "executor_health_metrics")
+        self.monitor_table: str = _qualify_table(self.db_schema, _get("monitor", "table", "executor_health_metrics"))
         # /metrics 에서 사용량을 측정할 디스크 경로
         self.monitor_disk_path: str = _get("monitor", "disk_path", "/")
 
         # ───────── Coordinator - Job 실행 이력(PostgreSQL) ─────────
         # 비어 있으면 monitor.db_dsn 을 재사용. 둘 다 없으면 이력 기록 비활성.
         self.history_db_dsn: str = _get("history", "db_dsn", "") or self.monitor_db_dsn
-        self.history_table: str = _get("history", "table", "job_history")
+        self.history_table: str = _qualify_table(self.db_schema, _get("history", "table", "job_history"))
         # executor 가 기록하는 task 단위 이력 테이블(history_db_dsn 공유)
-        self.task_history_table: str = _get("history", "task_table", "task_history")
+        self.task_history_table: str = _qualify_table(self.db_schema, _get("history", "task_table", "task_history"))
 
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")
@@ -294,7 +314,7 @@ class Settings:
             or _get("executor", "advertise_url", "")
         )
         # executor self-report 시 자기 상태를 기록할 테이블과 기록 주기(초).
-        self.executor_status_table: str = _get("executor", "status_table", "executor_status")
+        self.executor_status_table: str = _qualify_table(self.db_schema, _get("executor", "status_table", "executor_status"))
         self.executor_status_interval_s: float = float(
             _get("executor", "status_interval_s", 10)
         )

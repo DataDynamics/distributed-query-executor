@@ -646,12 +646,12 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 
 다음으로 두 종류의 **대시보드**가 있습니다. **coordinator 대시보드(`/`)**는 빌드 도구가 필요 없는 인라인 HTML로 되어 있고 3초마다 화면을 갱신하며, 처리중인 Query, 실행 이력, Executor, 환경설정, 그외 정보 탭으로 나뉩니다. **executor self-view 대시보드(`/`)**는 remote 모드에서 각 executor 프로세스가 자기 task와 메트릭, 이력을 스스로 보여 주는 화면입니다(처리중 Task, 실행 이력, 환경설정, 그외 정보). local 모드에서는 executor 프로세스가 따로 없으므로 자연히 coordinator 화면만 보이게 됩니다.
 
-끝으로 **로깅**입니다. 로그는 `/appuser/query-executor/logs`에 하루 단위로 롤링(날짜가 바뀌면 파일을 새로 만드는 방식)되어 쌓입니다. 모든 로그에는 어떤 작업·일감에 관한 것인지 알 수 있도록 `[job_id][task_id]` 컨텍스트가 자동으로 붙습니다. 특히 WARNING 이상의 경고는 별도의 `*-warn.log` 파일로 분리해(로거 이름까지 담은 강화 포맷으로) 운영 중에 문제만 빠르게 추적할 수 있게 했습니다.
+끝으로 **로깅**입니다. 로그는 `/data1/query-executor/logs`에 하루 단위로 롤링(날짜가 바뀌면 파일을 새로 만드는 방식)되어 쌓입니다. 모든 로그에는 어떤 작업·일감에 관한 것인지 알 수 있도록 `[job_id][task_id]` 컨텍스트가 자동으로 붙습니다. 특히 WARNING 이상의 경고는 별도의 `*-warn.log` 파일로 분리해(로거 이름까지 담은 강화 포맷으로) 운영 중에 문제만 빠르게 추적할 수 있게 했습니다.
 
 - **시스템 메트릭**: 두 서비스 모두 `/metrics`(CPU/메모리/디스크 + 동시 처리). coordinator `HealthMonitor`가 executor를 폴링해 `/executors`·`/cluster`로 제공하고 `monitor.db_dsn` 설정 시 `executor_health_metrics`에 기록.
 - **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query / 실행 이력 / Executor / 환경설정 / 그외 정보.
 - **executor self-view 대시보드(`/`)**: remote 모드의 각 executor 프로세스가 자기 task/메트릭/이력을 노출(처리중 Task / 실행 이력 / 환경설정 / 그외 정보). local 모드에선 executor 프로세스가 없으므로 자연히 coordinator 화면만 보인다.
-- **로깅**: `/appuser/query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트 자동 주입. **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적.
+- **로깅**: `/data1/query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트 자동 주입. **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적.
 
 ---
 
@@ -696,7 +696,7 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 | 동시성 | asyncio + Semaphore(admission/디스패치) + thread pool(동기 DB 호출 래핑) |
 | 상태/이력 저장 | 인메모리 dict / **파일 영속(JSON 스냅샷, 단일 노드 크래시 복구)** / **PostgreSQL**(`jobs`/`job_history`/`task_history`/`executor_status`/`executor_health_metrics`) |
 | 대시보드 | 인라인 HTML + vanilla JS(빌드 도구 없음) |
-| 배포 | /appuser 트리 + 런처 스크립트로 coordinator 1 + executor N(`deploy/README.md`) |
+| 배포 | /data1 트리 + 런처 스크립트로 coordinator 1 + executor N(`deploy/README.md`) |
 
 요약하면, coordinator와 executor 모두 Python 3.9 이상에서 FastAPI로 만들어졌고, SQL 분석에는 sqlglot, Impala 읽기에는 impyla, Greenplum 쓰기에는 psycopg, 둘 사이의 통신에는 httpx를 씁니다. 동시성은 asyncio와 세마포어, 그리고 동기 DB 호출을 감싸는 스레드 풀로 다루며, 상태와 이력은 앞서 본 대로 인메모리·파일·PostgreSQL 중에서 고를 수 있습니다. 대시보드는 빌드 도구 없는 인라인 HTML과 순수 자바스크립트로 되어 있고, 배포는 런처 스크립트로 coordinator 한 대와 executor 여러 대를 띄우는 방식입니다(자세한 내용은 [deploy/README.md](deploy/README.md)).
 

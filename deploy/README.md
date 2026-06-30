@@ -1,11 +1,11 @@
-# 배포 가이드 (RHEL 9.2, /appuser 단일 트리)
+# 배포 가이드 (RHEL 9.2, /data1 단일 트리)
 
 이 문서는 분산 쿼리 실행기를 RHEL 9.2 서버에 처음 올려 보는 분을 위한 안내입니다. 배포란 결국 우리가 만든 프로그램을 서버에 옮겨 두고, 항상 같은 자리에서 같은 방식으로 실행되게 만드는 일입니다. 이 실행기는 명령을 받아 일을 나눠 주는 한 대의 coordinator(조율자)와, 실제로 데이터를 읽고 적재하는 여러 대의 executor(실행기)로 이루어져 있습니다. 그래서 우리는 coordinator 1개와 executor 다수를 함께 운영하도록 구성합니다.
 
 설정을 다루는 방식도 미리 알아 두면 좋습니다. 이 프로젝트는 **`config.properties` + `config.yml`** 방식을 씁니다. 즉, 값은 `config.properties` 에 적어 두고, 그 값을 `config.yml` 이라는 본문 설정 파일이 가져다 채워 넣는 구조입니다.
 
 > **보안 정책**: `/etc`·`/opt`·`/var` 에 파일을 추가하지 않는다. 애플리케이션·설정·로그·
-> 런타임을 모두 **`/appuser/query-executor`** 아래에 두고, systemd 시스템 유닛 대신
+> 런타임을 모두 **`/data1/query-executor`** 아래에 두고, systemd 시스템 유닛 대신
 > **런처 스크립트(`bin/`)** 로 구동한다.
 
 이 정책이 왜 중요한지 한마디 덧붙이면, 시스템 공용 디렉터리를 건드리지 않기 때문에 권한 다툼이나 다른 소프트웨어와의 충돌 없이, 모든 것이 한 폴더 안에 깔끔하게 모여 있게 됩니다. 그래서 백업도 이동도 제거도 쉬워집니다.
@@ -26,7 +26,7 @@
 | `../packaging/config/config.yml` | `${변수:기본값}` 치환을 쓰는 메인 YAML 설정 |
 | `install.sh` | 사용자/디렉터리/venv/설정/런처를 한 번에 구성하는 설치 스크립트 |
 
-표만으로는 전체 그림이 잘 안 그려질 수 있으니, 배포가 끝난 뒤 서버에서 무엇이 어디에 놓이는지를 산문으로 풀어 두겠습니다. 모든 것은 앞서 말한 한 그루의 디렉터리 나무 아래에 정리됩니다. 애플리케이션의 본체와 파이썬 가상환경(`.venv`, 이 프로젝트만을 위한 격리된 파이썬 실행 환경)은 **앱 홈**인 `/appuser/query-executor` 에 자리 잡습니다. 설정 파일들은 그 아래 **설정 디렉터리**인 `/appuser/query-executor/config` 에 모이며, 필요하면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 위치를 바꿀 수 있습니다. 프로그램이 남기는 기록인 **로그**는 `/appuser/query-executor/logs` 에 쌓이는데, 하루 단위로 파일이 갈라지는 일 단위 롤링 방식이라 `파일명_YYYYMMDD.log` 형태의 이름을 갖습니다. 마지막으로 프로세스 ID 파일이나 Kerberos 자격증명 캐시처럼 실행 중에만 의미가 있는 것들은 **런타임** 폴더인 `/appuser/query-executor/run` 에 둡니다.
+표만으로는 전체 그림이 잘 안 그려질 수 있으니, 배포가 끝난 뒤 서버에서 무엇이 어디에 놓이는지를 산문으로 풀어 두겠습니다. 모든 것은 앞서 말한 한 그루의 디렉터리 나무 아래에 정리됩니다. 애플리케이션의 본체와 파이썬 가상환경(`.venv`, 이 프로젝트만을 위한 격리된 파이썬 실행 환경)은 **앱 홈**인 `/data1/query-executor` 에 자리 잡습니다. 설정 파일들은 그 아래 **설정 디렉터리**인 `/data1/query-executor/config` 에 모이며, 필요하면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 위치를 바꿀 수 있습니다. 프로그램이 남기는 기록인 **로그**는 `/data1/query-executor/logs` 에 쌓이는데, 하루 단위로 파일이 갈라지는 일 단위 롤링 방식이라 `파일명_YYYYMMDD.log` 형태의 이름을 갖습니다. 마지막으로 프로세스 ID 파일이나 Kerberos 자격증명 캐시처럼 실행 중에만 의미가 있는 것들은 **런타임** 폴더인 `/data1/query-executor/run` 에 둡니다.
 
 executor 는 한 대만 띄우는 것이 아니라 **포트별로 여러 인스턴스**를 띄울 수 있습니다. 예를 들어 `EXECUTOR_PORTS="8087 8086"` 처럼 지정하면 두 개의 executor 가 각각의 포트에서 동시에 일합니다. 그런데 여기서 한 가지 중요한 원칙이 있습니다. coordinator 와 executor 는 둘 다 자신의 상태를 **프로세스 메모리**에 담아 두기 때문에, 인스턴스 하나는 반드시 **단일 워커**로 실행해야 합니다. 그래서 더 많은 일을 처리하고 싶다면 한 프로세스 안의 워커 수를 늘리는 것이 아니라, **executor 인스턴스 수**를 늘리는 방식으로 확장합니다.
 
@@ -43,21 +43,21 @@ sudo ./deploy/install.sh
 #   에어갭 예: sudo WHEELHOUSE=/path/wheels INSTALL_EXECUTOR=1 ./deploy/install.sh
 
 # 2) 설정 확인/수정
-sudo vi /appuser/query-executor/config/config.properties   # executors, impala.*, greenplum.dsn 등
+sudo vi /data1/query-executor/config/config.properties   # executors, impala.*, greenplum.dsn 등
 
 # 3) 서비스 기동 (executor 2개 + coordinator)
-sudo -u appuser /appuser/query-executor/bin/start.sh
-sudo -u appuser /appuser/query-executor/bin/status.sh
+sudo -u gpadmin /data1/query-executor/bin/start.sh
+sudo -u gpadmin /data1/query-executor/bin/status.sh
 ```
 
 각 단계를 말로 풀면 이렇습니다. 0번은 최초 한 번만 하면 되는 준비로, RHEL 9.2 에 기본으로 들어 있는 Python 3.9 와 파일 복사에 쓰이는 rsync 를 설치합니다. 1번이 핵심인데, 저장소 루트에서 `install.sh` 를 실행하면 설치가 한 번에 이루어집니다. 만약 외부 인터넷이 막혀 있는 환경, 즉 **에어갭**(망 분리되어 외부 네트워크에 연결되지 않은 폐쇄망)이라면 미리 받아 둔 파이썬 휠 묶음의 경로를 `WHEELHOUSE` 로 알려 주고, executor 드라이버까지 함께 설치하려면 `INSTALL_EXECUTOR=1` 을 붙여 줍니다. 2번에서는 설치된 설정 파일을 열어 우리 환경에 맞게 고칩니다(executor 목록, Impala 접속 정보, Greenplum DSN 등). 마지막 3번에서 서비스를 띄우고 상태를 확인하면 설치가 마무리됩니다.
 
 그렇다면 `install.sh` 는 우리 대신 정확히 무엇을 해 주는 걸까요? 다음과 같은 일들을 차례로 처리합니다.
 
-- 서비스 계정 `appuser` 생성(홈 `/appuser`)
-- 앱을 `/appuser/query-executor` 로 복사(`.venv`/`.git`/`logs`/`config`/`run` 제외)
-- `/appuser/query-executor/.venv` 가상환경 + 의존성 설치(`WHEELHOUSE` 지정 시 오프라인)
-- `packaging/config/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/appuser/query-executor/logs` 로 설정
+- 서비스 계정 `gpadmin` 생성(홈 `/data1`)
+- 앱을 `/data1/query-executor` 로 복사(`.venv`/`.git`/`logs`/`config`/`run` 제외)
+- `/data1/query-executor/.venv` 가상환경 + 의존성 설치(`WHEELHOUSE` 지정 시 오프라인)
+- `packaging/config/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/data1/query-executor/logs` 로 설정
 - Kerberos+TLS 자리표시 파일 생성(`config/krb5.conf`·`impala-ca.pem`·`impala.keytab`)
 - 런처 스크립트를 `bin/` 으로 배치, 소유권/권한 설정
 
@@ -78,7 +78,7 @@ OS_ONLY=1     ./deploy/bin/check-prereqs.sh   # OS 패키지만
 WHEELS_ONLY=1 ./deploy/bin/check-prereqs.sh   # 휠만
 ```
 
-위 명령들이 무엇을 들여다보는지 이어서 설명하겠습니다. 먼저 **OS 패키지** 점검은 `rpm -q` 명령으로 빌드에 쓰이는 도구들과 Kerberos·SASL 관련 의존성이 깔려 있는지 확인합니다. 구체적으로는 `gcc gcc-c++ make python3-devel python3 python3-pip krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi` 가 대상입니다. 다음으로 **파이썬 휠** 점검은 `packaging/wheels/<그룹>/` 폴더에 들어 있는 `.whl`·`.tar.gz` 파일 이름에서 패키지 이름과 버전을 뽑아낸 뒤, 실제 `.venv` 에 설치된 목록과 하나하나 대조합니다. 그 결과는 일치하면 `[OK]`, 아직 설치되지 않았으면 `[MISSING]`, 버전이 어긋나면 `[VER ?]`(이쪽은 실패가 아니라 경고일 뿐) 로 표시됩니다. 마지막으로 점검에 쓰이는 경로는 환경변수로 바꿀 수 있습니다. 검사할 파이썬은 `VENV_PY` 로, 휠 묶음의 루트는 `WHEELS_ROOT` 로 지정하며, 실제 배포 대상 서버에서는 보통 `VENV_PY=/appuser/query-executor/.venv/bin/python` 처럼 그 서버의 가상환경 파이썬을 가리키도록 둡니다.
+위 명령들이 무엇을 들여다보는지 이어서 설명하겠습니다. 먼저 **OS 패키지** 점검은 `rpm -q` 명령으로 빌드에 쓰이는 도구들과 Kerberos·SASL 관련 의존성이 깔려 있는지 확인합니다. 구체적으로는 `gcc gcc-c++ make python3-devel python3 python3-pip krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi` 가 대상입니다. 다음으로 **파이썬 휠** 점검은 `packaging/wheels/<그룹>/` 폴더에 들어 있는 `.whl`·`.tar.gz` 파일 이름에서 패키지 이름과 버전을 뽑아낸 뒤, 실제 `.venv` 에 설치된 목록과 하나하나 대조합니다. 그 결과는 일치하면 `[OK]`, 아직 설치되지 않았으면 `[MISSING]`, 버전이 어긋나면 `[VER ?]`(이쪽은 실패가 아니라 경고일 뿐) 로 표시됩니다. 마지막으로 점검에 쓰이는 경로는 환경변수로 바꿀 수 있습니다. 검사할 파이썬은 `VENV_PY` 로, 휠 묶음의 루트는 `WHEELS_ROOT` 로 지정하며, 실제 배포 대상 서버에서는 보통 `VENV_PY=/data1/query-executor/.venv/bin/python` 처럼 그 서버의 가상환경 파이썬을 가리키도록 둡니다.
 
 ## 설정 항목 (config.properties)
 
@@ -108,7 +108,7 @@ impala.database=default
 impala.auth_mechanism=LDAP        # LDAP(기본) | GSSAPI(Kerberos) | PLAIN | NOSASL
 impala.kerberos_service_name=impala   # GSSAPI 일 때만 사용
 impala.use_ssl=true
-impala.ca_cert=/appuser/query-executor/config/impala-ca.pem
+impala.ca_cert=/data1/query-executor/config/impala-ca.pem
 impala.user=                      # LDAP 바인드 사용자
 impala.password=                  # LDAP 비밀번호
 
@@ -138,7 +138,7 @@ copy.batch_size=10000
 > 아래의 keytab·kinit 등 Kerberos 절차는 **필요 없습니다**. 아래 내용은
 > `impala.auth_mechanism=GSSAPI`(Kerberos)로 바꿔 쓸 때만 해당합니다.
 
-이 부분은 보안 접속이 걸려 있는 Impala 에 연결할 때만 필요합니다. 먼저 큰 그림을 잡고 갑시다. 데이터의 원천인 Impala 에 실제로 접속하는 쪽은 executor 이고, coordinator 는 여기에 관여하지 않습니다. 그리고 보안 방식이 양쪽이 다릅니다. **Impala 에만 TLS(통신 암호화) 와 Kerberos(GSSAPI, 티켓 기반 인증)** 가 적용되고, 데이터를 적재하는 **Greenplum 은 TLS·Kerberos 없이 일반 DSN** 으로 접속합니다. 또한 보안 정책에 따라 시스템 공용 파일인 `/etc/krb5.conf` 를 건드리지 않고, 대신 우리 앱 트리 안의 `/appuser/query-executor/config/krb5.conf` 를 `KRB5_CONFIG` 환경변수로 가리켜 사용합니다.
+이 부분은 보안 접속이 걸려 있는 Impala 에 연결할 때만 필요합니다. 먼저 큰 그림을 잡고 갑시다. 데이터의 원천인 Impala 에 실제로 접속하는 쪽은 executor 이고, coordinator 는 여기에 관여하지 않습니다. 그리고 보안 방식이 양쪽이 다릅니다. **Impala 에만 TLS(통신 암호화) 와 Kerberos(GSSAPI, 티켓 기반 인증)** 가 적용되고, 데이터를 적재하는 **Greenplum 은 TLS·Kerberos 없이 일반 DSN** 으로 접속합니다. 또한 보안 정책에 따라 시스템 공용 파일인 `/etc/krb5.conf` 를 건드리지 않고, 대신 우리 앱 트리 안의 `/data1/query-executor/config/krb5.conf` 를 `KRB5_CONFIG` 환경변수로 가리켜 사용합니다.
 
 설정은 아래 순서대로 진행합니다. 각 단계의 주석에 무엇을 하는지 적어 두었습니다.
 
@@ -148,26 +148,26 @@ sudo dnf install -y krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssa
     gcc gcc-c++ make python3-devel
 
 # 1) executor 드라이버 + SASL/GSSAPI 설치(설치 시 INSTALL_EXECUTOR=1 했으면 생략)
-sudo /appuser/query-executor/.venv/bin/pip install -r /appuser/query-executor/requirements-executor.txt
+sudo /data1/query-executor/.venv/bin/pip install -r /data1/query-executor/requirements-executor.txt
 
 # 2) TLS CA 인증서 배치(임의 파일명 가능 — config.properties 의 impala.ca_cert 와 일치시킬 것)
-sudo cp impala-ca.pem /appuser/query-executor/config/impala-ca.pem
+sudo cp impala-ca.pem /data1/query-executor/config/impala-ca.pem
 
-# 3) Kerberos keytab 배치 (appuser 만 읽도록 600)
-sudo cp impala.keytab /appuser/query-executor/config/impala.keytab
+# 3) Kerberos keytab 배치 (gpadmin 만 읽도록 600)
+sudo cp impala.keytab /data1/query-executor/config/impala.keytab
 
 # 4) krb5.conf 의 realm/KDC, kinit-renew.sh 의 principal/keytab 확인
-sudo vi /appuser/query-executor/config/krb5.conf
-sudo chown -R appuser:appuser /appuser/query-executor/config
-sudo chmod 600 /appuser/query-executor/config/impala.keytab
+sudo vi /data1/query-executor/config/krb5.conf
+sudo chown -R gpadmin:gpadmin /data1/query-executor/config
+sudo chmod 600 /data1/query-executor/config/impala.keytab
 
 # 5) 티켓 발급(즉시 1회). 주기 갱신 cron(@reboot + 4시간)은 install.sh 가 자동 등록한다
 #    (keytab 이 비어 있으면 kinit-renew.sh 가 스스로 건너뛰므로, 실제 keytab 배치 후 동작).
-sudo -u appuser KRB5_PRINCIPAL=svc-query@EXAMPLE.LOCAL /appuser/query-executor/bin/kinit-renew.sh
-#    cron 확인: sudo crontab -u appuser -l
+sudo -u gpadmin KRB5_PRINCIPAL=svc-query@EXAMPLE.LOCAL /data1/query-executor/bin/kinit-renew.sh
+#    cron 확인: sudo crontab -u gpadmin -l
 ```
 
-이 과정이 내부적으로 어떻게 맞물려 돌아가는지 알아 두면, 나중에 문제가 생겼을 때 어디를 봐야 할지 짐작하기 쉬워집니다. 먼저 `bin/kinit-renew.sh` 가 keytab(비밀번호 없이 자동 인증에 쓰는 키 파일)을 이용해 `/appuser/query-executor/run/krb5cc` 라는 공유 자격증명 캐시에 인증 티켓을 발급합니다. 이때 필요한 `KRB5_CONFIG` 와 `KRB5CCNAME` 환경변수는 `bin/env.sh` 가 대신 export 해 줍니다. 그렇게 발급된 티켓을 executor 프로세스도 똑같은 `KRB5CCNAME=FILE:/appuser/query-executor/run/krb5cc` 를 물려받아 함께 씁니다. 다만 티켓에는 유효기간이 있어 그대로 두면 만료되므로, `kinit-renew.sh` 를 appuser 의 cron 에 등록해 주기적으로 다시 발급하게 해 둡니다. 지금 티켓이 살아 있는지는 `sudo -u appuser KRB5CCNAME=FILE:/appuser/query-executor/run/krb5cc klist` 로 확인할 수 있습니다.
+이 과정이 내부적으로 어떻게 맞물려 돌아가는지 알아 두면, 나중에 문제가 생겼을 때 어디를 봐야 할지 짐작하기 쉬워집니다. 먼저 `bin/kinit-renew.sh` 가 keytab(비밀번호 없이 자동 인증에 쓰는 키 파일)을 이용해 `/data1/query-executor/run/krb5cc` 라는 공유 자격증명 캐시에 인증 티켓을 발급합니다. 이때 필요한 `KRB5_CONFIG` 와 `KRB5CCNAME` 환경변수는 `bin/env.sh` 가 대신 export 해 줍니다. 그렇게 발급된 티켓을 executor 프로세스도 똑같은 `KRB5CCNAME=FILE:/data1/query-executor/run/krb5cc` 를 물려받아 함께 씁니다. 다만 티켓에는 유효기간이 있어 그대로 두면 만료되므로, `kinit-renew.sh` 를 gpadmin 의 cron 에 등록해 주기적으로 다시 발급하게 해 둡니다. 지금 티켓이 살아 있는지는 `sudo -u gpadmin KRB5CCNAME=FILE:/data1/query-executor/run/krb5cc klist` 로 확인할 수 있습니다.
 
 ## 멀티 coordinator & 실행 이력 (PostgreSQL)
 
@@ -199,7 +199,7 @@ executor.status_interval_s=10
 
 ```bash
 PG="postgresql://user:pass@pg-host:5432/queryexec"
-psql "$PG" -f /appuser/query-executor/packaging/config/postgresql.sql
+psql "$PG" -f /data1/query-executor/packaging/config/postgresql.sql
 ```
 
 반대로, 이런 고급 구성이 필요 없는 분도 많을 것입니다. 그래서 단순한 경우의 권장값을 함께 적어 둡니다.
@@ -216,7 +216,7 @@ psql "$PG" -f /appuser/query-executor/packaging/config/postgresql.sql
 > 고빈도 단일행 UPSERT 라 MPP 와 맞지 않으므로, 성능이 중요하면 이 메타 저장소는 PostgreSQL 에
 > 두고 WarehousePG 는 데이터 적재 대상(`greenplum.dsn`)으로만 쓰는 편이 낫다.
 > ```bash
-> psql "$PG" -f /appuser/query-executor/packaging/config/warehousepg.sql
+> psql "$PG" -f /data1/query-executor/packaging/config/warehousepg.sql
 > ```
 
 ## 운영 명령
@@ -224,30 +224,30 @@ psql "$PG" -f /appuser/query-executor/packaging/config/postgresql.sql
 서비스를 일단 띄우고 나면, 그 다음부터는 날마다 상태를 살피고 로그를 들여다보고 가끔 재시작하는 운영 작업이 이어집니다. 자주 쓰는 명령들을 한곳에 모아 두었으니, 필요할 때 골라 쓰면 됩니다. 맨 앞의 `B=...` 줄은 긴 경로를 매번 치지 않으려고 `$B` 라는 짧은 이름에 담아 두는 것입니다.
 
 ```bash
-B=/appuser/query-executor/bin
+B=/data1/query-executor/bin
 # 상태(프로세스 + health) — 전체 / 역할별
-sudo -u appuser $B/status.sh
-sudo -u appuser $B/status-coordinator.sh
-sudo -u appuser $B/status-executor.sh
+sudo -u gpadmin $B/status.sh
+sudo -u gpadmin $B/status-coordinator.sh
+sudo -u gpadmin $B/status-executor.sh
 
 # 파일 로그(일 단위 롤링)
-tail -f /appuser/query-executor/logs/query-coordinator-server.log
-tail -f /appuser/query-executor/logs/query-executor-server-8087.log
+tail -f /data1/query-executor/logs/query-coordinator-server.log
+tail -f /data1/query-executor/logs/query-executor-server-8087.log
 
 # WARNING 이상만 모은 전용 로그(문제 추적용, *-warn.log)
-tail -f /appuser/query-executor/logs/query-coordinator-server-warn.log
-tail -f /appuser/query-executor/logs/query-executor-server-8087-warn.log
+tail -f /data1/query-executor/logs/query-coordinator-server-warn.log
+tail -f /data1/query-executor/logs/query-executor-server-8087-warn.log
 
 # 재시작(전체) / 중지
-sudo -u appuser $B/stop.sh && sudo -u appuser $B/start.sh
+sudo -u gpadmin $B/stop.sh && sudo -u gpadmin $B/start.sh
 
 # 역할별 제어(coordinator / executor 따로)
-sudo -u appuser $B/stop-coordinator.sh        # coordinator 만 중지
-sudo -u appuser $B/start-executor.sh 8086     # executor 8086 만 기동/재기동
-sudo -u appuser $B/stop-executor.sh  8086     # executor 8086 만 중지
+sudo -u gpadmin $B/stop-coordinator.sh        # coordinator 만 중지
+sudo -u gpadmin $B/start-executor.sh 8086     # executor 8086 만 기동/재기동
+sudo -u gpadmin $B/stop-executor.sh  8086     # executor 8086 만 중지
 
 # executor 인스턴스 추가(포트 8003): config.properties 의 executors 에 추가 후
-sudo -u appuser $B/start-executor.sh 8003     # 또는 전체: EXECUTOR_PORTS="8087 8086 8003" $B/start.sh
+sudo -u gpadmin $B/start-executor.sh 8003     # 또는 전체: EXECUTOR_PORTS="8087 8086 8003" $B/start.sh
 ```
 
 몇 가지는 처음 보면 의아할 수 있어 덧붙입니다. 로그가 두 종류라는 점에 주목하세요. 일반 로그 외에 `*-warn.log` 라는 별도 파일이 있는데, 여기에는 WARNING 이상의 메시지만 따로 모입니다. 그래서 평소에는 일반 로그를 보다가, 문제를 추적할 때는 경고 로그만 빠르게 훑으면 원인에 더 빨리 다가갈 수 있습니다. 또 한 가지, executor 를 새로 한 대 늘리고 싶다면 무작정 스크립트만 실행하면 안 되고, 먼저 `config.properties` 의 executor 목록에 그 포트를 추가한 뒤에 해당 executor 를 기동해야 coordinator 가 새 인스턴스를 인식합니다.
@@ -312,7 +312,7 @@ monitor.disk_path=/
 여기서도 앞서 말한 원칙이 똑같이 적용됩니다. 메트릭을 담는 `executor_health_metrics` 테이블 역시 앱이 알아서 만들어 주지 않으므로, 통합 스키마인 `packaging/config/postgresql.sql` 을 **먼저 적용**해야 합니다. 만약 `monitor.db_dsn` 이 다른 데이터베이스를 가리킨다면 그 데이터베이스에도 동일하게 스키마를 적용해 주어야 합니다.
 
 ```bash
-psql "postgresql://user:pass@pg-host:5432/monitoring" -f /appuser/query-executor/packaging/config/postgresql.sql
+psql "postgresql://user:pass@pg-host:5432/monitoring" -f /data1/query-executor/packaging/config/postgresql.sql
 
 # 최근 기록 조회
 psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_percent

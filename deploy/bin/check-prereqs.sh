@@ -22,7 +22,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# deploy/bin/ → 루트는 두 단계 위(개발: 저장소 루트, 배포: /appuser/query-executor).
+# deploy/bin/ → 루트는 두 단계 위(개발: 저장소 루트, 배포: /data1/query-executor).
 ROOT="$(cd "$DIR/../.." && pwd)"
 VENV_PY="${VENV_PY:-$ROOT/.venv/bin/python}"
 WHEELS_ROOT="${WHEELS_ROOT:-$ROOT/packaging/wheels}"

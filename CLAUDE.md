@@ -62,12 +62,18 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `executor.max_concurrent_tasks` 세마포어.
 - `core/logging.py` — 일 단위 롤링 + `[job_id][task_id]` 컨텍스트 주입 + **WARNING 전용
   로그(`*-warn.log`) 분리**.
+- `core/dbprobe.py` — **데이터소스 SELECT 미리보기/연결 테스트 공용 로직**. 임의 SQL 을
+  Impala/Greenplum/history DB 에 실행해 상위 N행을 JSON 안전 형태로 반환(`fetchmany` 로
+  잘라 truncated 표시, PostgreSQL 은 커밋 없이 닫아 implicit rollback). 두 앱의
+  `GET /datasources` + `POST /datasources/{name}/query` 엔드포인트가 이를 호출한다.
+  executor 는 세 소스를 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala 는
+  요청 본문 `executor_url` 로 executor 에 프록시한다(coordinator 에는 impyla 가 없음).
 
 ## 설정
 
 `config.properties`(Java 스타일 key=value)의 값으로 `config.yml` 의 `${변수:기본값}`
 자리표시자를 치환해 로드한다(`core/config_loader.py`). 설정 디렉터리는
-`/appuser/query-executor/config`(환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경, 개발 시 `packaging/config`).
+`/data1/query-executor/config`(환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경, 개발 시 `packaging/config`).
 
 - `core/config.py` 의 `_get("section","key")` 는 **YAML 의 섹션 구조**를 따라 읽는다. 새 설정을
   추가할 때 placeholder 이름(`${coordinator.x}`)이 아니라 **실제 YAML 중첩 위치**가 섹션과
@@ -96,6 +102,11 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - 비동기 디스패처에서 블로킹 DB 호출(impyla/psycopg)은 `run_in_executor`/`to_thread` 로 감싸
   이벤트 루프를 막지 않는다.
 - 새 기능은 `tests/` 에 테스트를 추가한다. 실제 DB 없이 `MockBackend`/`FakeRunner` 로 검증.
+- **메타 테이블 스키마 한정**: 모든 메타 테이블(jobs/job_history/task_history/executor_status/
+  executor_health_metrics/coordinator_status/executor_reservation)명은 `db.schema`(기본 `public`)로
+  한정된다. `core/config.py` 의 `_qualify_table()` 이 설정에서 읽은 테이블명을 `public.<t>` 로 만들고
+  (이미 `.` 한정된 값은 그대로), 각 repo 의 `self.table` f-string 이 이를 그대로 쓴다 — 앱 런타임
+  SQL 과 두 DDL 파일이 같은 스키마를 가리킨다. 테이블/스키마를 바꾸면 **설정·DDL 두 파일을 함께** 고친다.
 - **메타 저장소 스키마는 두 벌**: `packaging/config/postgresql.sql`(PostgreSQL) 과
   `warehousepg.sql`(WarehousePG/Greenplum 7=PG12). 테이블/컬럼을 바꾸면 **두 파일을 함께**
   고친다. WarehousePG 판은 테이블마다 `DISTRIBUTED BY` 가 붙고(PK 는 분산키를 포함해야 함),

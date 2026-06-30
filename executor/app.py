@@ -28,14 +28,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from core.config import settings
+from core.dbprobe import clamp_limit, run_impala_select, run_postgres_select
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.webassets import mount_static, register_offline_docs
-from .backend import Backend, build_backend
+from .backend import Backend, build_backend, build_impala_dsn
 from .dashboard import DASHBOARD_HTML, masked_config
 from .history import TaskHistoryRepository, _executor_id
-from .models import CreateTaskRequest, Task, TaskStatus
+from .models import CreateTaskRequest, DatasourceQueryRequest, Task, TaskStatus
 from .status import ExecutorStatusReporter
 
 logger = logging.getLogger(__name__)
@@ -391,6 +392,55 @@ def create_app(
         active, queued, mx = _task_counts()
         m["tasks"] = {"active": active, "queued": queued, "max": mx}
         return m
+
+    @app.get("/datasources", tags=["Monitoring"], summary="테스트 가능한 데이터소스 목록/구성여부")
+    def list_datasources():
+        """이 executor 가 직접 SELECT 테스트할 수 있는 데이터소스와 구성 여부를 반환한다."""
+        return {
+            "datasources": [
+                {"name": "impala", "configured": bool(settings.impala_host)},
+                {"name": "greenplum", "configured": bool(settings.greenplum_dsn)},
+                {"name": "history", "configured": bool(settings.history_db_dsn)},
+            ]
+        }
+
+    @app.post(
+        "/datasources/{name}/query",
+        tags=["Monitoring"],
+        summary="데이터소스에 임의 SELECT 실행(연결 확인 + 결과 미리보기)",
+    )
+    async def query_datasource(name: str, req: DatasourceQueryRequest):
+        """``name`` 데이터소스(impala/greenplum/history)에 임의 SQL 을 실행해 상위 N행을 반환.
+
+        블로킹 드라이버 호출이므로 ``asyncio.to_thread`` 로 스레드에서 돌려 이벤트 루프를
+        막지 않는다. 미구성 데이터소스는 400, 알 수 없는 이름은 404, 연결/인증/SQL 오류는
+        원인 메시지와 함께 502 로 응답한다.
+        """
+        limit = clamp_limit(req.limit)
+        try:
+            if name == "impala":
+                dsn = build_impala_dsn(settings)
+                if not dsn:
+                    raise HTTPException(status_code=400, detail="impala.host 미설정 — Impala 접속 정보가 없습니다")
+                result = await asyncio.to_thread(
+                    run_impala_select, dsn, req.sql,
+                    query_options=settings.impala_query_options, limit=limit,
+                )
+            elif name == "greenplum":
+                if not settings.greenplum_dsn:
+                    raise HTTPException(status_code=400, detail="greenplum.dsn 미설정")
+                result = await asyncio.to_thread(run_postgres_select, settings.greenplum_dsn, req.sql, limit=limit)
+            elif name == "history":
+                if not settings.history_db_dsn:
+                    raise HTTPException(status_code=400, detail="history.db_dsn(또는 monitor.db_dsn) 미설정")
+                result = await asyncio.to_thread(run_postgres_select, settings.history_db_dsn, req.sql, limit=limit)
+            else:
+                raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {name}")
+        except HTTPException:
+            raise
+        except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
+            raise HTTPException(status_code=502, detail=f"{name} 쿼리 실패: {e}")
+        return {"datasource": name, "limit": limit, **result.to_dict()}
 
     # 대시보드 활성화 시에만 UI 및 보조 조회 엔드포인트(/, /history, /config, /info)를 등록.
     # started_at/start_monotonic 은 /info 의 uptime 계산 기준점(monotonic 은 시계 변경에 둔감).

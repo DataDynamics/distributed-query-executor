@@ -388,6 +388,34 @@ def _batches(cursor, size: int) -> Iterator[list]:
         yield rows
 
 
+def build_impala_dsn(settings) -> dict:
+    """settings 로부터 ``impala.dbapi.connect(**dsn)`` 에 넘길 접속 dict 를 만든다.
+
+    impala.host 가 비어 있으면 빈 dict 를 반환한다(Impala 미사용 — statement 모드 전용).
+    인증: GSSAPI 면 ``kerberos_service_name``, 그 외(LDAP/PLAIN)면 ``user``/``password`` 를
+    채운다. ``build_backend`` 와 ``/datasources`` 연결 테스트 엔드포인트가 공유한다.
+    """
+    if not settings.impala_host:
+        return {}
+    dsn: dict = {
+        "host": settings.impala_host,
+        "port": settings.impala_port,
+        "database": settings.impala_database,
+        "auth_mechanism": settings.impala_auth_mechanism,
+        "use_ssl": settings.impala_use_ssl,
+    }
+    if settings.impala_ca_cert:
+        dsn["ca_cert"] = settings.impala_ca_cert
+    if settings.impala_auth_mechanism.upper() == "GSSAPI":
+        dsn["kerberos_service_name"] = settings.impala_kerberos_service_name
+    else:
+        if settings.impala_user:
+            dsn["user"] = settings.impala_user
+        if settings.impala_password:
+            dsn["password"] = settings.impala_password
+    return dsn
+
+
 def build_backend(settings) -> Backend:
     """설정에 따라 실제 백엔드 또는 MockBackend를 선택한다(coordinator·executor 공용).
 
@@ -395,24 +423,7 @@ def build_backend(settings) -> Backend:
     아무 것도 없으면 MockBackend(실제 I/O 없음 — 로컬 검증용).
     """
     if settings.greenplum_dsn:
-        impala_dsn: dict = {}
-        if settings.impala_host:
-            impala_dsn = {
-                "host": settings.impala_host,
-                "port": settings.impala_port,
-                "database": settings.impala_database,
-                "auth_mechanism": settings.impala_auth_mechanism,
-                "use_ssl": settings.impala_use_ssl,
-            }
-            if settings.impala_ca_cert:
-                impala_dsn["ca_cert"] = settings.impala_ca_cert
-            if settings.impala_auth_mechanism.upper() == "GSSAPI":
-                impala_dsn["kerberos_service_name"] = settings.impala_kerberos_service_name
-            else:
-                if settings.impala_user:
-                    impala_dsn["user"] = settings.impala_user
-                if settings.impala_password:
-                    impala_dsn["password"] = settings.impala_password
+        impala_dsn: dict = build_impala_dsn(settings)
         logger.info(
             "ImpalaToGreenplumBackend 사용 (impala=%s, batch=%s)",
             settings.impala_host or "(미설정 → statement 모드만)",

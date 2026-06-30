@@ -6,6 +6,10 @@
 --
 -- 적용:  psql "postgresql://user:pass@pg-host:5432/queryexec" -f postgresql.sql
 --
+-- 스키마: 모든 메타 테이블은 public 스키마로 명시 한정한다. 앱 설정 db.schema(기본 public)와
+--   반드시 일치해야 한다 — 앱 런타임 SQL 도 db.schema 로 테이블명을 한정하기 때문이다.
+--   다른 스키마를 쓰려면 db.schema 를 바꾸고 이 파일의 public. 도 함께 치환할 것.
+--
 -- 시각 컬럼은 모두 KST(Asia/Seoul) 기준의 타임존 없는 TIMESTAMP 다(이 시스템은 한국 단일
 -- 리전이라 UTC/타임존이 필요 없다). 기본값은 now() AT TIME ZONE 'Asia/Seoul' 로 KST 벽시계를
 -- 넣는다. 앱이 직접 넣는 시각도 KST naive 문자열이다.
@@ -26,7 +30,7 @@
 -- 1) jobs — 멀티 coordinator 공유 Job 저장소 (store.backend=postgres)
 --    어느 coordinator로 요청이 가도 조회/취소가 가능하도록 Job 스냅샷을 영속한다.
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS jobs (
+CREATE TABLE IF NOT EXISTS public.jobs (
     job_id           TEXT PRIMARY KEY,
     coordinator_id   TEXT,
     status           TEXT,
@@ -35,15 +39,15 @@ CREATE TABLE IF NOT EXISTS jobs (
     data             JSONB NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
-CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON jobs (updated_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON public.jobs (status);
+CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON public.jobs (updated_at);
 
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 2) job_history — coordinator 의 job 단위 실행 이력 (history.db_dsn)
 --    run() 안에서 상태 전이(시작=RUNNING, 종료=DONE/PARTIAL/FAILED)마다 append.
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS job_history (
+CREATE TABLE IF NOT EXISTS public.job_history (
     id                 BIGSERIAL PRIMARY KEY,
     recorded_at        TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul'),
     job_id             TEXT NOT NULL,
@@ -62,8 +66,8 @@ CREATE TABLE IF NOT EXISTS job_history (
     original_sql       TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_job_history_job_id ON job_history (job_id);
-CREATE INDEX IF NOT EXISTS idx_job_history_recorded_at ON job_history (recorded_at);
+CREATE INDEX IF NOT EXISTS idx_job_history_job_id ON public.job_history (job_id);
+CREATE INDEX IF NOT EXISTS idx_job_history_recorded_at ON public.job_history (recorded_at);
 
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -71,7 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_job_history_recorded_at ON job_history (recorded_
 --    상태 전이(QUEUED/READING/WRITING/DONE/FAILED)마다 append. 하나의 job_id 아래
 --    N개 task 가 executor_id 별로 기록된다.
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS task_history (
+CREATE TABLE IF NOT EXISTS public.task_history (
     id           BIGSERIAL PRIMARY KEY,
     recorded_at  TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul'),
     job_id       TEXT NOT NULL,
@@ -90,16 +94,16 @@ CREATE TABLE IF NOT EXISTS task_history (
 );
 
 -- 구버전 테이블 보강(앱도 자동 수행). 이미 있으면 무시된다.
-ALTER TABLE task_history ADD COLUMN IF NOT EXISTS started_at  TIMESTAMP;
-ALTER TABLE task_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP;
-ALTER TABLE task_history ADD COLUMN IF NOT EXISTS sub_query   TEXT;
-ALTER TABLE task_history ADD COLUMN IF NOT EXISTS exec_mode   TEXT;
-ALTER TABLE task_history ADD COLUMN IF NOT EXISTS staging_ddl TEXT;
-ALTER TABLE task_history ADD COLUMN IF NOT EXISTS insert_sql  TEXT;
+ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS started_at  TIMESTAMP;
+ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP;
+ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS sub_query   TEXT;
+ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS exec_mode   TEXT;
+ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS staging_ddl TEXT;
+ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS insert_sql  TEXT;
 
-CREATE INDEX IF NOT EXISTS idx_task_history_job_id ON task_history (job_id);
-CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON task_history (task_id);
-CREATE INDEX IF NOT EXISTS idx_task_history_recorded_at ON task_history (recorded_at);
+CREATE INDEX IF NOT EXISTS idx_task_history_job_id ON public.task_history (job_id);
+CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON public.task_history (task_id);
+CREATE INDEX IF NOT EXISTS idx_task_history_recorded_at ON public.task_history (recorded_at);
 
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -107,7 +111,7 @@ CREATE INDEX IF NOT EXISTS idx_task_history_recorded_at ON task_history (recorde
 --    각 executor 가 자기 CPU/메모리/디스크/heartbeat 를 주기적으로 upsert 하고,
 --    coordinator 는 이 테이블을 읽어 /executors·/cluster 를 구성한다(중복 폴링 제거).
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS executor_status (
+CREATE TABLE IF NOT EXISTS public.executor_status (
     executor_id     TEXT PRIMARY KEY,
     executor_url    TEXT,          -- executor.advertise_url (HA에서 coordinator가 URL 키로 부하 뷰 구성)
     cpu_percent     DOUBLE PRECISION,
@@ -122,7 +126,7 @@ CREATE TABLE IF NOT EXISTS executor_status (
     updated_at           TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul')
 );
 -- 구버전 보강(executor_url 추가). 이미 있으면 무시된다.
-ALTER TABLE executor_status ADD COLUMN IF NOT EXISTS executor_url TEXT;
+ALTER TABLE public.executor_status ADD COLUMN IF NOT EXISTS executor_url TEXT;
 
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -131,7 +135,7 @@ ALTER TABLE executor_status ADD COLUMN IF NOT EXISTS executor_url TEXT;
 --     공유하게 한다. coordinator.executor_reservation=true 일 때만 사용. updated_at 으로
 --     TTL(누수 방지: 죽은 coordinator 의 예약은 만료시켜 무시).
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS executor_reservation (
+CREATE TABLE IF NOT EXISTS public.executor_reservation (
     executor_url   TEXT NOT NULL,
     coordinator_id TEXT NOT NULL,
     n              INTEGER NOT NULL DEFAULT 0,
@@ -139,7 +143,7 @@ CREATE TABLE IF NOT EXISTS executor_reservation (
     PRIMARY KEY (executor_url, coordinator_id)
 );
 CREATE INDEX IF NOT EXISTS idx_executor_reservation_updated_at
-    ON executor_reservation (updated_at);
+    ON public.executor_reservation (updated_at);
 
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -147,7 +151,7 @@ CREATE INDEX IF NOT EXISTS idx_executor_reservation_updated_at
 --     비종료 job 을 다른 coordinator 가 정합(FAILED)할 수 있도록, 각 coordinator 가 자기
 --     생존을 주기적으로 upsert 한다. updated_at 신선도로 생존 판정.
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS coordinator_status (
+CREATE TABLE IF NOT EXISTS public.coordinator_status (
     coordinator_id TEXT PRIMARY KEY,
     updated_at     TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul')
 );
@@ -157,7 +161,7 @@ CREATE TABLE IF NOT EXISTS coordinator_status (
 -- 5) executor_health_metrics — coordinator 가 기록하는 헬스/메트릭 (monitor.db_dsn)
 --    monitor.record_interval_s 마다 executor 의 CPU·메모리·디스크 사용량을 append.
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS executor_health_metrics (
+CREATE TABLE IF NOT EXISTS public.executor_health_metrics (
     id              BIGSERIAL PRIMARY KEY,
     recorded_at     TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'Asia/Seoul'),
     executor_url    TEXT NOT NULL,
@@ -171,6 +175,6 @@ CREATE TABLE IF NOT EXISTS executor_health_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_executor_health_metrics_recorded_at
-    ON executor_health_metrics (recorded_at);
+    ON public.executor_health_metrics (recorded_at);
 CREATE INDEX IF NOT EXISTS idx_executor_health_metrics_url
-    ON executor_health_metrics (executor_url);
+    ON public.executor_health_metrics (executor_url);

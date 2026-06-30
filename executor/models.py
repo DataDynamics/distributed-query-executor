@@ -131,3 +131,14 @@ class CreateTaskRequest(BaseModel):
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
     impala_query_options: Optional[dict] = None
+
+
+class DatasourceQueryRequest(BaseModel):
+    """``POST /datasources/{name}/query`` 요청 본문(임의 SELECT 미리보기/연결 테스트).
+
+    내부 점검용이므로 임의 SQL 을 허용한다. 반환 행수는 limit 으로 잘린다(상한은
+    서버측 ``MAX_PREVIEW_ROWS``). 기본 SQL 은 연결만 빠르게 확인하는 ``SELECT 1``.
+    """
+
+    sql: str = "SELECT 1"
+    limit: int = 100

@@ -431,3 +431,19 @@ class CreateJobResponse(BaseModel):
     """작업 생성 API의 응답 스키마. 생성된 Job 식별자를 돌려준다."""
 
     job_id: str
+
+
+class DatasourceQueryRequest(BaseModel):
+    """``POST /datasources/{name}/query`` 요청(임의 SELECT 미리보기 / 연결 테스트).
+
+    내부 점검용이므로 임의 SQL 을 허용한다. ``executor_url`` 을 주면 해당 executor 로
+    프록시한다 — coordinator 가 직접 드라이버를 갖지 않는 데이터소스(특히 Impala)를
+    executor 를 통해 테스트하기 위함이다. 생략하면 coordinator 가 직접 접속 가능한
+    데이터소스(history/greenplum)만 로컬 실행한다.
+    """
+
+    sql: str = Field(default="SELECT 1", description="실행할 SQL(임의 SELECT 허용)")
+    limit: int = Field(default=100, ge=1, le=10_000, description="반환 최대 행수")
+    executor_url: Optional[str] = Field(
+        default=None, description="지정 시 해당 executor 의 동일 엔드포인트로 프록시"
+    )

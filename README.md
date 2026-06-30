@@ -150,7 +150,7 @@ executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task �
   __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 packaging/config/    # config.properties + config.yml 기본값 + 스키마(*.sql)
 packaging/wheels/    # 에어갭 오프라인 설치용 cp39 휠 번들(coordinator/executor/dev, 유형별)
-deploy/              # install.sh + 런처 bin/(start/stop/status[-coordinator|-executor]·kinit-renew·env) — /appuser 트리 배포
+deploy/              # install.sh + 런처 bin/(start/stop/status[-coordinator|-executor]·kinit-renew·env) — /data1 트리 배포
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
 
@@ -164,7 +164,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 
 설정과 관련해 처음에 알아 두면 좋은 점들을 하나씩 풀어 보겠습니다.
 
-- 설정 파일들은 기본적으로 `/appuser/Distributed Query Executor/config` 디렉터리에서 읽습니다. 다른
+- 설정 파일들은 기본적으로 `/data1/Distributed Query Executor/config` 디렉터리에서 읽습니다. 다른
   위치를 쓰고 싶으면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 바꿀 수 있습니다.
 - 내 컴퓨터에서 개발하며 돌려볼 때는 `QUERY_EXECUTOR_CONFIG_DIR=packaging/config` 로
   지정해 저장소에 들어 있는 기본값을 그대로 쓰면 편합니다.
@@ -219,7 +219,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
   `impala.auth_mechanism=GSSAPI` + `impala.kerberos_service_name` 으로 바꿀 수 있는데, 이때는
   인증 티켓을 OS 자격증명 캐시(KRB5CCNAME)에서 가져오므로 `bin/kinit-renew.sh`(keytab) 를
   cron 으로 주기 실행해 갱신합니다([deploy/README.md](deploy/README.md) 참고).
-- 로깅은 `/appuser/Distributed Query Executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
+- 로깅은 `/data1/Distributed Query Executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
   들어오면 **job_id 를 먼저 만들고**, 그 이후의 모든 로그 줄 앞에 `[job_id][task_id]` 가
   자동으로 붙습니다(coordinator·executor 공통). 예를 들면 다음과 같습니다.
   - coordinator(job 단위): `... [job_531ab6f734ca][-] - 쿼리 실행 요청 수신 ...`
@@ -635,23 +635,23 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 }'
 ```
 
-## 배포 (RHEL 9.2, /appuser 단일 트리)
+## 배포 (RHEL 9.2, /data1 단일 트리)
 
 실제 서버에 배포할 때 이 프로젝트는 조금 독특한 규칙을 따릅니다. 보안 정책상 `/etc`·`/opt`·
-`/var` 같은 시스템 디렉터리를 건드리지 않고, 모든 것을 `/appuser/Distributed Query Executor` 한 트리
+`/var` 같은 시스템 디렉터리를 건드리지 않고, 모든 것을 `/data1/Distributed Query Executor` 한 트리
 아래에 모아 둡니다. 또한 systemd 시스템 유닛 대신 런처 스크립트로 서비스를 켜고 끕니다.
 설치 스크립트와 자세한 절차는 [`deploy/README.md`](deploy/README.md) 를 참고하세요. 가장
 기본적인 흐름은 아래와 같습니다.
 
 ```bash
 sudo ./deploy/install.sh                              # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
-B=/appuser/Distributed Query Executor/bin
-sudo -u appuser $B/start.sh      # 전체 기동(executor 들 + coordinator)
-sudo -u appuser $B/status.sh     # 상태(프로세스 + health)
-sudo -u appuser $B/stop.sh       # 전체 중지
+B=/data1/Distributed Query Executor/bin
+sudo -u gpadmin $B/start.sh      # 전체 기동(executor 들 + coordinator)
+sudo -u gpadmin $B/status.sh     # 상태(프로세스 + health)
+sudo -u gpadmin $B/stop.sh       # 전체 중지
 ```
 
-런처 스크립트(`/appuser/Distributed Query Executor/bin/`)는 **전체**를 한꺼번에 다루는 것과 **역할별**로
+런처 스크립트(`/data1/Distributed Query Executor/bin/`)는 **전체**를 한꺼번에 다루는 것과 **역할별**로
 나눠 다루는 것으로 구성됩니다. 한 번에 전부 켜고 끄려면 전체 스크립트를, coordinator 만 또는
 특정 executor 만 손보려면 역할별 스크립트를 쓰면 됩니다. 각 스크립트의 쓰임은 아래 표와
 같습니다.
@@ -669,23 +669,23 @@ sudo -u appuser $B/stop.sh       # 전체 중지
 
 ```bash
 # 역할별 예시
-sudo -u appuser $B/start-coordinator.sh     # coordinator만 기동
-sudo -u appuser $B/start-executor.sh 8086   # executor 8086만 기동/재기동
-sudo -u appuser $B/stop-executor.sh  8086   # executor 8086만 중지
+sudo -u gpadmin $B/start-coordinator.sh     # coordinator만 기동
+sudo -u gpadmin $B/start-executor.sh 8086   # executor 8086만 기동/재기동
+sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 ```
 
-설치 스크립트가 무엇을 해 주는지도 알아 두면 좋습니다. `install.sh` 는 `appuser` 계정과
-`/appuser/Distributed Query Executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, Kerberos·TLS
+설치 스크립트가 무엇을 해 주는지도 알아 두면 좋습니다. `install.sh` 는 `gpadmin` 계정과
+`/data1/Distributed Query Executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, Kerberos·TLS
 용 자리표시 파일(`config/krb5.conf`·`impala-ca.pem`·`impala.keytab`)을 생성합니다. Impala
 티켓은 `bin/kinit-renew.sh`(keytab) 로 발급하며 cron 으로 주기 갱신합니다(`KRB5_CONFIG`/
-`KRB5CCNAME` 은 `bin/env.sh` 가 `/appuser` 아래 경로로 export 해 줍니다).
+`KRB5CCNAME` 은 `bin/env.sh` 가 `/data1` 아래 경로로 export 해 줍니다).
 
 ### 에어갭(인터넷 차단) 설치
 
 배포 대상 서버가 보안상 인터넷(PyPI)에 접근할 수 없는 경우를 에어갭 환경이라고 부릅니다.
 이때는 두 가지 방법 중 하나로 의존성을 설치합니다.
 
-1. **사내 PyPI 프록시(Nexus 등)** 가 있으면 `pip.conf`(`/appuser/.config/pip/pip.conf`)에
+1. **사내 PyPI 프록시(Nexus 등)** 가 있으면 `pip.conf`(`/data1/.config/pip/pip.conf`)에
    `index-url`/`trusted-host` 를 지정하면 평소처럼 설치된다.
 2. **완전 오프라인**이면 저장소의 `packaging/wheels/` 휠 번들(cp39, 유형별 디렉터리)로
    `--no-index` 설치한다. `WHEELHOUSE` 는 콜론으로 여러 디렉터리를 지정한다:

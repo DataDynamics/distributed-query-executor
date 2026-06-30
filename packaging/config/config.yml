@@ -13,7 +13,7 @@ query:
 # 일 단위 롤링(파일명_YYYYMMDD.log). INFO 메인 로그와 WARNING 전용 로그를 분리한다.
 logging:
   level: ${log.level:INFO}                        # 메인 로그 레벨(이 레벨 이상을 메인 파일에 기록)
-  dir: ${log.dir:/appuser/query-executor/logs}    # 로그 디렉터리
+  dir: ${log.dir:/data1/query-executor/logs}    # 로그 디렉터리
   rolling:
     type: daily                                   # 롤링 방식(일 단위)
     backup_count: ${log.backup_count:30}          # 보관 일수(초과분 자동 삭제)
@@ -56,6 +56,13 @@ coordinator:
   heartbeat_interval_s: ${coordinator.heartbeat_interval_s:10}      # coordinator 자기 생존 heartbeat 주기
   coordinator_stale_s: ${coordinator.coordinator_stale_s:30}        # coordinator 생존 판정 임계(초)
   orphan_reconcile_interval_s: ${coordinator.orphan_reconcile_interval_s:30}  # 죽은 coordinator 소유 job 정합 주기(0=비활성)
+
+db:
+  # 메타 저장소 스키마. jobs/job_history/task_history/executor_status/executor_health_metrics/
+  # coordinator_status/executor_reservation 등 모든 메타 테이블을 이 스키마로 한정한다(기본 public).
+  # 앱 런타임 SQL 과 DDL(postgresql.sql/warehousepg.sql)이 같은 스키마를 가리키게 한다.
+  # 개별 테이블명을 'myschema.t' 처럼 이미 한정하면 그 값은 그대로 둔다(중복 한정 안 함).
+  schema: ${db.schema:public}
 
 store:
   backend: ${store.backend:memory}                # 작업 저장소: memory(휘발) | file(단일 노드 파일 영속/크래시 복구) | postgres(멀티 coordinator 공유)
