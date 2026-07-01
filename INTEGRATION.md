@@ -45,7 +45,7 @@ Coordinator 의 **기본 주소(base URL)** 는 `http://<coordinator-host>:8088`
 
 ```mermaid
 sequenceDiagram
-    participant App as C# 앱
+    participant App as CSharp 앱
     participant Co as Coordinator
     App->>Co: POST /jobs (쿼리 + 분할 설정)
     Co-->>App: 202 { job_id }
