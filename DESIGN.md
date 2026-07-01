@@ -190,7 +190,7 @@ classDiagram
         +str partition_column
         +str target_table        // Greenplum 적재 대상
         +str write_mode          // append | overwrite_partitions
-        +str exec_mode           // copy | statement | stage_insert
+        +str exec_mode           // copy | statement | stage_insert | local_stage(§17)
         +int parallelism
         +str split_strategy      // contiguous | round_robin
         +str failure_policy      // fail_fast | best_effort
@@ -413,6 +413,7 @@ flowchart LR
 | `copy` (기본) | Impala에서 sub-query를 **읽어** Greenplum에 `COPY FROM STDIN` 배치 적재. **사전검증(preflight)**: COPY 전에 SELECT 컬럼이 대상 테이블에 있는지 확인(`copy.preflight`, 기본 on) | 소스(Impala)/타깃(Greenplum)이 다른 엔진. COPY는 대상 테이블 컬럼과 정확히 일치해야 하며, wrapper는 **행을 반환하는 SELECT** 여야 한다 |
 | `statement` | wrapper로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB에서 **그대로 실행** | 소스/타깃이 같은 DB(Greenplum). INSERT 컬럼 목록이 매핑을 담당 |
 | `stage_insert` | (선택적으로 `staging_ddl`로 staging 테이블 생성 →) Impala SELECT 결과를 Greenplum **staging에 COPY** → staging을 `FROM`으로 하는 **INSERT 실행** | SELECT은 Impala, INSERT은 Greenplum처럼 서로 다른 엔진을 INSERT로 연결 |
+| `local_stage` | 각 executor가 세그먼트 호스트 **로컬 디스크에 CSV 파일**로 export → GP가 `file://` 외부테이블로 **세그먼트별 로컬 파일을 병렬 read**해 staging 적재 → target INSERT. 2-phase(배리어). 자세히는 **§17** | executor를 **GP 세그먼트 호스트에 co-locate**한 대량 이관. `copy`의 단일 COPY 소켓 병목을 세그먼트 병렬 read로 대체 |
 
 표를 풀어 설명하면 이렇습니다. 기본값인 `copy`는 Impala에서 읽은 데이터를 Greenplum에 통째로 밀어 넣는 가장 빠른 방식으로, 소스와 타깃 엔진이 서로 다를 때 잘 맞습니다. 다만 COPY는 컬럼이 대상 테이블과 정확히 들어맞아야 하므로, COPY를 시작하기 전에 SELECT의 컬럼들이 대상 테이블에 실제로 있는지 미리 확인하는 **사전검증(preflight)**을 합니다(이 검증은 `copy.preflight` 설정으로 켜고 끌 수 있으며 기본은 켜짐입니다). `statement`는 `INSERT ... SELECT` 같은 문장을 대상 DB에서 그대로 실행하는 방식으로, 소스와 타깃이 같은 Greenplum일 때 적합합니다. `stage_insert`는 Impala에서 읽은 결과를 일단 Greenplum의 staging 테이블에 COPY로 넣어 둔 다음, 그 staging 테이블을 바탕으로 INSERT를 실행하는 방식으로, 서로 다른 엔진을 INSERT 문으로 이어 주고 싶을 때 씁니다. 이때 staging 테이블을 만드는 `staging_ddl`은 **선택**입니다. 주면 COPY 전에 그 DDL(보통 `CREATE TEMP TABLE`)로 테이블을 만들고, 생략하면 테이블 생성을 건너뛰고 이미 존재하는 `staging_table`을 그대로 씁니다(이 경우 영구 테이블을 여러 task가 공유하지 않도록 격리에 유의).
 
@@ -702,7 +703,179 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 
 ---
 
-## 17. 향후 확장
+## 17. 세그먼트 로컬 스테이징 파이프라인 (`local_stage`, `file://` 기반)
+
+지금까지 본 `copy`/`stage_insert`는 executor가 Impala에서 읽은 데이터를 **자기 클라이언트 소켓 하나로** Greenplum에 `COPY`로 밀어 넣습니다. 데이터가 아주 클 때는 이 단일 소켓이 GP 진입점에서 직렬화되어 병목이 됩니다(자세한 진단은 [PERFORMANCE.md](PERFORMANCE.md) 참고). executor를 N대로 늘려도 각자 단일 COPY라 GP 쪽 진입 지점에서 다시 줄을 서게 됩니다.
+
+이 절의 `local_stage` 모드는 그 병목을 **적재의 병렬성을 Greenplum 세그먼트로 옮겨** 해소합니다. 핵심 발상은 이렇습니다. executor를 **각 Greenplum 세그먼트 호스트 위에 함께 배치(co-locate)** 하고, 각 executor가 자기 몫의 Impala 결과를 **자기 호스트의 로컬 디스크에 CSV 파일**로 떨어뜨립니다. 그런 다음 Greenplum이 `file://` 외부테이블로 그 파일들을 읽는데, 이때 **각 세그먼트는 오직 자기 호스트의 로컬 파일만** 읽습니다. 즉 적재 시 네트워크를 타고 데이터가 오가는 셔플이 전혀 없고, 모든 세그먼트가 동시에 자기 로컬 디스크에서 읽어 들입니다. 이것이 "같은 디렉터리 경로, 노드마다 다른 파일"이라는 구조의 정체입니다.
+
+> 왜 PXF가 아니라 `file://`인가: PXF의 `file:*` 프로파일은 **모든 GP 호스트에 동일하게 마운트된 공유 파일시스템**(NFS 등)을 전제하고, 파일을 세그먼트에 임의 분배한다. 그래서 "호스트마다 로컬 디스크에 서로 다른 파일"이라는 우리 구조와는 맞지 않는다(A 세그먼트가 B 호스트에만 있는 파일을 배정받아 못 읽는 상황이 생긴다). 내장 **`file://` 프로토콜**은 URI마다 **그 호스트의 primary 세그먼트 하나**를 그 로컬 파일에 배정하므로 이 구조와 정확히 일치한다.
+
+### 17.1 토폴로지 — 세 계층의 분리
+
+이 모드는 앞 절들과 배치(deployment)가 다릅니다. 특히 **coordinator는 GP master가 아니며**, executor는 **반드시 세그먼트 호스트 위**에 있어야 합니다.
+
+| 계층 | 위치 | 역할 |
+|---|---|---|
+| **Coordinator** | GP master와 분리된 **독립 컨트롤 노드** | Impala SELECT 검증·분할 → export task 팬아웃 → 배리어 → **GP master에 클라이언트로 접속**해 `file://` 외부테이블 load SQL 실행 → cleanup 지시. 대량 데이터는 통과하지 않는다 |
+| **Executor** | **각 GP 세그먼트 호스트에 co-locate**(호스트당 여러 개 가능) | coordinator가 지정한 partition 슬라이스를 impyla로 읽어 **자기 호스트 로컬 디스크의 지정된 파일 경로**에 CSV write. cleanup 때 자기 로컬 파일 삭제 |
+| **GP Master** | 별개 노드 | coordinator가 던진 외부테이블 DDL/INSERT를 받아 세그먼트에 분배. 각 세그먼트는 `file://호스트/...`로 **자기 호스트 로컬 CSV**를 읽는다 |
+
+coordinator가 export 팬아웃과 GP load를 모두 지휘하지만, 실제 DB 분배는 GP master가 하고 coordinator는 그 master에 **클라이언트로 접속**할 뿐이라는 점이 중요합니다(coordinator는 이미 greenplum에 직접 접속하는 경로를 갖고 있습니다). 즉 "coordinator가 master 역할처럼 보이지만 master는 아니다"가 이 배치의 핵심입니다.
+
+```mermaid
+flowchart TB
+    Client([Client])
+    Impala[(Impala<br/>source)]
+    GPM[(Greenplum<br/>Master)]
+
+    subgraph Ctrl["Coordinator (독립 컨트롤 노드 · master 아님)"]
+        API["REST API + 분할 + 2-phase 오케스트레이션"]
+    end
+
+    subgraph Seg1["Segment Host h1"]
+        Ex1["Executor(들)"]
+        D1[["local dir<br/>{job}/f0.csv, f1.csv ..."]]
+        SG1["primary seg 0..S1"]
+    end
+    subgraph Seg2["Segment Host h2"]
+        Ex2["Executor(들)"]
+        D2[["local dir<br/>{job}/fk.csv ..."]]
+        SG2["primary seg 0..S2"]
+    end
+
+    Client -- "SELECT + partition_column + local_stage" --> API
+    API -- "① export task (sub-query + out_path)" --> Ex1 & Ex2
+    Ex1 & Ex2 -- "② impyla read" --> Impala
+    Ex1 --> D1
+    Ex2 --> D2
+    API -- "④ file:// 외부테이블 + INSERT (배리어 후 1회)" --> GPM
+    SG1 -- "⑤ 로컬 read" --> D1
+    SG2 -- "⑤ 로컬 read" --> D2
+    GPM --- SG1 & SG2
+```
+
+### 17.2 `file://` 규칙과 파일 레이아웃 계획
+
+이 파이프라인의 뼈대는 `file://` 프로토콜의 두 규칙이 결정합니다.
+
+1. 각 URI `file://<hostname>/<path>`는 **그 호스트의 primary 세그먼트 하나**가 그 파일 하나를 읽게 배정한다.
+2. **호스트당 파일 수는 그 호스트의 primary 세그먼트 수(S_h)를 넘을 수 없다.**
+
+그래서 coordinator는 다음과 같이 파일 배치를 계획합니다.
+
+1. **참여 호스트 목록** `H = {h1..hk}` 확정 — executor가 self-report한 GP hostname을 `gp_segment_configuration.hostname`과 대조해 검증한다.
+2. **호스트별 파일 예산** `S_h` 산정 — `SELECT hostname, count(*) FROM gp_segment_configuration WHERE content>=0 GROUP BY hostname`.
+3. **총 파일 수** `F = Σ S_h` → Impala IN 리스트를 `F`개의 **disjoint** 슬라이스로 분할(기존 splitter 재사용, `parallelism=F`).
+4. 각 슬라이스를 `(호스트 h, 파일 인덱스 i)`에 배정하고, **그 호스트 위의 executor 중 하나**에 "이 sub-query를 `{local_dir}/{job_id}/f{i}.csv`로 써라"고 디스패치한다.
+5. 모든 파일이 준비되면 URI 목록을 조립한다: `file://h1/{dir}/{job}/f0.csv`, `file://h1/.../f1.csv`, …, `file://hk/.../f{F-1}.csv`.
+
+**호스트당 executor가 여러 개**인 경우: 그 호스트의 파일 예산 `S_h`를 executor들에게 나눠 배정합니다(예: `S_h=8`, executor 2개 → 각 4파일). 파일이 그 호스트 로컬 디스크에 있기만 하면 어느 executor가 썼는지는 무관하고, **호스트별 총 파일 수가 `S_h`를 넘지 않게** 하는 것만 지키면 됩니다. 그 결과 **Phase 1(export) 병렬도는 executor 수**로, **Phase 2(load) 병렬도는 파일 수(=참여 세그먼트 수)**로 각각 독립적으로 최대화됩니다.
+
+**정합성**: 슬라이스가 disjoint(splitter 보장)하고 각 파일이 URI 하나에만 참조되므로, 전체 데이터는 정확히 한 번 읽힙니다(중복·누락 없음). 어느 호스트 파일에 어떤 파티션이 담기든 무관합니다 — staging→target INSERT에서 target의 분배키(`DISTRIBUTED BY`)로 다시 분배되기 때문입니다.
+
+### 17.3 Job 라이프사이클 — 2-phase(배리어)
+
+`local_stage`는 지금까지의 "디스패치 → 상태 집계"와 달리, **모든 export가 끝나기를 기다리는 배리어**와 그 뒤의 **job 단위 GP load 단계**가 추가됩니다. 이것이 이 모드가 요구하는 신규 오케스트레이션입니다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> EXPORTING: export task F개 팬아웃(호스트별 executor가 로컬 CSV write)
+    EXPORTING --> LOADING: 모든 export DONE (배리어)
+    LOADING --> INSERTING: file:// 외부테이블 → staging 적재(세그먼트 로컬 병렬 read)
+    INSERTING --> CLEANUP: target INSERT 커밋
+    CLEANUP --> [*]: 외부테이블 DROP · staging 정리 · 각 호스트 로컬 파일 삭제
+    EXPORTING --> FAILED: export 실패(정책)
+    LOADING --> FAILED: 외부테이블/적재 오류
+    INSERTING --> FAILED: INSERT 오류
+```
+
+**Phase 2에서 coordinator가 GP master에 실행하는 SQL**(한 트랜잭션):
+
+```sql
+CREATE EXTERNAL TABLE ext_{job} (<external_columns>)
+  LOCATION ('file://h1/{dir}/{job}/f0.csv', 'file://h1/{dir}/{job}/f1.csv', ...,
+            'file://hk/{dir}/{job}/f{N}.csv')
+  FORMAT 'CSV' ( DELIMITER '`' NULL '' QUOTE '"' );      -- ← 구분자 기본 backtick(설정 가능)
+
+INSERT INTO staging_{job} SELECT * FROM ext_{job};        -- 각 세그먼트가 자기 로컬 파일 병렬 read
+-- write_mode=overwrite_partitions면 같은 트랜잭션에서 선삭제:
+-- DELETE FROM target WHERE <partition_column> IN (...);
+INSERT INTO target SELECT ... FROM staging_{job};         -- 변환/분배키/멱등
+DROP EXTERNAL TABLE ext_{job};                            -- staging 은 TRUNCATE 또는 DROP
+```
+
+- **Phase 1 — Export(병렬)**: `F`개 export task를 호스트별 executor에 디스패치. 각 executor는 impyla 배치 읽기(§4의 스트리밍)를 그대로 쓰되, sink만 `COPY` 대신 **로컬 CSV writer**다. 완료되면 배리어에서 합류한다.
+- **Phase 2 — Load(1회)**: coordinator가 GP master에 위 SQL을 실행. 데이터는 coordinator를 통과하지 않고, 세그먼트가 로컬 파일을 직접 읽는다.
+- **Phase 3 — Cleanup**: 각 executor에 로컬 `{job_id}` 디렉터리 삭제를 지시(`stage.cleanup=false`면 디버깅용으로 보존).
+
+### 17.4 요청 필드 — 스키마는 **명시** 방식
+
+`local_stage`는 `stage_insert`와 같은 계약을 따릅니다. 즉 외부테이블 컬럼 정의와 최종 INSERT 문을 **요청자가 명시**합니다(자동 추론은 두지 않음 — 컬럼 타입/캐스팅을 요청자가 통제).
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `exec_mode="local_stage"` | ✓ | 이 파이프라인 선택 |
+| `external_columns` | ✓ | `file://` 외부테이블 컬럼 정의(예: `"user_id int, amount numeric, dt date"`). CSV 컬럼 순서와 일치해야 함 |
+| `staging_table` | ✓ | 적재 대상 staging 힙 테이블(job별 고유 권장). `staging_ddl` 미지정 시 이미 존재해야 함 |
+| `staging_ddl` | 선택 | staging 생성 DDL(보통 `CREATE TABLE ... DISTRIBUTED BY (...)`). 없으면 생성 건너뜀 |
+| `insert_sql` | ✓ | `INSERT INTO <target> SELECT ... FROM <staging_table>` — 변환/컬럼 매핑 담당 |
+| `partition_column` | ✓ | 분할 기준(§8). `overwrite_partitions` 선삭제에도 사용 |
+| `export_local_dir` | 선택 | 로컬 저장 경로 오버라이드(기본 `stage.local_dir`, 모든 호스트 동일) |
+| `csv_delimiter` 등 | 선택 | CSV 방언 오버라이드(기본은 아래 설정값) |
+
+> LOCATION의 `file://` URI, `FORMAT 'CSV'(...)` 절, 파일 인덱스는 **coordinator가 조립**하므로 요청자가 신경 쓸 필요가 없습니다. 요청자는 컬럼 정의(`external_columns`)와 최종 INSERT(`insert_sql`)만 책임집니다.
+
+### 17.5 CSV 방언 — 기본 구분자 backtick(`` ` ``)
+
+executor가 쓰는 CSV의 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방언은 **정확히 일치**해야 합니다. 어긋나면 오류 없이 데이터가 조용히 오염될 수 있으므로, 양쪽을 **설정 단일 소스**에서 강제합니다. 기본 컬럼 구분자는 데이터에 잘 나타나지 않는 **backtick(`` ` ``)** 이며, 설정으로 바꿀 수 있습니다.
+
+| 설정 | 기본값 | 의미 |
+|---|---|---|
+| `stage.csv_delimiter` | `` ` `` (backtick) | 컬럼 구분자(1바이트). executor write 와 외부테이블 `DELIMITER` 에 공통 적용 |
+| `stage.csv_null` | `` (빈 문자열) | NULL 표현. 외부테이블 `NULL` 절과 일치 |
+| `stage.csv_quote` | `"` | 인용 문자(`FORMAT 'CSV'`) |
+
+### 17.6 실패 처리 · 멱등성 · 정리
+
+- **job 전용 네임스페이스**: `{local_dir}/{job_id}/` + `staging_{job_id}` + `ext_{job_id}` → 재실행(`retry`)해도 충돌 없음.
+- **export 재시도**: 실패한 export task를 재실행하면 같은 호스트의 같은 파일명을 덮어쓰므로 파일 단위 멱등이다.
+- **Phase 2 원자성**: 외부테이블 적재 → (선삭제) → target INSERT를 **한 GP 트랜잭션**으로 묶는다. `overwrite_partitions`는 `DELETE ... WHERE <partition_column> IN (...)` 선삭제로 §9의 멱등 패턴을 그대로 따른다.
+- **정리 시점**: target INSERT가 성공 커밋된 뒤에만 외부테이블 DROP·staging 정리·로컬 파일 삭제.
+- **부분 실패**: export 실패 → 해당 파일 폐기 후 재시도. 외부테이블 read 중 타입 불일치 → `external_columns` 정의가 방어선.
+
+### 17.7 제약 · 전제
+
+- **포맷은 CSV/TEXT**(Parquet 아님). `file://`·내장 프로토콜은 텍스트 계열만 지원한다(Parquet 로컬 읽기는 공유 FS + PXF 전용).
+- **hostname 매칭**: executor가 self-report하는 GP hostname이 `gp_segment_configuration.hostname`과 정확히 일치해야 URI가 파일을 찾는다.
+- **파일 권한**: 외부테이블 read는 세그먼트 postgres 프로세스 사용자(보통 gpadmin)로 로컬 파일을 연다 → executor가 쓴 파일이 그 사용자에게 읽기 가능해야 한다(공유 umask/소유권 합의).
+- **호스트당 파일 수 ≤ 세그먼트 수** — coordinator가 `S_h`로 상한을 강제한다.
+- **mirror failover**: primary 세그먼트가 다른 호스트의 mirror로 넘어가면 그 로컬 파일이 없으므로 load가 실패한다 → 재시도 정책 대상.
+- **배포 변경**: 이 모드는 executor가 세그먼트 호스트에 co-locate되어야 하므로, `remote` 배치(독립 executor 풀)와 배포 형태가 다르다([deploy/README.md](deploy/README.md)에 별도 배치로 기술).
+
+### 17.8 설정 키
+
+| 설정(프로퍼티) | 기본값 | 의미 |
+|---|---|---|
+| `stage.local_dir` | `/data1/query-executor/stage` | 로컬 CSV 저장 루트(모든 호스트 동일 경로) |
+| `stage.csv_delimiter` / `stage.csv_null` / `stage.csv_quote` | `` ` `` / `` / `"` | CSV 방언(§17.5) |
+| `stage.files_per_host` | `0`(자동=`S_h`) | 호스트당 파일 수 상한. 0이면 세그먼트 수로 자동 |
+| `stage.cleanup` | `true` | Phase 3에서 로컬 파일/외부테이블/staging 정리 여부 |
+| `executor.gp_hostname` | OS hostname | executor가 self-report할 GP 세그먼트 hostname(`gp_segment_configuration`과 일치) |
+
+### 17.9 구현 매핑(코드 통합 지점, 구현됨)
+
+- **exec_mode 확장**: `"local_stage"`를 `CreateJobRequest`/`Job`/`CreateTaskRequest`의 `exec_mode`에 추가.
+- **executor(Phase 1)**: `_run`의 exec_mode 분기에 `local_stage` 갈래 → 백엔드 `export_to_local_csv(sub_query, out_path, csv_options, ...)`. `move`의 impyla 배치 읽기 루프를 재사용하고 sink만 표준 `csv` 로컬 writer로 교체(기본 구분자 backtick). 로컬 정리용 `POST /stage/{job_id}/cleanup` 엔드포인트 신설.
+- **host 매핑(gp_hostname)**: executor 가 `_gp_hostname()`(`executor.gp_hostname` 설정 우선, 없으면 OS hostname)을 `/metrics`·`/info`로 보고. coordinator 의 `_resolve_hosts()`가 이를 수집해(HttpDispatcher는 `/metrics` 조회+URL별 캐시, 실패 시 URL 호스트 폴백) `file://` URI 의 호스트로 쓴다 — HTTP URL 호스트(IP/별칭) ≠ GP 호스트명 문제를 바로잡는다.
+- **파일 예산 배분(`files_per_host ≤ S_h`)**: Phase 1 디스패치 전 `_plan_local_stage()`가 `backend.segment_host_counts()`(`{host: S_h}`)와 executor→host 매핑으로 `stage.plan_file_budget()`을 돌려, 각 파일(=export task)을 호스트당 `S_h`(또는 `min(S_h, stage.max_files_per_host)`)를 넘지 않게 배분하고 `executor_url`/`out_path`를 재확정한다(호스트 내 executor 라운드로빈). 총 파일 수가 예산(Σ S_h)을 넘으면 배치 불가 → job FAILED. 토폴로지/executor 미상(목·로컬)이면 기존 배정 유지.
+- **호스트 검증**: Phase 2 직전 `backend.segment_hosts()`(`gp_segment_configuration`)로 매핑된 호스트가 실재하는지 확인(`stage.validate_hosts`, 기본 on). 없으면 load 전에 조기 실패.
+- **coordinator(Phase 2·3)**: 디스패처 `run()`의 배리어(`_execute` 반환) 뒤 `_run_stage_load()`가 GP master에 외부테이블 DDL→staging 적재→(멱등 선삭제)→target INSERT를 한 트랜잭션으로 실행하고 `_cleanup_stage()`로 각 executor 로컬 파일을 정리한다. `file://` URI·`FORMAT 'CSV'(...)`·파일 인덱스 조립은 `coordinator/stage.py`(순수 함수)가 담당. `finalize_job`은 local_stage를 원자 적재로 보아 실패 시 정책 무관 FAILED.
+- **테스트**: `tests/test_local_stage.py` — stage.py 순수 함수, executor 라우팅/cleanup/metrics, LocalDispatcher 2-phase e2e, gp_hostname 매핑·검증까지 실 DB·실 디스크 없이 검증.
+
+---
+
+## 18. 향후 확장
 
 마지막으로, 지금은 없지만 앞으로 더할 만한 기능들을 적어 둡니다. 이 목록은 시스템이 어느 방향으로 발전하려 하는지를 보여 줍니다. 각 항목을 한 줄로 풀어 설명하면 다음과 같습니다.
 

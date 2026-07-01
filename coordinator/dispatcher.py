@@ -32,6 +32,7 @@ from typing import Optional, Protocol
 import httpx
 
 from core.logging import job_log_context
+from . import stage as stage_sql
 from .config import Settings
 from .history import JobHistoryRepository
 from .models import Job, JobStatus, Task, TaskStatus
@@ -74,7 +75,9 @@ def finalize_job(job: Job) -> None:
         job.status = JobStatus.CANCELLED
     elif not failed:
         job.status = JobStatus.DONE
-    elif job.failure_policy == "best_effort":
+    elif job.failure_policy == "best_effort" and job.exec_mode != "local_stage":
+        # local_stage 는 Phase 2(GP file:// 적재)가 단일 원자 연산이라 "부분 성공"이 없다.
+        # export/적재 중 하나라도 실패하면 target 에 온전히 반영되지 않으므로 FAILED 로 본다.
         job.status = JobStatus.PARTIAL
     else:
         job.status = JobStatus.FAILED
@@ -210,6 +213,23 @@ class _DispatcherBase:
         # 공유 예약(Phase 3-B). 주입되면 task 실행 동안 배정 executor 를 예약/해제해
         # 다른 coordinator 의 선택에 실시간 부하로 반영한다.
         self.reservations = reservations
+        # local_stage Phase 2(GP file:// 적재)용 백엔드. coordinator 가 GP master 에 직접
+        # 실행하므로 export 디스패치(HTTP/local)와 무관하게 공용이다. lazy 로 생성한다.
+        self._stage_backend = None
+        # executor_url → GP 세그먼트 호스트명 캐시. gp_hostname 은 정적이라 URL 별로 한 번만
+        # 조회한다(local_stage file:// URI 조립용). HttpDispatcher 가 /metrics 로 채운다.
+        self._gp_host_cache: dict = {}
+
+    def _get_stage_backend(self):
+        """local_stage Phase 2 용 GP 백엔드를 lazy 로 생성한다(순수 GP 작업, Impala 불필요).
+
+        greenplum.dsn 이 있으면 ImpalaToGreenplumBackend, 없으면 MockBackend 로 폴백한다.
+        LocalDispatcher 는 주입 백엔드를 재사용한다(생성자에서 미리 채워 둔다).
+        """
+        if self._stage_backend is None:
+            from executor.backend import build_backend  # 지연 임포트(순환 방지)
+            self._stage_backend = build_backend(self.settings)
+        return self._stage_backend
 
     def _save(self, job: Job) -> None:
         # store 가 주입된 경우에만 영속화한다(인메모리 모드면 no-op).
@@ -246,6 +266,207 @@ class _DispatcherBase:
         """하위 클래스 구현 지점: job.tasks 를 실제로 디스패치/실행한다(추상 메서드)."""
         raise NotImplementedError
 
+    async def _resolve_url_hosts(self, urls) -> dict:
+        """``executor_url`` 목록 → GP 세그먼트 호스트명 매핑(file:// URI·파일 예산 배분용).
+
+        기본 구현은 원격 조회 없이 URL 호스트(로컬 모드로 URL 이 None 이면 설정
+        ``executor.gp_hostname``)를 쓴다. HttpDispatcher 는 executor 가 보고한 gp_hostname 을
+        우선 쓰도록 오버라이드한다(HTTP URL 호스트 ≠ GP 호스트명인 경우를 바로잡는다).
+        """
+        out: dict = {}
+        for url in urls:
+            if url in out:
+                continue
+            out[url] = (
+                stage_sql.host_of(url) if url else (self.settings.executor_gp_hostname or "")
+            )
+        return out
+
+    async def _resolve_hosts(self, job: Job) -> dict:
+        """job 의 각 task ``executor_url`` → GP 세그먼트 호스트명 매핑(``_resolve_url_hosts`` 위임)."""
+        return await self._resolve_url_hosts([t.executor_url for t in job.tasks])
+
+    async def _plan_local_stage(self, job: Job) -> bool:
+        """local_stage: 세그먼트 토폴로지(호스트별 S_h)에 맞춰 파일(=export task)을 호스트에 배분.
+
+        Phase 1(export) 디스패치 **전에** 실행한다. ``segment_host_counts`` 로 호스트별 primary
+        세그먼트 수를 얻고, 설정 executor 들을 gp_hostname 으로 호스트에 묶은 뒤,
+        ``plan_file_budget`` 으로 "호스트당 파일 수 ≤ S_h" 를 지키도록 각 task 의 ``executor_url``
+        과 ``out_path`` 를 재확정한다. 여러 executor 가 같은 호스트에 있으면 그 안에서 라운드로빈.
+
+        반환값(진행 여부):
+            - True  : local_stage 가 아니거나, 토폴로지/executor 정보를 얻지 못해(목·로컬)
+                      기존 배정을 그대로 유지하거나, 배분에 성공한 경우 → 실행 계속.
+            - False : 파일 수가 총 예산(Σ S_h)을 초과해 배치 불가 → 모든 task 를 FAILED 로
+                      표시하고 실행을 건너뛴다(finalize 가 FAILED 로 확정).
+        """
+        if job.exec_mode != "local_stage" or not job.tasks:
+            return True
+        backend = self._get_stage_backend()
+        loop = asyncio.get_running_loop()
+        try:
+            host_segments = await loop.run_in_executor(None, backend.segment_host_counts)
+        except Exception as exc:
+            logger.warning(
+                "job %s: 세그먼트 토폴로지 조회 실패 → 파일 예산 배분 생략(기존 배정 유지): %s",
+                job.job_id, exc,
+            )
+            return True
+        exec_urls = [u for u in self.settings.executors if u]
+        if not host_segments or not exec_urls:
+            # 토폴로지 미상(목) 또는 executor 목록 없음(로컬) → 기존 배정을 그대로 쓴다.
+            return True
+
+        url_hosts = await self._resolve_url_hosts(exec_urls)
+        executors_by_host: dict = {}
+        for u in exec_urls:
+            host = url_hosts.get(u, "")
+            if host:
+                executors_by_host.setdefault(host, []).append(u)
+
+        cap = self.settings.stage_max_files_per_host
+        plan = stage_sql.plan_file_budget(
+            len(job.tasks), host_segments, executors_by_host, cap
+        )
+        if plan is None:
+            capacity = stage_sql.budget_capacity(host_segments, executors_by_host, cap)
+            msg = (
+                f"local_stage 파일 수({len(job.tasks)})가 호스트 파일 예산(Σ min(S_h,cap)="
+                f"{capacity})을 초과합니다. parallelism 을 낮추거나 세그먼트/executor 호스트를 "
+                "늘리세요."
+            )
+            logger.error("job %s: %s", job.job_id, msg)
+            job.error = msg
+            for t in job.tasks:
+                t.status = TaskStatus.FAILED
+                t.error = msg
+            self._save(job)
+            return False
+
+        # 배분 반영: 각 파일(task)의 담당 executor 와 로컬 경로를 확정한다.
+        local_dir = job.export_local_dir or self.settings.stage_local_dir
+        for idx, (task, (url, _host)) in enumerate(zip(job.tasks, plan)):
+            task.executor_url = url
+            task.out_path = f"{local_dir}/{job.job_id}/f{idx}.csv"
+        per_host: dict = {}
+        for _u, h in plan:
+            per_host[h] = per_host.get(h, 0) + 1
+        logger.info(
+            "job %s: local_stage 파일 예산 배분 — %d파일, 호스트별=%s",
+            job.job_id, len(plan), per_host,
+        )
+        self._save(job)
+        return True
+
+    async def _run_stage_load(self, job: Job) -> None:
+        """local_stage Phase 2: 모든 export 완료(배리어) 후 GP file:// 적재 → target INSERT.
+
+        ``_execute`` 가 반환하면 모든 export task 가 종료 상태다(자연 배리어). 이 시점에서
+        export 가 하나라도 실패했거나 취소됐으면 건너뛴다(finalize 가 상태를 정한다). 정상이면
+        executor 가 보고한 gp_hostname 으로 file:// URI 를 조립하고(호스트 검증 통과 시),
+        coordinator 의 GP 백엔드로 ``load_external_csv`` 를 호출해 외부테이블 생성→staging
+        적재→(멱등 선삭제)→target INSERT 를 한 트랜잭션으로 수행한 뒤 로컬 파일을 정리한다.
+
+        local_stage 가 아니면 즉시 반환하므로 다른 exec_mode 에는 영향이 없다.
+        """
+        if job.exec_mode != "local_stage":
+            return
+        if self._cancel_observed(job):
+            return
+        if any(t.status == TaskStatus.FAILED for t in job.tasks):
+            logger.warning(
+                "job %s: export 실패 task 존재 → Phase 2(GP 적재) 건너뜀", job.job_id
+            )
+            return
+
+        backend = self._get_stage_backend()
+        loop = asyncio.get_running_loop()
+
+        # 각 task 파일이 물리적으로 놓인 GP 세그먼트 호스트를 executor 보고값으로 확정한다.
+        host_map = await self._resolve_hosts(job)
+
+        # file:// 호스트 검증: 매핑된 호스트가 gp_segment_configuration 에 실제로 있는지 확인해
+        # 오타/잘못된 gp_hostname 을 load 전에 조기 실패시킨다(런타임 파일 미발견 예방).
+        if self.settings.stage_validate_hosts:
+            try:
+                seg_hosts = await loop.run_in_executor(None, backend.segment_hosts)
+            except Exception as exc:
+                # 조회 실패(권한/미지원 등)는 검증 생략으로 폴백한다 — 적재 자체를 막지 않는다.
+                logger.warning(
+                    "job %s: gp_segment_configuration 조회 실패 → 호스트 검증 생략: %s",
+                    job.job_id, exc,
+                )
+                seg_hosts = set()
+            if seg_hosts:
+                bad = sorted({h for h in host_map.values() if h and h not in seg_hosts})
+                if bad:
+                    msg = (
+                        f"file:// 호스트가 gp_segment_configuration 에 없습니다: {bad}. "
+                        "executor.gp_hostname 을 세그먼트 호스트명과 일치시키세요."
+                    )
+                    logger.error("job %s: %s", job.job_id, msg)
+                    job.error = msg
+                    if job.tasks:
+                        job.tasks[0].status = TaskStatus.FAILED
+                        job.tasks[0].error = msg
+                    self._save(job)
+                    return
+
+        # coordinator 가 GP master 에 실행할 SQL 을 조립한다(coordinator/stage.py — 순수 함수).
+        csv_options = stage_sql.resolve_csv_options(job, self.settings)
+        ext = stage_sql.external_table_name(job.job_id)
+        # 파일 목록: 각 task 의 (gp_hostname, out_path).
+        uris = [
+            (host_map.get(t.executor_url, ""), t.out_path)
+            for t in job.tasks if t.out_path
+        ]
+        external_ddl = stage_sql.build_external_ddl(
+            ext, job.external_columns, uris, csv_options
+        )
+        staging_load = stage_sql.build_staging_load(job.staging_table, ext)
+        # overwrite_partitions 멱등: job 전체 파티션 값을 모아 최종 INSERT 전에 선삭제.
+        pre_delete = (
+            stage_sql.build_pre_delete(
+                job.target_table, job.partition_column,
+                [v for t in job.tasks for v in t.partition_values],
+            )
+            if job.write_mode == "overwrite_partitions" else None
+        )
+        cleanup = stage_sql.build_cleanup(ext)
+
+        try:
+            # 블로킹 GP 호출이므로 스레드로 넘겨 이벤트 루프를 막지 않는다.
+            rows = await loop.run_in_executor(
+                None,
+                lambda: backend.load_external_csv(
+                    external_ddl, job.staging_ddl, staging_load,
+                    pre_delete, job.insert_sql, cleanup,
+                ),
+            )
+            logger.info("job %s: local_stage Phase 2 적재 완료(target 반영 %s행)",
+                        job.job_id, rows)
+        except Exception as exc:
+            # export 는 됐지만 GP 적재가 실패 → job 을 실패로 확정한다. finalize_job 이
+            # local_stage 는 실패 task 가 있으면(정책 무관) FAILED 로 판정한다.
+            logger.exception("job %s: local_stage Phase 2 실패", job.job_id)
+            job.error = f"local_stage Phase 2 실패: {exc}"
+            if job.tasks:
+                job.tasks[0].status = TaskStatus.FAILED
+                job.tasks[0].error = job.tasks[0].error or f"Phase 2 적재 실패: {exc}"
+            self._save(job)
+            return
+        # Phase 3: 각 세그먼트 호스트의 로컬 CSV 정리(디스패처별 구현).
+        await self._cleanup_stage(job)
+        self._save(job)
+
+    async def _cleanup_stage(self, job: Job) -> None:
+        """local_stage Phase 3: 로컬 CSV 정리(디스패처별 구현). 기본은 no-op.
+
+        HttpDispatcher 는 각 executor 의 ``/stage/{job_id}/cleanup`` 을 호출해 로컬 파일을
+        지운다. LocalDispatcher(개발/목)는 정리할 원격 파일이 없어 그대로 둔다.
+        """
+        return
+
     async def run(self, job: Job) -> str:
         """Job 한 건의 전체 수명주기를 구동하고 job_id 를 반환한다.
 
@@ -281,7 +502,13 @@ class _DispatcherBase:
                     self._save(job)
                     await self.history.record(job)  # 시작 이력
                     try:
-                        await self._execute(job)
+                        # local_stage: Phase 1 전에 파일을 호스트별 예산(S_h)에 맞춰 배분한다.
+                        # 예산 초과면 배치 불가 → 실행을 건너뛰고 FAILED 로 마감한다.
+                        if await self._plan_local_stage(job):
+                            await self._execute(job)
+                            # local_stage: 모든 export 완료(배리어) 후 GP file:// 적재(Phase 2+3).
+                            # 다른 exec_mode 에는 즉시 반환하는 no-op 이다.
+                            await self._run_stage_load(job)
                     finally:
                         # _execute 가 예외로 끝나도 최종 상태/종료시각/이력은 반드시 남긴다.
                         finalize_job(job)
@@ -472,6 +699,12 @@ class HttpDispatcher(_DispatcherBase):
                 "insert_sql": job.insert_sql,
                 "impala_query_options": job.impala_query_options,
                 "username": job.username,
+                # local_stage 전용: 로컬 CSV 출력 경로 + CSV 방언(외부테이블 FORMAT 과 일치).
+                "out_path": task.out_path,
+                "csv_options": (
+                    stage_sql.resolve_csv_options(job, self.settings)
+                    if job.exec_mode == "local_stage" else None
+                ),
             },
         )
         resp.raise_for_status()  # 5xx/4xx → HTTPStatusError(=_RETRYABLE) 로 재시도/failover
@@ -540,6 +773,59 @@ class HttpDispatcher(_DispatcherBase):
                         *(self._cancel_task(client, t) for t in targets)
                     )
 
+    async def _cleanup_stage(self, job: Job) -> None:
+        """local_stage Phase 3(원격): 각 executor 에 로컬 CSV 디렉터리 정리를 지시한다.
+
+        같은 호스트에 여러 executor 가 있어도 각자 자기 로컬 디렉터리를 지우면 되므로,
+        중복 executor_url 만 제거해 병렬 호출한다. 설정에서 정리를 끄면 건너뛴다. 정리 실패는
+        적재 결과에 영향이 없으므로 로깅만 한다(파일은 다음 job 이 job_id 로 격리되어 무해).
+        """
+        if not self.settings.stage_cleanup:
+            return
+        urls = {t.executor_url for t in job.tasks if t.executor_url}
+        if not urls:
+            return
+
+        async def _one(client: httpx.AsyncClient, url: str) -> None:
+            try:
+                await client.post(f"{url}/stage/{job.job_id}/cleanup")
+            except Exception as exc:
+                logger.warning(
+                    "job %s: executor %s 로컬 정리 실패: %s", job.job_id, url, exc
+                )
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await asyncio.gather(*(_one(client, u) for u in urls))
+
+    async def _resolve_url_hosts(self, urls) -> dict:
+        """각 executor 의 ``/metrics`` 를 조회해 보고된 gp_hostname 으로 매핑을 만든다(캐시).
+
+        HTTP URL 의 호스트(IP/별칭/컨테이너명)는 ``gp_segment_configuration.hostname`` 과 다를
+        수 있으므로, executor 가 신고한 실제 GP 세그먼트 호스트명을 file:// URI·파일 예산 배분에
+        쓴다. 조회 실패/미보고면 URL 호스트로 폴백한다. gp_hostname 은 정적이라 URL 별로 한 번만
+        조회한다(캐시). URL 이 None(로컬 배정 없음)이면 설정 gp_hostname 으로 채운다.
+        """
+        real = [u for u in dict.fromkeys(urls) if u]  # 중복 제거 + None 제외
+        missing = [u for u in real if u not in self._gp_host_cache]
+        if missing:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                async def _fetch(u: str) -> None:
+                    host = ""
+                    try:
+                        resp = await client.get(f"{u}/metrics")
+                        resp.raise_for_status()
+                        host = (resp.json().get("gp_hostname") or "").strip()
+                    except Exception as exc:
+                        logger.warning("executor %s gp_hostname 조회 실패: %s", u, exc)
+                    # 미보고/조회 실패 → URL 호스트로 폴백(최소한의 동작 보장).
+                    self._gp_host_cache[u] = host or stage_sql.host_of(u)
+
+                await asyncio.gather(*(_fetch(u) for u in missing))
+        out = {u: self._gp_host_cache[u] for u in real}
+        if any(u is None for u in urls):
+            out[None] = self.settings.executor_gp_hostname or ""
+        return out
+
     async def _cancel_task(self, client: httpx.AsyncClient, task: Task) -> None:
         try:
             await client.post(f"{task.executor_url}/tasks/{task.task_id}/cancel")
@@ -569,6 +855,11 @@ class LocalDispatcher(_DispatcherBase):
             from executor.backend import build_backend  # 지연 임포트(순환 방지)
             self._backend = build_backend(self.settings)
         return self._backend
+
+    def _get_stage_backend(self):
+        # local 모드는 export 와 Phase 2(GP 적재)가 같은 프로세스의 동일 백엔드를 공유한다
+        # (주입된 MockBackend 포함) → export 용 백엔드를 그대로 재사용한다.
+        return self._get_backend()
 
     async def _execute(self, job: Job) -> None:
         # HTTP 버전과 동일하게 모든 task를 동시에 돌리되, 실제 작업은 backend가 수행한다.
@@ -610,6 +901,19 @@ class LocalDispatcher(_DispatcherBase):
                             backend.stage_and_insert,
                             task.sub_query, job.staging_table, job.staging_ddl, job.insert_sql,
                             on_progress=_progress,
+                            query_options=job.impala_query_options,
+                            on_stage=task.on_stage,
+                        ),
+                    )
+                elif job.exec_mode == "local_stage":
+                    # local_stage Phase 1: Impala 결과를 로컬 CSV 로 export(Phase 2 는 run() 이 배리어 후 수행).
+                    csv_options = stage_sql.resolve_csv_options(job, self.settings)
+                    rows = await loop.run_in_executor(
+                        None,
+                        lambda: ctx.run(
+                            backend.export_to_local_csv,
+                            task.sub_query, task.out_path, csv_options,
+                            _progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,
                         ),

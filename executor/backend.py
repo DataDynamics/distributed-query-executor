@@ -163,6 +163,52 @@ class Backend(Protocol):
         staging 을 소스로 하는 INSERT 를 실행한다. INSERT 영향 행 수를 반환."""
         ...
 
+    def export_to_local_csv(
+        self,
+        sub_query: str,
+        out_path: str,
+        csv_options=None,
+        on_progress=None,
+        query_options=None,
+        on_stage=None,
+    ) -> int:
+        """[local_stage 1단계] Impala SELECT 결과를 로컬 CSV 파일 하나로 스트리밍 저장, 행수 반환.
+
+        executor 가 자기 호스트 로컬 디스크(out_path)에 CSV 를 떨어뜨린다. 이후 Greenplum 이
+        file:// 외부테이블로 이 파일을 세그먼트 로컬에서 병렬로 읽어 적재한다(2단계).
+        """
+        ...
+
+    def load_external_csv(
+        self,
+        external_ddl: str,
+        staging_ddl,
+        staging_load_sql: str,
+        pre_delete_sql,
+        insert_sql: str,
+        cleanup_sqls=None,
+        on_stage=None,
+    ) -> int:
+        """[local_stage 2단계] file:// 외부테이블 → staging 적재 → target INSERT(coordinator 실행).
+
+        coordinator 가 조립한 SQL 들을 한 GP 트랜잭션으로 실행하고, 커밋 후 cleanup 을
+        best-effort 로 수행한다. INSERT 영향 행 수를 반환한다."""
+        ...
+
+    def segment_host_counts(self) -> dict:
+        """[local_stage 파일 예산] gp_segment_configuration 의 호스트별 primary 세그먼트 수.
+
+        ``{hostname: S_h}`` 를 반환한다. coordinator 가 file:// "호스트당 파일 수 ≤ S_h"
+        규칙에 맞춰 파일을 호스트에 배분하는 근거다. 빈 dict 면 배분/검증을 생략한다(목)."""
+        ...
+
+    def segment_hosts(self) -> set:
+        """[local_stage 검증] gp_segment_configuration 의 primary 세그먼트 호스트명 집합.
+
+        coordinator 가 file:// URI 의 호스트가 실제 세그먼트 호스트인지 검증하는 데 쓴다.
+        빈 집합을 반환하면 검증을 생략한다(목/조회 불가 시)."""
+        ...
+
 
 class MockBackend:
     """결정적인 행 수를 반환하고 실제 I/O는 하지 않음. 개발/테스트용.
@@ -219,6 +265,43 @@ class MockBackend:
         _emit(on_stage, "COMMIT", "start")
         _emit(on_stage, "COMMIT", "end")
         return self.rows_per_value
+
+    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None) -> int:
+        # local_stage 1단계: 실제 파일은 만들지 않고 합성 단계 이벤트만 방출, rows_per_value 반환.
+        total = self.rows_per_value
+        _emit(on_stage, "IMPALA_SUBMIT", "start")
+        _emit(on_stage, "IMPALA_SUBMIT", "end")
+        _emit(on_stage, "EXPORT_WRITE", "start")
+        if on_progress:
+            on_progress(total)
+        _emit(on_stage, "EXPORT_WRITE", "end", {"rows": total})
+        return total
+
+    def load_external_csv(self, external_ddl, staging_ddl, staging_load_sql, pre_delete_sql, insert_sql, cleanup_sqls=None, on_stage=None) -> int:
+        # local_stage 2단계: 실제 GP 호출 없이 단계 이벤트만 방출하고 rows_per_value 반환.
+        if staging_ddl:
+            _emit(on_stage, "STAGING_DDL", "start")
+            _emit(on_stage, "STAGING_DDL", "end")
+        _emit(on_stage, "PXF_EXTERNAL_DDL", "start")
+        _emit(on_stage, "PXF_EXTERNAL_DDL", "end")
+        _emit(on_stage, "STAGE_LOAD", "start")
+        _emit(on_stage, "STAGE_LOAD", "end", {"rows": self.rows_per_value})
+        if pre_delete_sql:
+            _emit(on_stage, "DELETE", "start")
+            _emit(on_stage, "DELETE", "end")
+        _emit(on_stage, "INSERT", "start")
+        _emit(on_stage, "INSERT", "end", {"rows": self.rows_per_value})
+        _emit(on_stage, "COMMIT", "start")
+        _emit(on_stage, "COMMIT", "end")
+        return self.rows_per_value
+
+    def segment_host_counts(self) -> dict:
+        # 목: 빈 dict → coordinator 의 파일 예산 배분/호스트 검증을 건너뛰게 한다.
+        return {}
+
+    def segment_hosts(self) -> set:
+        # 호스트 집합은 호스트별 카운트의 키에서 파생(목이면 빈 집합).
+        return set(self.segment_host_counts())
 
 
 class ImpalaToGreenplumBackend:
@@ -517,6 +600,127 @@ class ImpalaToGreenplumBackend:
             return affected if affected and affected > 0 else loaded
         finally:
             impala_conn.close()
+
+    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None) -> int:
+        """local_stage 1단계: Impala SELECT 결과를 out_path 의 로컬 CSV 파일로 스트리밍 저장.
+
+        impyla 커서를 batch_size 단위로 fetch 하며 표준 라이브러리 ``csv`` 로 한 줄씩 쓴다.
+        전체 결과를 메모리에 올리지 않는다. CSV 방언(delimiter/null/quote)은 GP file:// 외부
+        테이블의 ``FORMAT 'CSV'(...)`` 와 정확히 일치해야 하므로 coordinator 가 넘긴 값을 쓴다.
+        NULL 은 지정된 null 문자열로, 나머지 값은 문자열화해 기록한다. 반환: 기록한 행 수.
+        """
+        import csv
+        import os
+        from impala.dbapi import connect as impala_connect  # 지연 임포트
+
+        opts = csv_options or {}
+        delimiter = opts.get("delimiter", "`")
+        null_str = opts.get("null", "")
+        quote = opts.get("quote", '"')
+
+        # out_path 의 상위 디렉터리({local_dir}/{job_id}/)를 만들어 둔다(이미 있으면 통과).
+        parent = os.path.dirname(out_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+        written = 0
+        impala_conn = impala_connect(**self.impala_dsn)
+        try:
+            cur = impala_conn.cursor()
+            _emit(on_stage, "IMPALA_SUBMIT", "start")
+            self._impala_execute(cur, sub_query, query_options)
+            _emit(on_stage, "IMPALA_SUBMIT", "end")
+            _emit(on_stage, "EXPORT_WRITE", "start")
+            with open(out_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(
+                    f, delimiter=delimiter, quotechar=quote,
+                    quoting=csv.QUOTE_MINIMAL, lineterminator="\n",
+                )
+                while True:
+                    batch = cur.fetchmany(self.batch_size)
+                    if not batch:
+                        break
+                    for row in batch:
+                        writer.writerow([null_str if v is None else v for v in row])
+                    written += len(batch)
+                    if on_progress:
+                        on_progress(written)
+            _emit(on_stage, "EXPORT_WRITE", "end", {"rows": written})
+            logger.debug("local_stage export 완료: %s행 → %s", written, out_path)
+            return written
+        finally:
+            impala_conn.close()
+
+    def load_external_csv(self, external_ddl, staging_ddl, staging_load_sql, pre_delete_sql, insert_sql, cleanup_sqls=None, on_stage=None) -> int:
+        """local_stage 2단계: file:// 외부테이블 생성 → staging 적재 → target INSERT.
+
+        coordinator 가 조립한 SQL 을 한 GP 트랜잭션으로 순서대로 실행한다:
+          (staging_ddl?) → external_ddl → staging_load_sql → (pre_delete_sql?) → insert_sql
+        커밋 뒤 cleanup_sqls(외부테이블 DROP 등)를 별도 트랜잭션에서 best-effort 로 수행한다
+        (실패해도 적재 결과에는 영향이 없으므로 로깅만 한다). 반환: INSERT 영향 행 수.
+
+        Impala 는 관여하지 않으므로(순수 GP 작업) coordinator 처럼 impala_dsn 이 없어도 동작한다.
+        """
+        affected = 0
+        with self._gp_pool.connection() as gp:
+            with gp.cursor() as cur:
+                if staging_ddl:
+                    _emit(on_stage, "STAGING_DDL", "start")
+                    cur.execute(staging_ddl)  # CREATE TABLE staging (...) DISTRIBUTED BY ...
+                    _emit(on_stage, "STAGING_DDL", "end")
+                _emit(on_stage, "PXF_EXTERNAL_DDL", "start")
+                cur.execute(external_ddl)  # CREATE EXTERNAL TABLE ext (...) LOCATION('file://...')
+                _emit(on_stage, "PXF_EXTERNAL_DDL", "end")
+                _emit(on_stage, "STAGE_LOAD", "start")
+                cur.execute(staging_load_sql)  # INSERT INTO staging SELECT * FROM ext (세그먼트 로컬 병렬)
+                loaded = cur.rowcount
+                _emit(on_stage, "STAGE_LOAD", "end",
+                      {"rows": loaded if loaded and loaded > 0 else None})
+                if pre_delete_sql:
+                    # overwrite_partitions 멱등: 최종 INSERT 전에 대상 파티션 선삭제.
+                    _emit(on_stage, "DELETE", "start")
+                    cur.execute(pre_delete_sql)
+                    _emit(on_stage, "DELETE", "end",
+                          {"rows": cur.rowcount if cur.rowcount and cur.rowcount > 0 else None})
+                _emit(on_stage, "INSERT", "start")
+                cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM staging
+                affected = cur.rowcount
+                _emit(on_stage, "INSERT", "end",
+                      {"rows": affected if affected and affected > 0 else None})
+            _emit(on_stage, "COMMIT", "start")
+            gp.commit()
+            _emit(on_stage, "COMMIT", "end")
+        # 정리(외부테이블 DROP 등)는 별도 트랜잭션 + best-effort. 실패해도 적재는 이미 커밋됨.
+        if cleanup_sqls:
+            _emit(on_stage, "CLEANUP", "start")
+            try:
+                with self._gp_pool.connection() as gp:
+                    with gp.cursor() as cur:
+                        for sql in cleanup_sqls:
+                            cur.execute(sql)
+                    gp.commit()
+            except Exception:
+                logger.warning("local_stage GP cleanup 실패 — 무시", exc_info=True)
+            _emit(on_stage, "CLEANUP", "end")
+        return affected if affected and affected > 0 else 0
+
+    def segment_host_counts(self) -> dict:
+        """gp_segment_configuration 에서 호스트별 primary(content>=0) 세그먼트 수 {host: S_h} 조회.
+
+        coordinator 가 file:// "호스트당 파일 수 ≤ S_h" 규칙으로 파일을 호스트에 배분하고,
+        호스트 존재 검증에도 쓴다. 조회 실패는 상위에서 배분/검증 생략으로 폴백하도록 예외를
+        그대로 전파한다."""
+        with self._gp_pool.connection() as gp:
+            with gp.cursor() as cur:
+                cur.execute(
+                    "SELECT hostname, count(*) FROM gp_segment_configuration "
+                    "WHERE content >= 0 GROUP BY hostname"
+                )
+                return {r[0]: int(r[1]) for r in cur.fetchall()}
+
+    def segment_hosts(self) -> set:
+        """gp_segment_configuration 의 primary 세그먼트 호스트명 집합(호스트별 카운트 키에서 파생)."""
+        return set(self.segment_host_counts())
 
     def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None) -> int:
         """copy 모드: Impala 에서 sub_query 결과를 스트리밍해 Greenplum 에 COPY 적재한다.

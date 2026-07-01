@@ -86,11 +86,15 @@ class Task:
     partition_column: str
     partition_values: list[str]
     username: Optional[str] = None
-    exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert"
+    exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert" | "local_stage"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
     impala_query_options: Optional[dict] = None  # 요청별 Impala SET 옵션(전역에 병합)
+    # local_stage 모드: Impala 결과를 떨어뜨릴 로컬 CSV 파일의 절대 경로와 CSV 방언.
+    # coordinator 가 파일 경로/인덱스를 확정해 넘긴다(file:// URI 와 짝을 이룬다).
+    out_path: Optional[str] = None
+    csv_options: Optional[dict] = None  # {"delimiter","null","quote"} — 외부테이블 FORMAT 과 일치
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
     rows_read: int = 0
@@ -170,11 +174,14 @@ class CreateTaskRequest(BaseModel):
     partition_column: str
     partition_values: list[str] = []
     username: Optional[str] = None
-    exec_mode: Literal["copy", "statement", "stage_insert"] = "copy"
+    exec_mode: Literal["copy", "statement", "stage_insert", "local_stage"] = "copy"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
     impala_query_options: Optional[dict] = None
+    # local_stage 전용: 로컬 CSV 출력 경로 + CSV 방언(coordinator 가 확정해 전달).
+    out_path: Optional[str] = None
+    csv_options: Optional[dict] = None
 
 
 class DatasourceQueryRequest(BaseModel):
