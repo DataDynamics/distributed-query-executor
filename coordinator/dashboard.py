@@ -216,6 +216,14 @@ DASHBOARD_HTML = """<!doctype html>
   #modal-sql { white-space:pre-wrap; word-break:break-all; background:#f6f8fa;
                border:1px solid var(--line); border-radius:6px; padding:12px;
                font:13px/1.55 ui-monospace,Menlo,Consolas,monospace; color:var(--fg); }
+  .tl td { text-align:left; white-space:nowrap; }
+  .gtrack { background:#eaeef2; border-radius:4px; height:10px; width:200px;
+            display:inline-block; vertical-align:middle; overflow:hidden; }
+  .gtrack > i { display:block; height:100%; background:var(--acc); }
+  .gtrack > i.run { background:var(--warn); }
+  .phdot { font-size:11px; padding:1px 7px; border-radius:9px; background:#ddf4ff;
+           color:var(--acc); font-weight:600; }
+  .tkhd { margin:14px 0 6px; font-weight:600; }
 </style>
 </head>
 <body>
@@ -242,6 +250,12 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="modal-box">
     <div class="modal-head"><b id="modal-title"></b><button onclick="closeModal()">✕</button></div>
     <pre id="modal-sql"></pre>
+  </div>
+</div>
+<div class="modal" id="pmodal" onclick="if(event.target===this)closePhases()">
+  <div class="modal-box">
+    <div class="modal-head"><b id="pmodal-title"></b><button onclick="closePhases()">✕</button></div>
+    <div id="pmodal-body"></div>
   </div>
 </div>
 <script>
@@ -281,6 +295,79 @@ function concBar(active, max){
   const pct = Math.min(100, Math.round(active/max*100));
   return `<span class="bar"><i style="width:${pct}%"></i></span> ${active}/${max}`;
 }
+// 밀리초를 사람이 읽는 소요시간으로. 1초 미만은 ms, 이상은 h/m/s.
+function fmtDur(ms){
+  if(ms===null||ms===undefined) return '<span class="mut">-</span>';
+  if(ms<1000) return ms+'ms';
+  const sec=Math.floor(ms/1000), h=Math.floor(sec/3600),
+        m=Math.floor((sec%3600)/60), s=sec%60;
+  return (h?h+'h ':'')+(m||h?m+'m ':'')+s+'s';
+}
+// 진행 중(finished_at 없음)인 단계의 경과 ms 는 지금 시각 기준으로 계산한다.
+function phaseMs(p){
+  if(p.duration_ms!==null && p.duration_ms!==undefined) return p.duration_ms;
+  if(!p.started_at) return null;
+  const s=new Date(p.started_at); if(isNaN(s)) return null;
+  const ms=new Date()-s; return (ms>=0?ms:null);
+}
+const phaseOf = (phases,name)=>(phases||[]).find(p=>p.name===name);
+// 단계 타임라인을 간트형 표로 렌더링(executor 대시보드와 동형).
+function renderPhases(phases){
+  if(!phases || !phases.length) return '<p class="mut">단계 정보가 아직 없습니다.</p>';
+  const durs = phases.map(phaseMs).filter(v=>v!==null&&v!==undefined);
+  const max = durs.length ? Math.max(...durs, 1) : 1;
+  let h = '<table class="tl"><thead><tr>'+
+    ['단계','진행','시작','종료','소요','행수','비고'].map(t=>`<th>${t}</th>`).join('')+
+    '</tr></thead><tbody>';
+  for(const p of phases){
+    const ms = phaseMs(p);
+    const running = (p.finished_at===null||p.finished_at===undefined);
+    const pct = ms!==null&&ms!==undefined ? Math.max(2, Math.round(ms/max*100)) : 0;
+    const bar = `<span class="gtrack"><i class="${running?'run':''}" style="width:${pct}%"></i></span>`;
+    let note = '';
+    const e = p.extra||{};
+    if(e.read_wait_ms!==undefined || e.write_wait_ms!==undefined){
+      note = `읽기 ${fmtDur(e.read_wait_ms)} / 쓰기 ${fmtDur(e.write_wait_ms)}`;
+      if(e.rows_per_sec) note += ` · ${fmtNum(e.rows_per_sec)}행/s`;
+    }
+    h += '<tr>'+
+      `<td><span class="phdot">${fmt(p.label||p.name)}</span>${running?' <span class="mut">(진행중)</span>':''}</td>`+
+      `<td>${bar}</td>`+
+      `<td><span class="mut">${fmtDate(p.started_at)}</span></td>`+
+      `<td><span class="mut">${fmtDate(p.finished_at)}</span></td>`+
+      `<td>${fmtDur(ms)}</td>`+
+      `<td>${p.rows!==null&&p.rows!==undefined?fmtNum(p.rows):fmt(null)}</td>`+
+      `<td class="mut">${note||'-'}</td>`+
+    '</tr>';
+  }
+  return h+'</tbody></table>';
+}
+// 현재 단계 집계({STREAM_COPY:3,...})를 라벨 칩들로 요약 표기.
+const PHASE_LABELS = {QUEUE_WAIT:"대기", IMPALA_SUBMIT:"조회", STAGING_DDL:"staging",
+  PREFLIGHT:"검증", DELETE:"선삭제", STREAM_COPY:"COPY", INSERT:"INSERT", COMMIT:"커밋"};
+function phaseSummary(s){
+  const keys = Object.keys(s||{});
+  if(!keys.length) return '<span class="mut">-</span>';
+  return keys.map(k=>`<span class="phdot">${PHASE_LABELS[k]||k} ${s[k]}</span>`).join(' ');
+}
+// job 상세 모달: /jobs/{id} 를 받아 task 별 단계 타임라인을 세로로 쌓아 보여준다.
+async function showJobPhases(id){
+  $("#pmodal-title").textContent = id + ' · task별 단계 진행/소요';
+  $("#pmodal-body").innerHTML = '<p class="mut">불러오는 중…</p>';
+  $("#pmodal").style.display = 'flex';
+  try{
+    const d = await getJSON(`/jobs/${id}`);
+    const tasks = d.tasks||[];
+    if(!tasks.length){ $("#pmodal-body").innerHTML = '<p class="mut">task 가 없습니다.</p>'; return; }
+    $("#pmodal-body").innerHTML = tasks.map(t=>
+      `<div class="tkhd"><code>${fmt(t.task_id)}</code> ${pill(t.status)} · `+
+      `읽은 ${fmtNum(t.rows_read)} / 적재 ${fmtNum(t.rows_written)} · `+
+      `조회완료 ${fmtDate(t.impala_done_at)}</div>`+renderPhases(t.phases)
+    ).join('');
+  }catch(e){ $("#pmodal-body").innerHTML = `<span class="err">불러오기 실패: ${e}</span>`; }
+}
+function closePhases(){ $("#pmodal").style.display = 'none'; }
+const jobPhaseLink = id => `<a class="lnk" onclick="showJobPhases('${id}');return false">타임라인</a>`;
 
 function table(cols, rows){
   let h = "<table><thead><tr>" + cols.map(c=>`<th>${c.t}</th>`).join("") + "</tr></thead><tbody>";
@@ -299,6 +386,9 @@ async function loadJobs(){
     {t:"상태", f:r=>pill(r.status)},
     {t:"진행률", f:r=>bar(r.progress_percent)},
     {t:"완료/전체", f:r=>`${r.completed}/${r.total}`},
+    {t:"현재 단계", f:r=>phaseSummary(r.phase_summary)},
+    {t:"단계", f:r=>jobPhaseLink(r.job_id)},
+    {t:"읽은 행수", f:r=>fmtNum(r.total_rows_read)},
     {t:"적재 행수", f:r=>fmtNum(r.total_rows_written)},
     {t:"실행 방식", k:"exec_mode"},
     {t:"대상 테이블", k:"target_table"},

@@ -581,11 +581,38 @@ curl -s localhost:8088/jobs/<job_id>/status   # {"status":"DONE", ...}
 
 | 탭 | 데이터 | 내용 |
 |---|---|---|
-| 처리중인 Query | `GET /jobs` | 작업 목록(상태/진행률/완료수/rows/exec_mode/partition/target) + 총/실행/활성 카드 |
+| 처리중인 Query | `GET /jobs` | 작업 목록(상태/진행률/완료수/**현재 단계**/**읽은 행수**/rows/exec_mode/partition/target) + 총/실행/활성 카드. `단계` 링크로 task별 phase 타임라인 |
 | 실행 이력 | `GET /history?limit=&offset=` | 과거 실행 이력(PostgreSQL `job_history`), **페이징**(이전/다음). DSN 미설정 시 안내 |
 | Executor 상황 | `GET /cluster` | coordinator CPU/메모리/디스크 카드 + executor별 health·CPU/MEM/DISK·last_seen |
 | 환경설정 | `GET /config` | 설정 key/value 표(**비밀값 마스킹**: DSN 비밀번호 `user:***@`, impala 비밀번호 `***`) |
 | 그외 정보 | `GET /info` | 버전·coordinator_id·executor_mode·store backend·self_report·uptime·상태별 job 수 |
+
+### 단계별 진행·소요 시간 (phase 타임라인)
+
+각 task 는 status(QUEUED/READING/WRITING/DONE) 아래에서 다시 **세부 단계**를 거칩니다.
+대시보드는 이 단계의 시작/종료/소요와 처리량을 타임라인으로 보여 줍니다.
+
+| 단계 | 언제 | copy | stage_insert | statement |
+|---|---|:--:|:--:|:--:|
+| `QUEUE_WAIT` | 접수~실행 슬롯 확보 대기 | ✅ | ✅ | ✅ |
+| `IMPALA_SUBMIT` | Impala `execute()` 제출~커서 준비 | ✅ | ✅ | – |
+| `STAGING_DDL` | `CREATE TEMP TABLE` | – | ✅ | – |
+| `PREFLIGHT` | COPY 전 대상 컬럼 검증 | ✅ | – | – |
+| `DELETE` | overwrite 파티션 선삭제 | ✅* | – | – |
+| `STREAM_COPY` | Impala fetch + Greenplum COPY(교차 스트리밍) | ✅ | ✅ | – |
+| `INSERT` | staging→target / 대상 DB 직접 실행 | – | ✅ | ✅ |
+| `COMMIT` | 트랜잭션 커밋 | ✅ | ✅ | ✅ |
+
+- **Impala 조회 완료 시각·건수**: `STREAM_COPY` 종료 시점이 곧 Impala 조회 완료 시각이고,
+  그때의 누적 행수가 읽은 건수입니다. 두 값은 executor 의 처리중/이력 표에 `조회완료`·
+  `읽은 행수` 컬럼으로, coordinator 에는 job 단위 합계로 노출됩니다.
+- **"COPY 가 느리다" 진단**: `STREAM_COPY` 는 읽기(Impala fetch)와 쓰기(Greenplum COPY)가
+  한 루프에서 교차하므로 각각의 누적 대기를 따로 재어(`read_wait_ms`/`write_wait_ms`)
+  타임라인 비고에 `읽기 …/쓰기 …·N행/s` 로 보여 줍니다. 어느 쪽이 병목인지 바로 드러납니다.
+- 처리중/이력 표의 **`단계` 링크(타임라인)** 를 누르면 단계별 간트 막대(시작/종료/소요/행수)를
+  모달로 볼 수 있습니다. coordinator 는 job 행의 링크에서 task 별 타임라인을 함께 봅니다.
+- 이력에는 `task_history` 의 `rows_read`/`read_wait_ms`/`write_wait_ms`/`impala_done_at`/
+  `phases(JSONB)` 컬럼으로 저장됩니다(스키마 변경 시 `postgresql.sql`·`warehousepg.sql` 참고).
 
 대시보드가 읽는 API 들은 명령줄에서도 똑같이 호출할 수 있습니다.
 

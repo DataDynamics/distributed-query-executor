@@ -742,6 +742,8 @@ def create_app(
                 "progress_percent": j.progress_percent,
                 "completed": j.completed, "total": len(j.tasks),
                 "total_rows_written": j.total_rows_written,
+                "total_rows_read": j.total_rows_read,
+                "phase_summary": j.phase_summary(),
                 "exec_mode": j.exec_mode, "partition_column": j.partition_column,
                 "target_table": j.target_table,
                 "created_at": j.created_at, "started_at": j.started_at,

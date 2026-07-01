@@ -18,10 +18,12 @@
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from pydantic import BaseModel
+
+from core.phases import phase_of, record_stage
 
 
 class TaskStatus(str, enum.Enum):
@@ -62,6 +64,11 @@ class Task:
         insert_sql: stage_insert 모드의 staging→target INSERT 문.
         status: 현재 상태(TaskStatus). 기본 QUEUED.
         rows_written: 지금까지 적재된 행 수(진행률 콜백으로 갱신, 완료 시 최종값).
+            stage_insert 는 최종 INSERT 영향 행수, copy 는 COPY 적재 행수.
+        rows_read: Impala 에서 스트리밍으로 읽어들인 행 수(=조회 건수). STREAM_COPY
+            단계 종료 시점에 확정된다. copy 모드에서는 rows_written 과 같다.
+        current_phase: 지금 진행 중인 세부 단계 이름(QUEUE_WAIT/IMPALA_SUBMIT/...). 모니터링용.
+        phases: 세부 단계 타임라인(core.phases 참고). 각 단계의 시작/종료/소요/행수/지표.
         error: 실패 시 예외 메시지(FAILED 일 때만 설정).
         cancel_requested: 취소 요청 플래그. 실행 루프가 안전 지점에서 확인해 CANCELLED 로 전이.
         started_at: 실행(READING) 시작 시각(ISO8601 KST naive 문자열).
@@ -83,10 +90,31 @@ class Task:
     impala_query_options: Optional[dict] = None  # 요청별 Impala SET 옵션(전역에 병합)
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
+    rows_read: int = 0
+    current_phase: Optional[str] = None
+    phases: list = field(default_factory=list)
     error: Optional[str] = None
     cancel_requested: bool = False
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
+
+    def on_stage(self, name: str, event: str, meta: Optional[dict] = None) -> None:
+        """백엔드가 알려 오는 단계 경계를 phases 타임라인에 반영한다(콜백).
+
+        블로킹 백엔드는 별도 스레드(run_in_executor)에서 돌지만, 리스트 append/속성 대입은
+        GIL 하에서 원자적이라 기존 on_progress(rows_written 갱신)와 동일하게 안전하다.
+        STREAM_COPY 종료 시의 rows 는 곧 Impala 조회 건수이므로 rows_read 로도 반영한다.
+        """
+        rows = record_stage(self.phases, name, event, meta)
+        if event == "start":
+            self.current_phase = name
+        elif event == "end" and name == "STREAM_COPY" and rows is not None:
+            self.rows_read = rows
+
+    def impala_done_at(self) -> Optional[str]:
+        """Impala 조회가 완료된 시각(STREAM_COPY 단계 종료 시각). 없으면 None."""
+        phase = phase_of(self.phases, "STREAM_COPY")
+        return phase["finished_at"] if phase else None
 
     def view(self) -> dict:
         """API 응답/대시보드용 직렬화 dict 를 만든다.
@@ -99,6 +127,10 @@ class Task:
             "job_id": self.job_id,
             "status": self.status.value,
             "rows_written": self.rows_written,
+            "rows_read": self.rows_read,
+            "current_phase": self.current_phase,
+            "impala_done_at": self.impala_done_at(),
+            "phases": [dict(p) for p in self.phases],
             "error": self.error,
             "cancel_requested": self.cancel_requested,
             "username": self.username,

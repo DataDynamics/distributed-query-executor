@@ -176,6 +176,8 @@ def create_app(
                 task.finished_at = _now_iso()
                 await history.record(task)  # CANCELLED 이력
                 return
+            # 슬롯 대기(QUEUE_WAIT) 단계 종료: 접수(create_task)에서 시작해 여기서 닫는다.
+            task.on_stage("QUEUE_WAIT", "end")
             task.status = TaskStatus.READING
             task.started_at = _now_iso()
             await history.record(task)  # READING 이력
@@ -186,7 +188,9 @@ def create_app(
             if task.exec_mode == "statement":
                 # wrapper 로 감싼 INSERT 등을 대상 DB에서 그대로 실행(COPY 미사용)
                 rows = await loop.run_in_executor(
-                    None, lambda: app.state.backend.execute(task.sub_query)
+                    None, lambda: app.state.backend.execute(
+                        task.sub_query, on_stage=task.on_stage
+                    )
                 )
             elif task.exec_mode == "stage_insert":
                 # Impala 결과를 Greenplum staging(TEMP)에 COPY → staging→target INSERT
@@ -199,6 +203,7 @@ def create_app(
                         task.insert_sql,
                         progress,
                         query_options=task.impala_query_options,
+                        on_stage=task.on_stage,
                     ),
                 )
             else:
@@ -213,6 +218,7 @@ def create_app(
                         task.partition_values,
                         progress,
                         query_options=task.impala_query_options,
+                        on_stage=task.on_stage,
                     ),
                 )
             task.rows_written = rows
@@ -271,6 +277,8 @@ def create_app(
             insert_sql=req.insert_sql,
             impala_query_options=req.impala_query_options,
         )
+        # 접수 시각부터 슬롯 확보까지의 대기(QUEUE_WAIT) 단계를 연다. _run 진입 시 닫힌다.
+        task.on_stage("QUEUE_WAIT", "start")
         tasks[task.task_id] = task
         with job_log_context(task.job_id, task.task_id):
             await history.record(task)  # QUEUED 이력

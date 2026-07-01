@@ -497,6 +497,12 @@ class HttpDispatcher(_DispatcherBase):
             task.status = TaskStatus(data["status"])
             task.rows_written = data.get("rows_written", task.rows_written)
             task.error = data.get("error")
+            # 세부 단계 가시화: executor 가 보고한 phase 타임라인/조회 건수/현재 단계를
+            # 그대로 수집해 coordinator 대시보드가 단계별 진행·소요를 보여줄 수 있게 한다.
+            task.rows_read = data.get("rows_read", task.rows_read)
+            task.current_phase = data.get("current_phase", task.current_phase)
+            if data.get("phases") is not None:
+                task.phases = data["phases"]
 
     async def cancel(self, job: Job) -> None:
         """취소 요청을 처리한다: 취소 플래그를 세우고 진행 중 task의 executor에 전파한다.
@@ -564,17 +570,22 @@ class LocalDispatcher(_DispatcherBase):
                 # 넘겨 이벤트 루프를 막지 않는다. 상태는 READING→WRITING 으로 표시한다.
                 task.status = TaskStatus.READING
                 task.status = TaskStatus.WRITING
+                # local 모드도 세부 단계를 채우도록 진행률/단계 콜백을 백엔드에 넘긴다.
+                def _progress(n: int) -> None:
+                    task.rows_written = n
                 # exec_mode 에 따라 backend 의 다른 실행 경로를 선택한다.
                 if job.exec_mode == "statement":
                     rows = await loop.run_in_executor(
-                        None, lambda: backend.execute(task.sub_query)
+                        None, lambda: backend.execute(task.sub_query, on_stage=task.on_stage)
                     )
                 elif job.exec_mode == "stage_insert":
                     rows = await loop.run_in_executor(
                         None,
                         lambda: backend.stage_and_insert(
                             task.sub_query, job.staging_table, job.staging_ddl, job.insert_sql,
+                            on_progress=_progress,
                             query_options=job.impala_query_options,
+                            on_stage=task.on_stage,
                         ),
                     )
                 else:
@@ -583,7 +594,9 @@ class LocalDispatcher(_DispatcherBase):
                         lambda: backend.move(
                             task.sub_query, job.target_table, job.write_mode,
                             job.partition_column, task.partition_values,
+                            on_progress=_progress,
                             query_options=job.impala_query_options,
+                            on_stage=task.on_stage,
                         ),
                     )
                 task.rows_written = rows

@@ -8,9 +8,12 @@ DSN이 설정되지 않으면 비활성(경고)된다.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import socket
+
+from core.phases import phase_of
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +23,18 @@ logger = logging.getLogger(__name__)
 _INSERT = """
 INSERT INTO {table}
     (job_id, task_id, username, executor_id, status, rows_written, error,
-     started_at, finished_at, sub_query, exec_mode, staging_ddl, insert_sql)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     started_at, finished_at, sub_query, exec_mode, staging_ddl, insert_sql,
+     rows_read, read_wait_ms, write_wait_ms, impala_done_at, phases)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s::jsonb)
 """
+
+
+def _stream_copy_metrics(task) -> tuple[int | None, int | None]:
+    """task 의 STREAM_COPY 단계에서 읽기/쓰기 대기(ms)를 추출한다(없으면 (None, None))."""
+    phase = phase_of(getattr(task, "phases", None) or [], "STREAM_COPY")
+    extra = (phase or {}).get("extra") or {}
+    return extra.get("read_wait_ms"), extra.get("write_wait_ms")
 
 
 def _executor_id() -> str:
@@ -81,10 +93,12 @@ class TaskHistoryRepository:
                 cur.execute(
                     "SELECT recorded_at, job_id, task_id, username, status, "
                     "rows_written, error, started_at, finished_at, sub_query, "
-                    "exec_mode, staging_ddl, insert_sql FROM ("
+                    "exec_mode, staging_ddl, insert_sql, rows_read, read_wait_ms, "
+                    "write_wait_ms, impala_done_at, phases FROM ("
                     "  SELECT DISTINCT ON (task_id) recorded_at, job_id, task_id, "
                     "    username, status, rows_written, error, started_at, finished_at, "
-                    "    sub_query, exec_mode, staging_ddl, insert_sql "
+                    "    sub_query, exec_mode, staging_ddl, insert_sql, rows_read, "
+                    "    read_wait_ms, write_wait_ms, impala_done_at, phases "
                     f"  FROM {self.table} WHERE executor_id = %s "
                     "  ORDER BY task_id, recorded_at DESC"
                     ") t ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
@@ -101,6 +115,10 @@ class TaskHistoryRepository:
                 "finished_at": r[8].isoformat() if r[8] is not None else None,
                 "sub_query": r[9], "exec_mode": r[10],
                 "staging_ddl": r[11], "insert_sql": r[12],
+                "rows_read": r[13], "read_wait_ms": r[14], "write_wait_ms": r[15],
+                "impala_done_at": r[16].isoformat() if r[16] is not None else None,
+                # phases 는 JSONB → psycopg 가 파이썬 list/dict 로 역직렬화해 돌려준다.
+                "phases": r[17] or [],
             }
             for r in rows
         ]
@@ -129,6 +147,9 @@ class TaskHistoryRepository:
         """이력 테이블에 한 행 INSERT(동기). 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다."""
         import psycopg  # 지연 임포트
 
+        phases = getattr(task, "phases", None) or []
+        read_wait_ms, write_wait_ms = _stream_copy_metrics(task)
+        impala_done_at = task.impala_done_at() if hasattr(task, "impala_done_at") else None
         row = (
             task.job_id,
             task.task_id,
@@ -143,6 +164,12 @@ class TaskHistoryRepository:
             getattr(task, "exec_mode", None),
             getattr(task, "staging_ddl", None),
             getattr(task, "insert_sql", None),
+            getattr(task, "rows_read", None),
+            read_wait_ms,
+            write_wait_ms,
+            impala_done_at,
+            # phases 는 JSONB 컬럼. 표준 라이브러리 json 으로 직렬화해 텍스트로 넣고 ::jsonb 캐스트.
+            json.dumps(phases, ensure_ascii=False),
         )
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
