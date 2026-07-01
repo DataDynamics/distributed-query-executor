@@ -53,11 +53,18 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - `coordinator/parser.py` — sqlglot 검증. `strict_validation=true`(단순 SELECT) vs
   `false`(JOIN/서브쿼리/GROUP BY 등 복합 쿼리에서 파티션 `IN` 절을 트리 어디서든 탐색).
 - `coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
+- `coordinator/stage.py` — **`local_stage`(file:// 세그먼트 로컬 스테이징) Phase 2 SQL 조립**(순수
+  함수): `file://` 외부테이블 DDL·staging 적재·멱등 DELETE·정리 SQL, 파일 예산 배분
+  (`plan_file_budget`, 호스트당 ≤ S_h), executor_url→gp_hostname 유도. 자세히는 DESIGN §17.
 - `coordinator/job_store.py` — `InMemoryJobStore`(단일) / `SqlJobStore`(멀티 coordinator, JSONB).
 - `executor/backend.py` — `ImpalaToGreenplumBackend`(impyla→psycopg) + `MockBackend`.
   GP 연결은 `_GreenplumPool`(표준 라이브러리 기반)로 재사용하며, 반납 시 `DISCARD ALL` 로
   세션을 초기화해 stage_insert 의 TEMP 테이블이 다음 task 와 충돌하지 않게 한다.
-  `exec_mode`: `copy`(COPY) / `statement`(INSERT 그대로 실행) / `stage_insert`(TEMP 경유).
+  `exec_mode`: `copy`(COPY) / `statement`(INSERT 그대로 실행) / `stage_insert`(TEMP 경유) /
+  `local_stage`(executor 가 로컬 CSV export → coordinator 가 `file://` 외부테이블로 세그먼트
+  로컬 병렬 read → target INSERT, 2-phase). local_stage 는 executor 를 GP 세그먼트 호스트에
+  co-locate 해야 한다(DESIGN §17). export fetch 는 `convert_types=False` 로 timestamp/date 를
+  wire 문자열 그대로 받아 CSV 로 쓴다(재파싱 비용 제거).
 - `executor/app.py` — task 상태머신(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED),
   `executor.max_concurrent_tasks` 세마포어.
 - `core/logging.py` — 일 단위 롤링 + `[job_id][task_id]` 컨텍스트 주입 + **WARNING 전용

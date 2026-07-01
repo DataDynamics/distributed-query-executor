@@ -710,6 +710,8 @@ class ImpalaToGreenplumBackend:
             _emit(on_stage, "COMMIT", "start")
             gp.commit()
             _emit(on_stage, "COMMIT", "end")
+        logger.debug("local_stage load 완료: file:// 외부테이블→staging→target INSERT %s행 커밋",
+                     affected)
         # 정리(외부테이블 DROP 등)는 별도 트랜잭션 + best-effort. 실패해도 적재는 이미 커밋됨.
         if cleanup_sqls:
             _emit(on_stage, "CLEANUP", "start")
@@ -736,7 +738,9 @@ class ImpalaToGreenplumBackend:
                     "SELECT hostname, count(*) FROM gp_segment_configuration "
                     "WHERE content >= 0 GROUP BY hostname"
                 )
-                return {r[0]: int(r[1]) for r in cur.fetchall()}
+                counts = {r[0]: int(r[1]) for r in cur.fetchall()}
+                logger.debug("gp_segment_configuration 호스트별 primary 세그먼트 수: %s", counts)
+                return counts
 
     def segment_hosts(self) -> set:
         """gp_segment_configuration 의 primary 세그먼트 호스트명 집합(호스트별 카운트 키에서 파생)."""
