@@ -128,6 +128,8 @@ class Task:
     rows_read: int = 0
     current_phase: Optional[str] = None
     phases: list = field(default_factory=list)
+    # local_stage 전용: 이 task 가 로컬 CSV 를 쓸 절대 경로(coordinator 가 확정).
+    out_path: Optional[str] = None
 
     def on_stage(self, name: str, event: str, meta: Optional[dict] = None) -> None:
         """local 모드에서 백엔드가 알려 오는 단계 경계를 phases 에 반영한다(executor.Task 와 동형)."""
@@ -188,6 +190,7 @@ class Task:
             "phases": self.phases,
             "attempt": self.attempt,
             "error": self.error,
+            "out_path": self.out_path,
         }
 
     @classmethod
@@ -210,6 +213,7 @@ class Task:
             phases=list(d.get("phases") or []),
             attempt=d.get("attempt", 0),
             error=d.get("error"),
+            out_path=d.get("out_path"),
         )
 
 
@@ -255,6 +259,12 @@ class Job:
     insert_sql: Optional[str] = None
     # 요청별 Impala 쿼리 옵션(SET). executor 에서 전역 기본값 위에 병합되어 적용된다.
     impala_query_options: Optional[dict] = None
+    # local_stage 전용(file:// 세그먼트 로컬 스테이징, §17).
+    external_columns: Optional[str] = None   # file:// 외부테이블 컬럼 정의(요청자 명시)
+    export_local_dir: Optional[str] = None   # 로컬 CSV 루트 오버라이드(없으면 stage.local_dir)
+    csv_delimiter: Optional[str] = None      # CSV 방언 오버라이드(없으면 설정값)
+    csv_null: Optional[str] = None
+    csv_quote: Optional[str] = None
     job_id: str = field(default_factory=lambda: _new_id("job"))
     status: JobStatus = JobStatus.PENDING
     tasks: list[Task] = field(default_factory=list)
@@ -352,6 +362,11 @@ class Job:
             "staging_ddl": self.staging_ddl,
             "insert_sql": self.insert_sql,
             "impala_query_options": self.impala_query_options,
+            "external_columns": self.external_columns,
+            "export_local_dir": self.export_local_dir,
+            "csv_delimiter": self.csv_delimiter,
+            "csv_null": self.csv_null,
+            "csv_quote": self.csv_quote,
             "status": self.status.value,
             "error": self.error,
             "created_at": self.created_at,
@@ -384,6 +399,11 @@ class Job:
             staging_ddl=d.get("staging_ddl"),
             insert_sql=d.get("insert_sql"),
             impala_query_options=d.get("impala_query_options"),
+            external_columns=d.get("external_columns"),
+            export_local_dir=d.get("export_local_dir"),
+            csv_delimiter=d.get("csv_delimiter"),
+            csv_null=d.get("csv_null"),
+            csv_quote=d.get("csv_quote"),
             job_id=d["job_id"],
             status=JobStatus(d.get("status", "PENDING")),
             error=d.get("error"),
@@ -444,11 +464,13 @@ class CreateJobRequest(BaseModel):
     parallelism: int = Field(default=4, ge=1, le=128)
     split_strategy: Literal["contiguous", "round_robin"] = "contiguous"
     failure_policy: Literal["fail_fast", "best_effort"] = "fail_fast"
-    exec_mode: Literal["copy", "statement", "stage_insert"] = Field(
+    exec_mode: Literal["copy", "statement", "stage_insert", "local_stage"] = Field(
         default="copy",
         description="copy: Impala read→Greenplum COPY. statement: SQL을 대상 DB에서 "
         "직접 실행. stage_insert: Impala 결과를 Greenplum staging(TEMP)에 COPY 후 "
-        "staging→target INSERT 실행(서로 다른 엔진일 때).",
+        "staging→target INSERT 실행(서로 다른 엔진일 때). local_stage: executor 가 "
+        "세그먼트 호스트 로컬 CSV 로 export 후, GP 가 file:// 외부테이블로 세그먼트 로컬 "
+        "병렬 read 하여 staging 적재→target INSERT(2-phase, executor co-locate 필요).",
     )
     staging_table: Optional[str] = Field(
         default=None,
@@ -485,6 +507,32 @@ class CreateJobRequest(BaseModel):
         default=None,
         description="이 작업의 Impala 쿼리 옵션(SET). 전역 impala.query_options 위에 병합된다. "
         "예: {\"MEM_LIMIT\": \"2g\", \"REQUEST_POOL\": \"etl\"}. 미지정 시 전역값만 적용.",
+    )
+    # ── local_stage 전용 필드 ──
+    external_columns: Optional[str] = Field(
+        default=None,
+        description="local_stage 모드: file:// 외부테이블 컬럼 정의(명시). CSV 컬럼 순서와 "
+        "일치해야 한다. 예: 'user_id int, amount numeric, dt date'.",
+    )
+    insert_sql: Optional[str] = Field(
+        default=None,
+        description="local_stage 모드: staging→target 적재 INSERT 문. "
+        "예: 'INSERT INTO public.sales SELECT * FROM stg_sales'.",
+    )
+    export_local_dir: Optional[str] = Field(
+        default=None,
+        description="local_stage 모드: 로컬 CSV 저장 루트 오버라이드(미지정 시 stage.local_dir). "
+        "모든 세그먼트 호스트가 동일 경로를 쓴다.",
+    )
+    csv_delimiter: Optional[str] = Field(
+        default=None,
+        description="local_stage CSV 컬럼 구분자 오버라이드(미지정 시 stage.csv_delimiter, 기본 `).",
+    )
+    csv_null: Optional[str] = Field(
+        default=None, description="local_stage CSV NULL 표현 오버라이드(미지정 시 설정값)."
+    )
+    csv_quote: Optional[str] = Field(
+        default=None, description="local_stage CSV 인용문자 오버라이드(미지정 시 설정값)."
     )
 
 

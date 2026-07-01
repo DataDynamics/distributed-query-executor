@@ -312,6 +312,17 @@ def create_app(
                     "stage_insert 모드는 staging_table 과 wrapper_query(INSERT) 가 필요합니다. "
                     "staging_ddl 은 선택이며, 없으면 기존 staging_table 을 사용합니다(생성 건너뜀).",
                 )
+        elif req.exec_mode == "local_stage":
+            # local_stage: 각 executor 가 세그먼트 호스트 로컬 CSV 로 export(Phase 1) →
+            # coordinator 가 GP file:// 외부테이블로 적재(Phase 2). 분할된 SELECT 는 그대로
+            # export 하므로 wrapper 를 쓰지 않는다(아래 wrapper 분기로 내려가지 않도록 여기서
+            # 분기를 끊는다). 외부테이블 컬럼 정의·staging·최종 INSERT 는 요청자가 명시한다.
+            if not (req.staging_table and req.external_columns and req.insert_sql):
+                raise QueryValidationError(
+                    "LOCAL_STAGE_REQUIRES_FIELDS",
+                    "local_stage 모드는 staging_table, external_columns, insert_sql 가 "
+                    "필요합니다. staging_ddl 은 선택입니다.",
+                )
         elif req.wrapper_query:
             # stage_insert 가 아니면서 래퍼 쿼리가 주어진 경우: 분할된 각 sub-query를
             # 래퍼의 placeholder 자리에 치환해 최종 실행 SQL을 만든다(예: 집계/CTE로 감싸기).
@@ -426,9 +437,24 @@ def create_app(
                 exec_mode=req.exec_mode,
                 staging_table=req.staging_table,
                 staging_ddl=req.staging_ddl,
-                insert_sql=req.wrapper_query if req.exec_mode == "stage_insert" else None,
+                insert_sql=(
+                    req.insert_sql if req.exec_mode == "local_stage"
+                    else req.wrapper_query if req.exec_mode == "stage_insert"
+                    else None
+                ),
                 impala_query_options=req.impala_query_options,
+                external_columns=req.external_columns,
+                export_local_dir=req.export_local_dir,
+                csv_delimiter=req.csv_delimiter,
+                csv_null=req.csv_null,
+                csv_quote=req.csv_quote,
                 status=JobStatus.SPLITTING,
+            )
+            # local_stage: 각 task 가 쓸 로컬 CSV 경로를 확정한다({local_dir}/{job_id}/f{idx}.csv).
+            # 이 경로가 executor 의 write 대상이자 coordinator 의 file:// URI 조립 근거가 된다.
+            _local_dir = (
+                (req.export_local_dir or settings.stage_local_dir)
+                if req.exec_mode == "local_stage" else None
             )
             job.tasks = [
                 Task(
@@ -436,8 +462,11 @@ def create_app(
                     executor_url=url,
                     sub_query=sq.sql,
                     partition_values=sq.partition_values,
+                    out_path=(
+                        f"{_local_dir}/{job.job_id}/f{idx}.csv" if _local_dir else None
+                    ),
                 )
-                for sq, url in zip(sub_queries, executor_urls)
+                for idx, (sq, url) in enumerate(zip(sub_queries, executor_urls))
             ]
             # 분할 결과를 Task 목록으로 펼쳐 Job 에 담고 저장소에 등록한다.
             store.add(job)

@@ -90,6 +90,7 @@ executor:
   host: ${executor.host:0.0.0.0}                          # 바인드 주소(포트는 EXECUTOR_PORT 환경변수)
   self_report: ${executor.self_report:false}             # 상태를 공유 DB에 self-report 할지(멀티 coordinator)
   advertise_url: ${executor.advertise_url:}              # self-report 에 기록할 자기 base URL(HA URL 키 부하 뷰). coordinator.executors 의 URL 과 일치
+  gp_hostname: ${executor.gp_hostname:}                  # local_stage: 이 executor 의 GP 세그먼트 호스트명(gp_segment_configuration.hostname 과 일치, file:// URI 조립용)
 
   status_table: ${executor.status_table:executor_status} # self-report 상태 테이블
   status_interval_s: ${executor.status_interval_s:10}    # self-report 주기(초)
@@ -117,3 +118,11 @@ executor:
     pipeline: ${copy.pipeline:true}               # Impala 읽기와 GP COPY 를 별도 스레드로 겹쳐 실행(벽시계 단축)
     queue_size: ${copy.queue_size:8}              # 파이프라인 큐 크기(배치 개수). 메모리 ≈ queue_size × batch_size 행
     format: ${copy.format:text}                   # COPY 포맷 text|binary. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백)
+  stage:                                          # local_stage(file:// 세그먼트 로컬 스테이징, DESIGN §17)
+    local_dir: ${stage.local_dir:/data1/query-executor/stage}  # 로컬 CSV 저장 루트(모든 세그먼트 호스트 동일 경로, job_id 하위로 격리)
+    csv_delimiter: ${stage.csv_delimiter:`}       # CSV 컬럼 구분자(기본 backtick `). executor write 와 외부테이블 FORMAT 이 공유
+    csv_null: ${stage.csv_null:}                  # CSV NULL 표현(기본 빈 문자열)
+    csv_quote: ${stage.csv_quote:"}               # CSV 인용문자(기본 ")
+    cleanup: ${stage.cleanup:true}                # 적재 성공 후 로컬 CSV 디렉터리/외부테이블 정리 여부
+    validate_hosts: ${stage.validate_hosts:true}  # Phase 2 전 file:// 호스트를 gp_segment_configuration 과 대조 검증(불일치 조기 실패)
+    max_files_per_host: ${stage.max_files_per_host:0}  # 호스트당 최대 파일 수(0=gp_segment_configuration 의 호스트별 primary 세그먼트 수 S_h)
