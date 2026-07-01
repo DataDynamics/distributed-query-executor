@@ -408,6 +408,13 @@ executor 마다 따로 적용되는지를 알려 줍니다.
 > `copy.pipeline=false` 로 두면 읽기·쓰기가 직렬 실행돼 `read_wait`/`write_wait` 가 순수 벽시계로
 > 나뉩니다. 파이프라인이 의심스러울 때 원인 격리를 위해 잠깐 꺼서 비교하는 용도로 유용합니다.
 
+> **구조적 한계(`finalize_wait` 이 계속 지배)라면 적재 방식 자체를 바꾼다.** `parallelism` 을 더
+> 올려도 결국 각 executor 의 **단일 COPY 스트림이 GP 마스터로 몰리는 것**이 천장일 수 있습니다.
+> 이때는 `exec_mode=local_stage`(DESIGN §17)가 적재 병렬성을 **GP 세그먼트로 이동**시켜 이 병목을
+> 없앱니다 — executor 가 세그먼트 호스트 로컬 CSV 로 export 하고, GP 가 `file://` 외부테이블로
+> **세그먼트별 로컬 파일을 병렬 read** 하므로 단일 소켓 병목이 사라집니다(단, executor 를 GP 세그먼트
+> 호스트에 co-locate 해야 함).
+
 ---
 
 ## 4. 값을 정하는 기준 (Sizing)

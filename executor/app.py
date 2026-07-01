@@ -453,9 +453,14 @@ def create_app(
         safe = os.path.basename(job_id)  # 경로 조작 방지: 하위 디렉터리명만 사용
         target = os.path.join(settings.stage_local_dir, safe)
         removed = False
-        if safe and os.path.isdir(target):
-            shutil.rmtree(target, ignore_errors=True)
-            removed = True
+        with job_log_context(job_id):
+            if safe and os.path.isdir(target):
+                shutil.rmtree(target, ignore_errors=True)
+                removed = True
+                logger.info("local_stage 로컬 CSV 정리: %s 삭제", target)
+            else:
+                # coordinator 가 이미 정리했거나 이 호스트엔 파일이 없던 경우(멱등).
+                logger.debug("local_stage 로컬 CSV 정리: 대상 없음(%s)", target)
         return {"job_id": job_id, "removed": removed}
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")

@@ -797,15 +797,16 @@ INSERT INTO staging.sales_part SELECT * FROM (SELECT a, dt FROM sales WHERE dt I
 ### 적재 방식 (`exec_mode`)
 
 분할하고 감싼 쿼리를 executor 가 "어떤 방식으로" 실행해 데이터를 적재할지는 `exec_mode` 로
-고릅니다. 세 가지 모드가 있는데, 핵심 차이는 "원본과 대상이 같은 엔진인가, 다른 엔진인가"와
-"적재를 COPY 로 하는가, SQL 로 하는가"입니다. 아래 표에서 각 모드의 동작과 어울리는 상황을
-정리했습니다.
+고릅니다. 네 가지 모드가 있는데, 핵심 차이는 "원본과 대상이 같은 엔진인가, 다른 엔진인가"와
+"적재를 COPY 로 하는가, SQL 로 하는가, 세그먼트 로컬 파일로 하는가"입니다. 아래 표에서 각
+모드의 동작과 어울리는 상황을 정리했습니다.
 
 | `exec_mode` | 동작 | 적합한 경우 |
 |---|---|---|
 | `copy` (기본) | Impala 에서 sub-query 를 **읽어** Greenplum 에 `COPY` 적재 | 소스(Impala)와 타깃(Greenplum)이 다른 엔진. 단, COPY는 SQL이 아니라 STDIN 벌크 로드라 **대상 테이블 컬럼과 정확히 일치**해야 한다. 래퍼는 **행을 반환하는 SELECT** 여야 하며(적재는 COPY가 수행), INSERT 래퍼를 주면 422(`COPY_WRAPPER_NOT_SELECT`) |
 | `statement` | wrapper 로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB(`greenplum.dsn`)에서 **그대로 실행** | `INSERT INTO ... SELECT (분할쿼리)` 처럼 한 DB 안에서 INSERT 로 적재. 컬럼 매핑은 INSERT 컬럼 목록/SELECT 가 담당하므로 COPY 의 엄격한 컬럼 일치 제약이 없다 |
 | `stage_insert` | Impala SELECT 결과를 Greenplum **staging(TEMP) 테이블에 COPY** 적재 → staging 을 `FROM` 으로 하는 **INSERT 실행** | **SELECT은 Impala, INSERT은 Greenplum** 처럼 서로 다른 엔진. Greenplum INSERT 가 읽을 `FROM` 소스가 없으므로 임시 테이블을 경유한다 |
+| `local_stage` | executor 가 세그먼트 호스트 **로컬 CSV** 로 export → Greenplum 이 `file://` 외부테이블로 **세그먼트별 로컬 파일을 병렬 read** 해 staging 적재 → target INSERT (2-phase) | executor 를 **GP 세그먼트 호스트에 co-locate** 한 대량 이관. `copy` 의 단일 COPY 소켓 병목을 세그먼트 병렬 read 로 대체한다(자세히는 [DESIGN.md](DESIGN.md) §17) |
 
 ### stage_insert 모드 (서로 다른 엔진)
 
@@ -849,6 +850,40 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 > 필수 필드(`staging_table`/`wrapper_query`)가 빠지면 422(`STAGE_INSERT_REQUIRES_FIELDS`).
 > `staging_ddl` 은 선택이며, 생략하면 테이블 생성을 건너뛰고 기존 `staging_table` 을 쓴다.
 > DDL 을 줄 때는 `CREATE TEMP TABLE` 권장(세션별 격리 → 병렬 task 간 이름 충돌 없음, 자동 정리).
+
+### local_stage 모드 (세그먼트 로컬 스테이징, `file://`)
+
+`copy` 는 executor 가 읽은 데이터를 **자기 클라이언트 소켓 하나**로 Greenplum 에 COPY 로 밀어
+넣습니다. 데이터가 아주 크면 이 단일 소켓이 GP 진입점에서 병목이 됩니다. `local_stage` 는 그
+병목을 **적재 병렬성을 GP 세그먼트로 옮겨** 해소하는 모드입니다.
+
+동작은 2단계입니다. 먼저 executor 가 자기 몫의 Impala 결과를 **자기 호스트 로컬 디스크에 CSV
+파일**로 떨어뜨립니다(Phase 1). 그다음 coordinator 가 GP master 에 `file://` 외부테이블을 만들어
+**각 세그먼트가 자기 호스트의 로컬 파일만 병렬로 읽어** staging 에 적재하고, staging 을 target
+으로 INSERT 합니다(Phase 2). 적재 시 네트워크를 타는 셔플이 없어 세그먼트 수만큼 병렬로 흐릅니다.
+
+이 구조가 성립하려면 **executor 가 각 GP 세그먼트 호스트에 co-locate** 되어야 하고, 로컬 CSV
+디렉터리(`stage.local_dir`)를 GP 세그먼트 프로세스가 읽을 수 있어야 합니다. 필수 필드는
+`external_columns`(외부테이블 컬럼 정의), `staging_table`, `insert_sql`(staging→target INSERT)이며,
+`staging_ddl` 은 선택입니다. CSV 구분자 기본값은 데이터에 잘 없는 backtick(`` ` ``)입니다.
+
+```bash
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
+  "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('\''2026-06-01'\'','\''2026-06-02'\'')",
+  "partition_column": "dt",
+  "target_table": "public.sales_mirror",
+  "parallelism": 4,
+  "exec_mode": "local_stage",
+  "external_columns": "user_id bigint, amount numeric, dt date",
+  "staging_table": "stg_sales",
+  "insert_sql": "INSERT INTO public.sales_mirror SELECT * FROM stg_sales"
+}'
+```
+
+> 필수 필드(`staging_table`/`external_columns`/`insert_sql`)가 빠지면 422(`LOCAL_STAGE_REQUIRES_FIELDS`).
+> coordinator 는 파일을 호스트당 세그먼트 수(`file://` 규칙) 이하로 배분하고, executor 가 보고한
+> GP hostname 으로 `file://` URI 를 조립하며, 적재 전에 `gp_segment_configuration` 과 호스트를
+> 대조 검증합니다. 설계·운영 시나리오는 [DESIGN.md](DESIGN.md) §17 과 [SCENARIO.md](SCENARIO.md) 참고.
 
 `statement` 모드는 COPY 를 거치지 않고 INSERT 래퍼를 대상 DB 에서 직접 실행합니다. 아래가 그
 예시입니다.
