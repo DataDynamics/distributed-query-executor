@@ -224,6 +224,11 @@ DASHBOARD_HTML = """<!doctype html>
   .phdot { font-size:11px; padding:1px 7px; border-radius:9px; background:#ddf4ff;
            color:var(--acc); font-weight:600; }
   .tkhd { margin:14px 0 6px; font-weight:600; }
+  /* 소요 시간 열과 에러 열의 폭 비율을 1:10 으로 고정한다(에러가 소요의 10배). */
+  th.col-dur, td.col-dur { width:60px; }
+  th.col-err, td.col-err { width:600px; max-width:600px; }
+  td.col-err { text-align:left; white-space:normal; word-break:break-word;
+               font-family:ui-monospace,Menlo,Consolas,monospace; }
 </style>
 </head>
 <body>
@@ -370,9 +375,10 @@ function closePhases(){ $("#pmodal").style.display = 'none'; }
 const jobPhaseLink = id => `<a class="lnk" onclick="showJobPhases('${id}');return false">타임라인</a>`;
 
 function table(cols, rows){
-  let h = "<table><thead><tr>" + cols.map(c=>`<th>${c.t}</th>`).join("") + "</tr></thead><tbody>";
+  const cls = c => c.cls ? ` class="${c.cls}"` : "";
+  let h = "<table><thead><tr>" + cols.map(c=>`<th${cls(c)}>${c.t}</th>`).join("") + "</tr></thead><tbody>";
   if(!rows.length) h += `<tr><td colspan="${cols.length}" class="mut">데이터 없음</td></tr>`;
-  for(const r of rows){ h += "<tr>" + cols.map(c=>`<td>${c.f?c.f(r):fmt(r[c.k])}</td>`).join("") + "</tr>"; }
+  for(const r of rows){ h += "<tr>" + cols.map(c=>`<td${cls(c)}>${c.f?c.f(r):fmt(r[c.k])}</td>`).join("") + "</tr>"; }
   return h + "</tbody></table>";
 }
 async function getJSON(u){ const r = await fetch(u); return r.json(); }
@@ -422,8 +428,8 @@ async function loadHist(){
     {t:"적재 행수", f:r=>fmtNum(r.total_rows_written)},
     {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
-    {t:"소요 시간", f:r=>dur(r.started_at, r.finished_at)},
-    {t:"에러", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"소요 시간", cls:"col-dur", f:r=>dur(r.started_at, r.finished_at)},
+    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
   ];
   const n = d.rows ? d.rows.length : 0;
   const from = histTotal ? histOffset + 1 : 0;
@@ -458,7 +464,7 @@ async function loadExec(){
     {t:"동시 처리", f:r=>concBar(r.active_tasks, r.max_concurrent_tasks)},
     {t:"누적 배정", f:r=>fmtNum(assign[r.executor_url])},
     {t:"Last Seen", f:r=>`<span class="mut">${fmtDate(r.updated_at||r.last_checked)}</span>`},
-    {t:"Error", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"Error", cls:"col-err", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
   ];
   $("#p-exec").innerHTML = cards + table(cols, d.executors);
 }
