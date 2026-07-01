@@ -193,7 +193,7 @@ GP/Impala 없이 통과시킬 수 있다. **운영 코드 변경 불필요** —
 | **토폴로지 dict** | `{seg1: S1, seg2: S2}` — 예산 배분/검증을 실제로 태운다. |
 | **하니스 2종** | (B-3) in-process(LocalDispatcher) / (B-4) 멀티 프로세스 HTTP(HttpDispatcher). |
 
-**`MockLocalStageBackend` 구현 스케치** (`tests/` 또는 `tests/helpers.py`):
+**`MockLocalStageBackend`** (구현됨: `tests/helpers.py` — B-3·B-4 가 공유):
 
 ```python
 import csv, os, re
@@ -297,11 +297,15 @@ assert client.get(f"/jobs/{job_id}").json()["status"] == "DONE"   # BackgroundTa
 > in-process 에서는 "파일이 써졌고 읽혔다"까지 검증하고, **cleanup 검증은 B-4 또는 executor
 > `/stage/{job}/cleanup` 직접 호출**로 한다.
 
-### B-4. 하니스 2 — 멀티 프로세스 HTTP (HttpDispatcher, 선택)
+### B-4. 하니스 2 — 멀티 프로세스 HTTP (HttpDispatcher)
+
+> **구현됨**: `tests/test_local_stage_http.py`. executor 2대를 uvicorn 스레드 서버로 띄워 실제
+> HTTP 경로(POST /tasks·폴링·`/metrics` gp_hostname 수집·cleanup 팬아웃)를 태우고, 한 호스트에
+> executor 가 여럿인 경우(파일 예산 라운드로빈)까지 검증한다.
 
 HTTP 경로(POST /tasks·폴링·`/metrics` gp_hostname 수집·cleanup 팬아웃)까지 덮고 싶을 때. 단일 테스트
 머신에서 executor 를 실제 포트로 띄우고, **모든 파일은 공유 파일시스템(로컬)** 에 쓰되 gp_hostname 만
-`seg1/seg2` 로 흉내 낸다(mock load 는 host 를 무시하고 경로로 읽으므로 멀티 호스트를 1머신에서 재현).
+`seg`(또는 `seg1/seg2`)로 흉내 낸다(mock load 는 host 를 무시하고 경로로 읽으므로 멀티 호스트를 1머신에서 재현).
 
 준비:
 1. **executor N개**: `create_executor_app(backend=MockLocalStageBackend(...))` 를 각각 `uvicorn`
@@ -332,8 +336,10 @@ HTTP 경로(POST /tasks·폴링·`/metrics` gp_hostname 수집·cleanup 팬아�
 
 ### B-6. 기존 테스트와의 관계 / 남은 개선
 
-- 현재 `tests/test_local_stage.py`(31개)는 stage.py 순수 함수·executor 라우팅·2-phase·gp_hostname·
-  파일 예산을 **얇게** 덮는다. 본 문서의 `MockLocalStageBackend` 는 그 위에 **"파일 루프 닫힘"** 통합을 더한다.
+- `tests/test_local_stage.py`(31개)는 stage.py 순수 함수·executor 라우팅·2-phase·gp_hostname·
+  파일 예산을 **얇게** 덮는다. `tests/test_local_stage_integration.py`(B-3, in-process)와
+  `tests/test_local_stage_http.py`(B-4, 실 HTTP)가 `MockLocalStageBackend`(`tests/helpers.py`)로
+  **"파일 루프 닫힘"** 통합을 더한다.
 - **운영 코드 개선 후보**(테스트하며 드러난 것):
   - `build_backend` 가 `greenplum.dsn` 없이 **impala-only export 백엔드**를 고르게 하면, export 전용
     executor 가 GP DSN 없이도 실백엔드를 쓸 수 있다(현재는 DSN 필요, 연결은 lazy 라 무해하지만 혼란).

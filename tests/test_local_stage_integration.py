@@ -7,9 +7,7 @@ Phase 2(file:// 경로 파싱 → read)가 그대로 읽어 target 에 넣는 �
 
 from __future__ import annotations
 
-import csv
-import os
-import re
+from collections import Counter
 
 from fastapi.testclient import TestClient
 
@@ -18,48 +16,8 @@ from coordinator.config import settings
 from coordinator.dispatcher import LocalDispatcher
 from coordinator.job_store import JobStore
 from coordinator.stage import host_of
-from executor.backend import MockBackend
 
-
-class MockLocalStageBackend(MockBackend):
-    """export=실 CSV 파일 write, load=file:// 경로 파싱→read→target 집계, 토폴로지 제공."""
-
-    def __init__(self, topology=None):
-        super().__init__()
-        self.topology = dict(topology or {})
-        self.target: list = []          # 인메모리 GP target
-        self.exported: list = []        # (out_path, rows)
-        self.loads: list = []           # external_ddl 기록
-
-    def export_to_local_csv(self, sub_query, out_path, csv_options=None,
-                            on_progress=None, query_options=None, on_stage=None):
-        opts = csv_options or {}
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        vals = re.findall(r"'([^']*)'", sub_query)  # sub_query 의 IN 값 → 값당 1행
-        with open(out_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f, delimiter=opts.get("delimiter", "`"),
-                           quotechar=opts.get("quote", '"'), lineterminator="\n")
-            for i, v in enumerate(vals):
-                w.writerow([i, 1.0, v])
-        self.exported.append((out_path, len(vals)))
-        if on_progress:
-            on_progress(len(vals))
-        return len(vals)
-
-    def load_external_csv(self, external_ddl, staging_ddl, staging_load_sql,
-                          pre_delete_sql, insert_sql, cleanup_sqls=None, on_stage=None):
-        self.loads.append(external_ddl)
-        paths = re.findall(r"file://[^/]*(/[^']+)", external_ddl)  # host 뒤 경로만
-        loaded = 0
-        for p in paths:
-            with open(p, newline="", encoding="utf-8") as f:
-                rows = list(csv.reader(f, delimiter="`"))
-            self.target.extend(rows)
-            loaded += len(rows)
-        return loaded
-
-    def segment_host_counts(self):
-        return self.topology
+from .helpers import MockLocalStageBackend
 
 
 def _job_json():
@@ -93,7 +51,6 @@ def test_local_stage_mock_integration_closes_the_loop(monkeypatch, tmp_path):
     assert body["total"] == 4
 
     # ① 파일 예산: 호스트당 ≤ S_h(2), 총 4파일
-    from collections import Counter
     detail = client.get(f"/jobs/{job_id}").json()
     per_host = Counter(host_of(t["executor_url"]) for t in detail["tasks"])
     assert per_host["seg1"] <= 2 and per_host["seg2"] <= 2
