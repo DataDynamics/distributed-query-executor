@@ -23,6 +23,7 @@ Coordinator는 쿼리 결과 행을 직접 받지 않는다. executor가 Impala 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -393,8 +394,13 @@ class HttpDispatcher(_DispatcherBase):
                 task.attempt += 1
                 task.executor_url = url  # 현재 시도 중인 executor 를 task 에 반영
                 try:
+                    logger.debug(
+                        "task %s 디스패치 시도 executor=%s attempt=%s",
+                        task.task_id, url, task.attempt,
+                    )
                     await self._start_task(client, job, task, url)
                     started = True
+                    logger.debug("task %s 시작 성공 executor=%s", task.task_id, url)
                     break
                 except _RETRYABLE as exc:
                     last_err = exc
@@ -494,6 +500,8 @@ class HttpDispatcher(_DispatcherBase):
             data = resp.json()
             # executor가 보고한 상태/진척으로 로컬 task를 갱신한다. rows_written 은
             # 아직 보고 전이면 기존 값을 유지한다.
+            prev_status = task.status
+            prev_phase = task.current_phase
             task.status = TaskStatus(data["status"])
             task.rows_written = data.get("rows_written", task.rows_written)
             task.error = data.get("error")
@@ -503,6 +511,15 @@ class HttpDispatcher(_DispatcherBase):
             task.current_phase = data.get("current_phase", task.current_phase)
             if data.get("phases") is not None:
                 task.phases = data["phases"]
+            # 상세 추적(DEBUG): 폴링에서 상태나 단계가 바뀐 순간만 남긴다(매 폴링 잡음 억제).
+            if logger.isEnabledFor(logging.DEBUG) and (
+                task.status != prev_status or task.current_phase != prev_phase
+            ):
+                logger.debug(
+                    "task %s 폴링: 상태=%s 단계=%s 읽음=%s 적재=%s",
+                    task.task_id, task.status.value, task.current_phase,
+                    task.rows_read, task.rows_written,
+                )
 
     async def cancel(self, job: Job) -> None:
         """취소 요청을 처리한다: 취소 플래그를 세우고 진행 중 task의 executor에 전파한다.
@@ -573,15 +590,24 @@ class LocalDispatcher(_DispatcherBase):
                 # local 모드도 세부 단계를 채우도록 진행률/단계 콜백을 백엔드에 넘긴다.
                 def _progress(n: int) -> None:
                     task.rows_written = n
+                # 블로킹 백엔드를 스레드로 넘길 때 로그 컨텍스트(job_id/task_id)를 복사해 함께
+                # 넘긴다 → 백엔드 스레드의 상세 로그(단계 전이 등)에도 [job][task] 가 붙는다.
+                ctx = contextvars.copy_context()
+                logger.debug(
+                    "적재 시작 exec_mode=%s target=%s", job.exec_mode, job.target_table
+                )
                 # exec_mode 에 따라 backend 의 다른 실행 경로를 선택한다.
                 if job.exec_mode == "statement":
                     rows = await loop.run_in_executor(
-                        None, lambda: backend.execute(task.sub_query, on_stage=task.on_stage)
+                        None, lambda: ctx.run(
+                            backend.execute, task.sub_query, on_stage=task.on_stage
+                        )
                     )
                 elif job.exec_mode == "stage_insert":
                     rows = await loop.run_in_executor(
                         None,
-                        lambda: backend.stage_and_insert(
+                        lambda: ctx.run(
+                            backend.stage_and_insert,
                             task.sub_query, job.staging_table, job.staging_ddl, job.insert_sql,
                             on_progress=_progress,
                             query_options=job.impala_query_options,
@@ -591,7 +617,8 @@ class LocalDispatcher(_DispatcherBase):
                 else:
                     rows = await loop.run_in_executor(
                         None,
-                        lambda: backend.move(
+                        lambda: ctx.run(
+                            backend.move,
                             task.sub_query, job.target_table, job.write_mode,
                             job.partition_column, task.partition_values,
                             on_progress=_progress,

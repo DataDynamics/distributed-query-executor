@@ -18,6 +18,7 @@ Job의 진행률은 종료된(terminal) Task 비율로 계산한다(아래 ``Job
 from __future__ import annotations
 
 import enum
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -27,6 +28,8 @@ from pydantic import BaseModel, Field
 
 from core.phases import phase_of, record_stage
 from core.timeutil import now_iso as _now_iso  # KST(naive) ISO 시각 생성
+
+logger = logging.getLogger(__name__)
 
 
 class JobStatus(str, enum.Enum):
@@ -131,8 +134,15 @@ class Task:
         rows = record_stage(self.phases, name, event, meta)
         if event == "start":
             self.current_phase = name
-        elif event == "end" and name == "STREAM_COPY" and rows is not None:
-            self.rows_read = rows
+            logger.debug("단계 시작 %s", name)  # 상세 추적(DEBUG). [job][task] 자동 주입
+        elif event == "end":
+            if name == "STREAM_COPY" and rows is not None:
+                self.rows_read = rows
+            phase = phase_of(self.phases, name)
+            dur = phase.get("duration_ms") if phase else None
+            extra = phase.get("extra") if phase else None
+            logger.debug("단계 종료 %s (소요=%sms, 행수=%s, 지표=%s)",
+                         name, dur, rows, extra)
 
     def impala_done_at(self) -> Optional[str]:
         """Impala 조회 완료 시각(STREAM_COPY 종료). 없으면 None."""

@@ -348,6 +348,7 @@ class ImpalaToGreenplumBackend:
                         _emit(on_stage, "STAGING_DDL", "end")
                     # staging_ddl 이 없으면 생성을 건너뛰고 기존 staging_table 에 그대로 COPY.
                     copy_sql = f"COPY {staging_table} ({', '.join(columns)}) FROM STDIN"
+                    logger.debug("stage_insert COPY 시작: %s", copy_sql)
                     _emit(on_stage, "STREAM_COPY", "start")
                     loaded, read_wait, write_wait = self._stream_to_copy(
                         cur, gp_cur, copy_sql, on_progress
@@ -355,6 +356,8 @@ class ImpalaToGreenplumBackend:
                     # STREAM_COPY 종료 = Impala 조회 완료 시점, loaded = 읽은(=staging 적재) 건수.
                     _emit(on_stage, "STREAM_COPY", "end",
                           self._copy_stats(loaded, read_wait, write_wait))
+                    logger.debug("stage_insert 적재 완료(%s행) → INSERT 실행: %s",
+                                 loaded, insert_sql)
                     _emit(on_stage, "INSERT", "start")
                     gp_cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM staging
                     affected = gp_cur.rowcount
@@ -415,6 +418,7 @@ class ImpalaToGreenplumBackend:
                         _emit(on_stage, "DELETE", "end",
                               {"rows": gp_cur.rowcount if gp_cur.rowcount and gp_cur.rowcount > 0 else None})
                     copy_sql = f"COPY {target_table} ({', '.join(columns)}) FROM STDIN"
+                    logger.debug("copy COPY 시작: %s", copy_sql)
                     _emit(on_stage, "STREAM_COPY", "start")
                     rows_written, read_wait, write_wait = self._stream_to_copy(
                         cur, gp_cur, copy_sql, on_progress

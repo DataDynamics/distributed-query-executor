@@ -178,7 +178,12 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
     logging.setLogRecordFactory(_record_factory)
 
     # 설정의 레벨 문자열("INFO" 등)을 logging 모듈 상수로 변환. 알 수 없는 값이면 INFO.
+    # app.debug=true 면 상세 추적을 위해 강제로 DEBUG 로 낮춘다(logging.level 설정보다 우선).
+    # 상세 로그(단계 전이·진행률 등)는 모두 DEBUG 이므로, 평상시(INFO)에는 찍히지 않아
+    # 추가 IO 가 발생하지 않고, 필요할 때만 debug 모드/레벨로 켜서 파일로 흐름을 추적한다.
     log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    if getattr(settings, "debug", False):
+        log_level = logging.DEBUG
     formatter = logging.Formatter(fmt=LOG_FORMAT, datefmt=DATE_FORMAT)
     program_filter = _ProgramNameFilter(program_name)
 
@@ -222,3 +227,10 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
         logging.INFO if log_level <= logging.INFO else logging.WARNING
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    # 기동 시 유효 로그 레벨을 한 줄 남겨, 파일만 보고도 상세(DEBUG) 추적이 켜졌는지 알 수 있게 한다.
+    logging.getLogger(__name__).info(
+        "로깅 구성 완료: level=%s (debug=%s), dir=%s, file=%s",
+        logging.getLevelName(log_level), getattr(settings, "debug", False),
+        log_dir, filename,
+    )

@@ -18,12 +18,15 @@
 from __future__ import annotations
 
 import enum
+import logging
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from pydantic import BaseModel
 
 from core.phases import phase_of, record_stage
+
+logger = logging.getLogger(__name__)
 
 
 class TaskStatus(str, enum.Enum):
@@ -108,8 +111,17 @@ class Task:
         rows = record_stage(self.phases, name, event, meta)
         if event == "start":
             self.current_phase = name
-        elif event == "end" and name == "STREAM_COPY" and rows is not None:
-            self.rows_read = rows
+            # 상세 추적(DEBUG): 단계 시작. [job][task] 는 로그 컨텍스트가 자동 주입한다.
+            logger.debug("단계 시작 %s", name)
+        elif event == "end":
+            if name == "STREAM_COPY" and rows is not None:
+                self.rows_read = rows
+            phase = phase_of(self.phases, name)
+            dur = phase.get("duration_ms") if phase else None
+            extra = phase.get("extra") if phase else None
+            # 상세 추적(DEBUG): 단계 종료 + 소요(ms)/행수/부가지표(read/write 대기 등).
+            logger.debug("단계 종료 %s (소요=%sms, 행수=%s, 지표=%s)",
+                         name, dur, rows, extra)
 
     def impala_done_at(self) -> Optional[str]:
         """Impala 조회가 완료된 시각(STREAM_COPY 단계 종료 시각). 없으면 None."""
