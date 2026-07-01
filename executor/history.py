@@ -24,17 +24,19 @@ _INSERT = """
 INSERT INTO {table}
     (job_id, task_id, username, executor_id, status, rows_written, error,
      started_at, finished_at, sub_query, exec_mode, staging_ddl, insert_sql,
-     rows_read, read_wait_ms, write_wait_ms, finalize_wait_ms, impala_done_at, phases)
+     rows_read, read_wait_ms, write_wait_ms, read_starve_ms, finalize_wait_ms,
+     impala_done_at, phases)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-        %s, %s, %s, %s, %s, %s::jsonb)
+        %s, %s, %s, %s, %s, %s, %s::jsonb)
 """
 
 
-def _stream_copy_metrics(task) -> tuple[int | None, int | None, int | None]:
-    """STREAM_COPY 단계의 읽기/쓰기/서버종료 대기(ms)를 추출한다(없으면 None들)."""
+def _stream_copy_metrics(task):
+    """STREAM_COPY 단계의 읽기/쓰기/굶음/서버종료 대기(ms)를 추출한다(없으면 None들)."""
     phase = phase_of(getattr(task, "phases", None) or [], "STREAM_COPY")
     extra = (phase or {}).get("extra") or {}
-    return extra.get("read_wait_ms"), extra.get("write_wait_ms"), extra.get("finalize_wait_ms")
+    return (extra.get("read_wait_ms"), extra.get("write_wait_ms"),
+            extra.get("read_starve_ms"), extra.get("finalize_wait_ms"))
 
 
 def _executor_id() -> str:
@@ -94,11 +96,12 @@ class TaskHistoryRepository:
                     "SELECT recorded_at, job_id, task_id, username, status, "
                     "rows_written, error, started_at, finished_at, sub_query, "
                     "exec_mode, staging_ddl, insert_sql, rows_read, read_wait_ms, "
-                    "write_wait_ms, finalize_wait_ms, impala_done_at, phases FROM ("
+                    "write_wait_ms, read_starve_ms, finalize_wait_ms, impala_done_at, phases FROM ("
                     "  SELECT DISTINCT ON (task_id) recorded_at, job_id, task_id, "
                     "    username, status, rows_written, error, started_at, finished_at, "
                     "    sub_query, exec_mode, staging_ddl, insert_sql, rows_read, "
-                    "    read_wait_ms, write_wait_ms, finalize_wait_ms, impala_done_at, phases "
+                    "    read_wait_ms, write_wait_ms, read_starve_ms, finalize_wait_ms, "
+                    "    impala_done_at, phases "
                     f"  FROM {self.table} WHERE executor_id = %s "
                     "  ORDER BY task_id, recorded_at DESC"
                     ") t ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
@@ -116,10 +119,10 @@ class TaskHistoryRepository:
                 "sub_query": r[9], "exec_mode": r[10],
                 "staging_ddl": r[11], "insert_sql": r[12],
                 "rows_read": r[13], "read_wait_ms": r[14], "write_wait_ms": r[15],
-                "finalize_wait_ms": r[16],
-                "impala_done_at": r[17].isoformat() if r[17] is not None else None,
+                "read_starve_ms": r[16], "finalize_wait_ms": r[17],
+                "impala_done_at": r[18].isoformat() if r[18] is not None else None,
                 # phases 는 JSONB → psycopg 가 파이썬 list/dict 로 역직렬화해 돌려준다.
-                "phases": r[18] or [],
+                "phases": r[19] or [],
             }
             for r in rows
         ]
@@ -149,7 +152,7 @@ class TaskHistoryRepository:
         import psycopg  # 지연 임포트
 
         phases = getattr(task, "phases", None) or []
-        read_wait_ms, write_wait_ms, finalize_wait_ms = _stream_copy_metrics(task)
+        read_wait_ms, write_wait_ms, read_starve_ms, finalize_wait_ms = _stream_copy_metrics(task)
         impala_done_at = task.impala_done_at() if hasattr(task, "impala_done_at") else None
         row = (
             task.job_id,
@@ -168,6 +171,7 @@ class TaskHistoryRepository:
             getattr(task, "rows_read", None),
             read_wait_ms,
             write_wait_ms,
+            read_starve_ms,
             finalize_wait_ms,
             impala_done_at,
             # phases 는 JSONB 컬럼. 표준 라이브러리 json 으로 직렬화해 텍스트로 넣고 ::jsonb 캐스트.

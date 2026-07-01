@@ -359,6 +359,17 @@ class Settings:
         self.copy_preflight: bool = _to_bool(
             _get_nested("executor", "copy", "preflight", True)
         )
+        # COPY 파이프라인: Impala 읽기(fetch)와 Greenplum 쓰기(COPY)를 별도 스레드로 겹쳐
+        # 실행할지 여부. true 면 리더 스레드가 배치를 큐에 채우고 메인 스레드가 COPY 로 흘려
+        # 보내, 두 구간이 직렬이 아니라 병렬로 진행돼 벽시계가 줄어든다(둘이 비슷할수록 효과 큼).
+        self.copy_pipeline: bool = _to_bool(
+            _get_nested("executor", "copy", "pipeline", True)
+        )
+        # 파이프라인 큐 크기(배치 개수). 리더가 라이터보다 앞서 채워 둘 수 있는 배치 수의 상한 —
+        # backpressure 로 메모리를 제한한다(총 버퍼 ≈ queue_size × batch_size 행).
+        self.copy_queue_size: int = int(
+            _get_nested("executor", "copy", "queue_size", 8)
+        )
         # Greenplum 커넥션 풀 최대 크기(executor 1대가 동시에 여는 GP 연결 상한).
         # 0/미설정이면 동시 task 당 1 연결이 되도록 executor.max_concurrent_tasks 와 맞춘다
         # (무제한(0)이면 8 로 폴백). 다운스트림 max_connections 보호의 직접 손잡이다.

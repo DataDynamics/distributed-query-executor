@@ -131,22 +131,88 @@ class _FakeGpCursor:
         return self.copied
 
 
-def test_stream_to_copy_measures_read_and_write_and_stats():
-    backend = ImpalaToGreenplumBackend(
-        impala_dsn={}, greenplum_dsn="postgresql://x", batch_size=10
+def _mk_backend(pipeline):
+    return ImpalaToGreenplumBackend(
+        impala_dsn={}, greenplum_dsn="postgresql://x", batch_size=10,
+        pipeline=pipeline, queue_size=4,
     )
+
+
+def test_stream_serial_measures_read_and_write_and_stats():
+    backend = _mk_backend(pipeline=False)
     cur = _FakeImpalaCursor()
     gp = _FakeGpCursor()
     seen = []
-    loaded, read_wait, write_wait, finalize_wait = backend._stream_to_copy(
+    loaded, read_wait, write_wait, finalize_wait, read_starve = backend._stream_to_copy(
         cur, gp, "COPY t (a, dt) FROM STDIN", on_progress=lambda n: seen.append(n)
     )
     assert loaded == 3  # 2 + 1
     assert gp.copied.rows == [(1, "x"), (2, "y"), (3, "z")]
     assert seen[-1] == 3  # 진행률 콜백이 누적 행수로 호출됨
     assert read_wait >= 0 and write_wait >= 0 and finalize_wait >= 0
-    stats = backend._copy_stats(loaded, read_wait, write_wait, finalize_wait)
+    assert read_starve == 0.0  # 직렬 모드는 굶음 없음
+    stats = backend._copy_stats(loaded, read_wait, write_wait, finalize_wait, read_starve)
     assert stats["rows"] == 3
-    assert "read_wait_ms" in stats and "write_wait_ms" in stats
-    assert "finalize_wait_ms" in stats  # COPY 종료(서버 ingest) 대기도 분리 계측
+    for k in ("read_wait_ms", "write_wait_ms", "read_starve_ms", "finalize_wait_ms"):
+        assert k in stats
     assert stats["rows_per_sec"] >= 0
+
+
+def test_stream_pipelined_reads_all_rows_in_order():
+    """파이프라인 모드도 모든 행을 순서대로 COPY 로 흘려보내는지(리더 스레드 경유)."""
+    backend = _mk_backend(pipeline=True)
+    cur = _FakeImpalaCursor()
+    gp = _FakeGpCursor()
+    seen = []
+    loaded, read_wait, write_wait, finalize_wait, read_starve = backend._stream_to_copy(
+        cur, gp, "COPY t (a, dt) FROM STDIN", on_progress=lambda n: seen.append(n)
+    )
+    assert loaded == 3
+    assert gp.copied.rows == [(1, "x"), (2, "y"), (3, "z")]  # 순서 보존
+    assert seen[-1] == 3
+    assert read_starve >= 0.0
+
+
+def test_stream_pipelined_propagates_reader_error():
+    """리더(Impala fetch)에서 난 예외가 라이터(호출부)로 전파되는지."""
+    class _BoomCursor:
+        description = [("a",)]
+
+        def fetchmany(self, size):
+            raise RuntimeError("impala 폭발")
+
+    backend = _mk_backend(pipeline=True)
+    gp = _FakeGpCursor()
+    try:
+        backend._stream_to_copy(_BoomCursor(), gp, "COPY t (a) FROM STDIN", on_progress=None)
+        assert False, "예외가 전파되어야 한다"
+    except RuntimeError as e:
+        assert "impala 폭발" in str(e)
+
+
+def test_stream_pipelined_writer_error_does_not_deadlock():
+    """라이터(COPY write)가 중간에 죽어도 리더가 큐 put 에서 막혀 join 이 멈추지 않아야 한다.
+
+    큐(=4)보다 많은 배치를 계속 내는 리더 + 첫 write_row 에서 터지는 라이터 조합으로,
+    리더가 put backpressure 에 걸린 상태에서 라이터가 죽는 데드락 시나리오를 강제한다.
+    """
+    class _EndlessCursor:
+        description = [("a",)]
+
+        def fetchmany(self, size):
+            return [(1,)] * size  # 절대 소진되지 않음 → 리더가 큐를 계속 채우려 함
+
+    class _BoomCopy(_FakeCopy):
+        def write_row(self, row):
+            raise RuntimeError("copy 폭발")
+
+    class _BoomGp:
+        def copy(self, sql):
+            return _BoomCopy()
+
+    backend = _mk_backend(pipeline=True)
+    try:
+        backend._stream_to_copy(_EndlessCursor(), _BoomGp(), "COPY t (a) FROM STDIN", None)
+        assert False, "라이터 예외가 전파되어야 한다"
+    except RuntimeError as e:
+        assert "copy 폭발" in str(e)  # 데드락 없이 예외로 종료(테스트가 끝나면 통과)

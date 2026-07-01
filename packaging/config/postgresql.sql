@@ -92,8 +92,9 @@ CREATE TABLE IF NOT EXISTS public.task_history (
     staging_ddl  TEXT,          -- stage_insert 의 staging(TEMP) 생성 DDL
     insert_sql   TEXT,          -- stage_insert 의 INSERT 문(staging→target)
     rows_read     BIGINT,       -- Impala 에서 읽어들인 행수(=조회 건수, STREAM_COPY 종료 시 확정)
-    read_wait_ms  BIGINT,       -- STREAM_COPY 중 Impala 읽기(fetch) 누적 대기(ms)
-    write_wait_ms BIGINT,       -- STREAM_COPY 중 Greenplum 쓰기(write_row 인코딩+송신) 누적 대기(ms)
+    read_wait_ms  BIGINT,       -- STREAM_COPY 중 Impala 읽기(fetch) 누적 시간(ms)
+    write_wait_ms BIGINT,       -- STREAM_COPY 중 Greenplum 쓰기(write_row 인코딩+송신) 누적 시간(ms)
+    read_starve_ms BIGINT,      -- (파이프라인) 라이터가 다음 배치를 기다린 시간(ms). 크면 Impala 병목
     finalize_wait_ms BIGINT,    -- COPY 종료(PQputCopyEnd)+서버 ingest 완료 대기(ms). 크면 서버 병목
     impala_done_at TIMESTAMP,   -- Impala 조회 완료 시각(STREAM_COPY 종료)
     phases        JSONB         -- 세부 단계 타임라인(각 단계 시작/종료/소요/행수/지표)
@@ -109,6 +110,7 @@ ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS insert_sql  TEXT;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS rows_read        BIGINT;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS read_wait_ms     BIGINT;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS write_wait_ms    BIGINT;
+ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS read_starve_ms   BIGINT;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS finalize_wait_ms BIGINT;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS impala_done_at   TIMESTAMP;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS phases           JSONB;

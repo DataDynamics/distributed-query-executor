@@ -114,3 +114,5 @@ executor:
   copy:
     batch_size: ${copy.batch_size:10000}          # COPY 배치 크기(행)
     preflight: ${copy.preflight:true}             # COPY 전 SELECT 컬럼이 대상 테이블에 있는지 사전검증(불일치 조기 실패)
+    pipeline: ${copy.pipeline:true}               # Impala 읽기와 GP COPY 를 별도 스레드로 겹쳐 실행(벽시계 단축)
+    queue_size: ${copy.queue_size:8}              # 파이프라인 큐 크기(배치 개수). 메모리 ≈ queue_size × batch_size 행
