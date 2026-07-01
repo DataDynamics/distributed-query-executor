@@ -370,6 +370,11 @@ class Settings:
         self.copy_queue_size: int = int(
             _get_nested("executor", "copy", "queue_size", 8)
         )
+        # COPY 포맷: text(기본) | binary. binary 는 값을 문자열로 인코딩하지 않아 클라이언트
+        # CPU(write_wait)를 줄일 수 있으나, 컬럼 타입을 정확히 알아야 한다(대상 테이블 카탈로그에서
+        # 해석; 실패하면 자동으로 text 로 폴백). write_wait 이 병목일 때만 켜는 실험적 옵션.
+        _fmt = str(_get_nested("executor", "copy", "format", "text")).strip().lower()
+        self.copy_format: str = _fmt if _fmt in ("text", "binary") else "text"
         # Greenplum 커넥션 풀 최대 크기(executor 1대가 동시에 여는 GP 연결 상한).
         # 0/미설정이면 동시 task 당 1 연결이 되도록 executor.max_concurrent_tasks 와 맞춘다
         # (무제한(0)이면 8 로 폴백). 다운스트림 max_connections 보호의 직접 손잡이다.

@@ -91,6 +91,8 @@ def masked_config(settings) -> list[dict]:
          "Impala 읽기와 GP COPY 를 별도 스레드로 겹쳐 실행(벽시계 단축)"),
         ("greenplum", "copy_queue_size", getattr(settings, "copy_queue_size", 8),
          "파이프라인 큐 크기(배치 개수). 메모리 ≈ queue_size × batch_size 행"),
+        ("greenplum", "copy_format", getattr(settings, "copy_format", "text"),
+         "COPY 포맷 text|binary. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백)"),
         ("logging", "level", settings.log_level, "메인 로그 레벨(이 레벨 이상 기록)"),
         ("logging", "dir", str(settings.log_dir), "로그 디렉터리(일 단위 롤링)"),
         ("logging", "rolling.backup_count", settings.log_rolling_backup_count,

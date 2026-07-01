@@ -14,7 +14,7 @@ import httpx
 
 from core.phases import PHASE_LABELS, phase_of, record_stage
 from executor.app import create_app as create_executor_app
-from executor.backend import ImpalaToGreenplumBackend, MockBackend
+from executor.backend import ImpalaToGreenplumBackend, MockBackend, _resolve_copy_types
 
 
 # ─────────────────────────── 순수 로직 ───────────────────────────
@@ -216,3 +216,46 @@ def test_stream_pipelined_writer_error_does_not_deadlock():
         assert False, "라이터 예외가 전파되어야 한다"
     except RuntimeError as e:
         assert "copy 폭발" in str(e)  # 데드락 없이 예외로 종료(테스트가 끝나면 통과)
+
+
+# ─────────────────── 바이너리 COPY: 타입 해석 + 폴백 ───────────────────
+class _TypeGpCursor:
+    """pg_attribute/pg_type 조회를 흉내내는 GP 커서(고정 타입맵 반환)."""
+
+    def __init__(self, typmap):
+        self._typmap = typmap  # {attname: typname}
+
+    def execute(self, sql, params=None):
+        self._rows = list(self._typmap.items())
+
+    def fetchall(self):
+        return self._rows
+
+
+def test_resolve_copy_types_maps_columns_in_select_order():
+    gp = _TypeGpCursor({"a": "int4", "dt": "text"})
+    # SELECT 컬럼 순서(dt, a)대로 타입이 정렬돼 나와야 한다(카탈로그 순서와 무관).
+    assert _resolve_copy_types(gp, "t", ["dt", "a"]) == ["text", "int4"]
+
+
+def test_resolve_copy_types_returns_none_when_column_missing():
+    gp = _TypeGpCursor({"a": "int4"})  # dt 타입 없음
+    assert _resolve_copy_types(gp, "t", ["a", "dt"]) is None
+
+
+def test_build_copy_text_vs_binary_and_fallback():
+    text_backend = _mk_backend(pipeline=False)
+    text_backend.copy_format = "text"
+    sql, types = text_backend._build_copy(None, "t", ["a", "dt"])
+    assert sql == "COPY t (a, dt) FROM STDIN" and types is None
+
+    bin_backend = _mk_backend(pipeline=False)
+    bin_backend.copy_format = "binary"
+    gp = _TypeGpCursor({"a": "int4", "dt": "text"})
+    sql, types = bin_backend._build_copy(gp, "t", ["a", "dt"])
+    assert "FORMAT BINARY" in sql and types == ["int4", "text"]
+
+    # 타입 해석 실패(dt 없음) → 텍스트로 안전 폴백
+    gp2 = _TypeGpCursor({"a": "int4"})
+    sql2, types2 = bin_backend._build_copy(gp2, "t", ["a", "dt"])
+    assert sql2 == "COPY t (a, dt) FROM STDIN" and types2 is None
