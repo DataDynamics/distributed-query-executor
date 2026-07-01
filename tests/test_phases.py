@@ -138,14 +138,15 @@ def test_stream_to_copy_measures_read_and_write_and_stats():
     cur = _FakeImpalaCursor()
     gp = _FakeGpCursor()
     seen = []
-    loaded, read_wait, write_wait = backend._stream_to_copy(
+    loaded, read_wait, write_wait, finalize_wait = backend._stream_to_copy(
         cur, gp, "COPY t (a, dt) FROM STDIN", on_progress=lambda n: seen.append(n)
     )
     assert loaded == 3  # 2 + 1
     assert gp.copied.rows == [(1, "x"), (2, "y"), (3, "z")]
     assert seen[-1] == 3  # 진행률 콜백이 누적 행수로 호출됨
-    assert read_wait >= 0 and write_wait >= 0
-    stats = backend._copy_stats(loaded, read_wait, write_wait)
+    assert read_wait >= 0 and write_wait >= 0 and finalize_wait >= 0
+    stats = backend._copy_stats(loaded, read_wait, write_wait, finalize_wait)
     assert stats["rows"] == 3
     assert "read_wait_ms" in stats and "write_wait_ms" in stats
+    assert "finalize_wait_ms" in stats  # COPY 종료(서버 ingest) 대기도 분리 계측
     assert stats["rows_per_sec"] >= 0

@@ -262,6 +262,7 @@ function renderPhases(phases){
     const e = p.extra||{};
     if(e.read_wait_ms!==undefined || e.write_wait_ms!==undefined){
       note = `읽기 ${fmtDur(e.read_wait_ms)} / 쓰기 ${fmtDur(e.write_wait_ms)}`;
+      if(e.finalize_wait_ms!==undefined) note += ` / 서버 ${fmtDur(e.finalize_wait_ms)}`;
       if(e.rows_per_sec) note += ` · ${fmtNum(e.rows_per_sec)}행/s`;
     }
     h += '<tr>'+

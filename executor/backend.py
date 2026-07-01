@@ -187,7 +187,8 @@ class MockBackend:
         if on_progress:
             on_progress(total)
         _emit(on_stage, "STREAM_COPY", "end",
-              {"rows": total, "read_wait_ms": 0, "write_wait_ms": 0, "rows_per_sec": total})
+              {"rows": total, "read_wait_ms": 0, "write_wait_ms": 0,
+               "finalize_wait_ms": 0, "rows_per_sec": total})
         _emit(on_stage, "COMMIT", "start")
         _emit(on_stage, "COMMIT", "end")
         return total
@@ -212,7 +213,7 @@ class MockBackend:
             on_progress(self.rows_per_value)
         _emit(on_stage, "STREAM_COPY", "end",
               {"rows": self.rows_per_value, "read_wait_ms": 0, "write_wait_ms": 0,
-               "rows_per_sec": self.rows_per_value})
+               "finalize_wait_ms": 0, "rows_per_sec": self.rows_per_value})
         _emit(on_stage, "INSERT", "start")
         _emit(on_stage, "INSERT", "end", {"rows": self.rows_per_value})
         _emit(on_stage, "COMMIT", "start")
@@ -258,18 +259,27 @@ class ImpalaToGreenplumBackend:
         else:
             cur.execute(sql)
 
-    def _stream_to_copy(self, cur, gp_cur, copy_sql: str, on_progress) -> tuple[int, float, float]:
+    def _stream_to_copy(self, cur, gp_cur, copy_sql: str, on_progress) -> tuple[int, float, float, float]:
         """Impala 커서(cur)를 batch 단위로 fetch 하며 Greenplum COPY(STDIN)로 흘려보낸다.
 
-        읽기(fetchmany)와 쓰기(copy.write_row)는 한 루프에서 교차 실행되므로 벽시계로는
-        둘을 나눌 수 없다. 그래서 **각 구간에 든 시간을 따로 누적**(read_wait/write_wait)해,
-        "COPY 가 느리다"의 원인이 Impala 읽기인지 Greenplum 쓰기인지 진단할 수 있게 한다.
+        한 루프에서 읽기·쓰기가 교차하므로 벽시계로는 나눌 수 없다. 그래서 구간별로 시간을
+        따로 누적해 "SELECT→COPY 가 느리다"의 원인을 세 갈래로 가른다:
 
-        반환: (적재 행수, 읽기 대기 초, 쓰기 대기 초).
+        - ``read_wait``  : ``fetchmany`` — Impala 가 결과 행을 보내 줄 때까지의 대기(소스 지연).
+        - ``write_wait`` : ``copy.write_row`` — 행을 psycopg 송신 버퍼에 인코딩해 넣고 소켓으로
+          보내는 시간. 서버가 소비를 못 따라와 송신 버퍼가 차면 여기서 backpressure 로 막힌다.
+        - ``finalize_wait`` : COPY 블록 종료(``PQputCopyEnd``) — **입력이 끝난 뒤 서버가 남은
+          데이터를 마저 삼키고 COPY 를 마무리하는 시간**. STDIN COPY 는 write_row 가 버퍼에만
+          쌓고 실제 서버 ingest 완료는 이 시점에 몰릴 수 있어, 이 값이 크면 병목은 클라이언트가
+          아니라 **서버(Greenplum) COPY 처리**다(GP 는 마스터 단일 스트림으로 받아 세그먼트로
+          재분배하므로 대량에서 여기가 병목이 되기 쉽다).
+
+        반환: (적재 행수, 읽기 대기 초, 쓰기 대기 초, 종료 대기 초).
         """
         loaded = 0
         read_wait = 0.0
         write_wait = 0.0
+        t_end = time.monotonic()  # 루프가 한 번도 안 돌아도 finalize 계산이 안전하도록 초기화
         with gp_cur.copy(copy_sql) as copy:
             while True:
                 t = time.monotonic()
@@ -279,21 +289,27 @@ class ImpalaToGreenplumBackend:
                     break
                 t = time.monotonic()
                 for row in batch:
-                    copy.write_row(row)                  # Greenplum 쓰기
+                    copy.write_row(row)                  # Greenplum 쓰기(버퍼 인코딩+송신)
                 write_wait += time.monotonic() - t
                 loaded += len(batch)
                 if on_progress:
                     on_progress(loaded)
-        return loaded, read_wait, write_wait
+            # 아직 with 안 — COPY 는 종료되지 않았다. 여기서부터 블록을 빠져나가며 종료·flush 된다.
+            t_end = time.monotonic()
+        # with 종료 = PQputCopyEnd + 서버가 남은 입력을 마저 ingest 완료할 때까지 대기.
+        finalize_wait = time.monotonic() - t_end
+        return loaded, read_wait, write_wait, finalize_wait
 
     @staticmethod
-    def _copy_stats(loaded: int, read_wait: float, write_wait: float) -> dict:
-        """STREAM_COPY 단계 종료 meta(행수/읽기·쓰기 대기 ms/초당 행수)를 만든다."""
-        busy = read_wait + write_wait
+    def _copy_stats(loaded: int, read_wait: float, write_wait: float,
+                    finalize_wait: float = 0.0) -> dict:
+        """STREAM_COPY 단계 종료 meta(행수/읽기·쓰기·서버종료 대기 ms/초당 행수)를 만든다."""
+        busy = read_wait + write_wait + finalize_wait
         return {
             "rows": loaded,
             "read_wait_ms": int(read_wait * 1000),
             "write_wait_ms": int(write_wait * 1000),
+            "finalize_wait_ms": int(finalize_wait * 1000),
             "rows_per_sec": int(loaded / busy) if busy > 0 else 0,
         }
 
@@ -350,12 +366,12 @@ class ImpalaToGreenplumBackend:
                     copy_sql = f"COPY {staging_table} ({', '.join(columns)}) FROM STDIN"
                     logger.debug("stage_insert COPY 시작: %s", copy_sql)
                     _emit(on_stage, "STREAM_COPY", "start")
-                    loaded, read_wait, write_wait = self._stream_to_copy(
+                    loaded, read_wait, write_wait, finalize_wait = self._stream_to_copy(
                         cur, gp_cur, copy_sql, on_progress
                     )
                     # STREAM_COPY 종료 = Impala 조회 완료 시점, loaded = 읽은(=staging 적재) 건수.
                     _emit(on_stage, "STREAM_COPY", "end",
-                          self._copy_stats(loaded, read_wait, write_wait))
+                          self._copy_stats(loaded, read_wait, write_wait, finalize_wait))
                     logger.debug("stage_insert 적재 완료(%s행) → INSERT 실행: %s",
                                  loaded, insert_sql)
                     _emit(on_stage, "INSERT", "start")
@@ -420,11 +436,11 @@ class ImpalaToGreenplumBackend:
                     copy_sql = f"COPY {target_table} ({', '.join(columns)}) FROM STDIN"
                     logger.debug("copy COPY 시작: %s", copy_sql)
                     _emit(on_stage, "STREAM_COPY", "start")
-                    rows_written, read_wait, write_wait = self._stream_to_copy(
+                    rows_written, read_wait, write_wait, finalize_wait = self._stream_to_copy(
                         cur, gp_cur, copy_sql, on_progress
                     )
                     _emit(on_stage, "STREAM_COPY", "end",
-                          self._copy_stats(rows_written, read_wait, write_wait))
+                          self._copy_stats(rows_written, read_wait, write_wait, finalize_wait))
                 _emit(on_stage, "COMMIT", "start")
                 gp.commit()
                 _emit(on_stage, "COMMIT", "end")
