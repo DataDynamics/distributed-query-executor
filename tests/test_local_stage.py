@@ -25,6 +25,35 @@ def test_external_table_name_is_safe():
     assert stage_sql.external_table_name("job_a1-b2") == "ext_job_a1_b2"
 
 
+def test_open_impala_cursor_convert_types_and_fallback():
+    """export 커서가 convert_types=False 를 넘기고, 구버전 impyla 면 기본 커서로 폴백."""
+    from executor.backend import ImpalaToGreenplumBackend
+
+    be = ImpalaToGreenplumBackend(impala_dsn={}, greenplum_dsn="x")  # 연결 없음(pool 은 lazy)
+
+    class _Cur:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    class _ConnNew:
+        def cursor(self, **kw):
+            return _Cur(**kw)
+
+    # convert_types=False → kwarg 로 전달
+    assert be._open_impala_cursor(_ConnNew(), convert_types=False).kw == {"convert_types": False}
+    # None → 기본 커서(kwarg 없음)
+    assert be._open_impala_cursor(_ConnNew(), convert_types=None).kw == {}
+
+    class _ConnOld:
+        def cursor(self, **kw):
+            if "convert_types" in kw:
+                raise TypeError("unexpected keyword argument 'convert_types'")
+            return _Cur(**kw)
+
+    # 구버전 impyla(kwarg 미지원) → 기본 커서로 폴백
+    assert be._open_impala_cursor(_ConnOld(), convert_types=False).kw == {}
+
+
 def test_host_of_from_url_and_fallback():
     assert stage_sql.host_of("http://seg1.gp:8087") == "seg1.gp"
     assert stage_sql.host_of(None) == ""

@@ -425,6 +425,12 @@ class Settings:
         self.stage_max_files_per_host: int = int(
             _get_nested("executor", "stage", "max_files_per_host", 0)
         )
+        # local_stage export 시 impyla 커서에 넘길 convert_types 값. False(기본)면 형변환을 꺼
+        # TIMESTAMP/DATE/DECIMAL 을 wire 문자열 그대로 받아 CSV 로 바로 쓴다(재파싱 비용 제거).
+        # 특수 타입(BINARY 등)이 문자열화에 문제가 되면 true 로 되돌린다.
+        self.stage_impala_convert_types: bool = _to_bool(
+            _get_nested("executor", "stage", "impala_convert_types", False)
+        )
 
 
 def init_settings(
