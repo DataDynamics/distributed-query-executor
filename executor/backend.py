@@ -10,10 +10,25 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from contextlib import contextmanager
-from typing import Iterator, Protocol
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
+
+
+def _emit(on_stage, name: str, event: str, meta: dict | None = None) -> None:
+    """단계 콜백을 안전하게 호출한다(콜백이 None 이면 아무것도 하지 않음).
+
+    모니터링용 부가 기능이므로, 콜백에서 예외가 나더라도 본 적재 작업을 깨뜨리지 않게
+    삼켜 로깅만 한다.
+    """
+    if on_stage is None:
+        return
+    try:
+        on_stage(name, event, meta)
+    except Exception:
+        logger.warning("on_stage(%s,%s) 콜백 실패 — 무시", name, event, exc_info=True)
 
 
 class _GreenplumPool:
@@ -120,14 +135,17 @@ class Backend(Protocol):
         partition_values: list[str],
         on_progress=None,
         query_options=None,
+        on_stage=None,
     ) -> int:
         """[copy 모드] 소스에서 sub_query를 읽어 target_table에 COPY 적재, 행 수 반환.
 
         query_options: 이 task 의 Impala 쿼리 옵션(SET). 전역 기본값 위에 병합된다.
+        on_stage: 세부 단계 경계 콜백 ``on_stage(name, event, meta=None)``. 모니터링용이며
+            None 이면 계측을 생략한다(core.phases 참고).
         """
         ...
 
-    def execute(self, sql: str) -> int:
+    def execute(self, sql: str, on_stage=None) -> int:
         """[statement 모드] 대상 DB에서 sql(예: INSERT ... SELECT)을 실행, 영향받은 행 수 반환."""
         ...
 
@@ -139,6 +157,7 @@ class Backend(Protocol):
         insert_sql: str,
         on_progress=None,
         query_options=None,
+        on_stage=None,
     ) -> int:
         """[stage_insert 모드] Impala 결과를 Greenplum staging 테이블에 COPY 적재 후,
         staging 을 소스로 하는 INSERT 를 실행한다. INSERT 영향 행 수를 반환."""
@@ -158,21 +177,46 @@ class MockBackend:
     def __init__(self, rows_per_value: int = 100):
         self.rows_per_value = rows_per_value
 
-    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None) -> int:
+    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None) -> int:
         # 파티션 값 개수 × rows_per_value 를 적재한 것으로 가정(값이 없으면 최소 1로 간주).
         total = max(1, len(partition_values)) * self.rows_per_value
+        # 실제 I/O 는 없지만, 대시보드/테스트에서 단계 타임라인이 보이도록 합성 이벤트를 방출한다.
+        _emit(on_stage, "IMPALA_SUBMIT", "start")
+        _emit(on_stage, "IMPALA_SUBMIT", "end")
+        _emit(on_stage, "STREAM_COPY", "start")
         if on_progress:
             on_progress(total)
+        _emit(on_stage, "STREAM_COPY", "end",
+              {"rows": total, "read_wait_ms": 0, "write_wait_ms": 0, "rows_per_sec": total})
+        _emit(on_stage, "COMMIT", "start")
+        _emit(on_stage, "COMMIT", "end")
         return total
 
-    def execute(self, sql: str) -> int:
+    def execute(self, sql: str, on_stage=None) -> int:
         # statement 모드: 항상 rows_per_value 행이 영향받은 것으로 가정.
+        _emit(on_stage, "INSERT", "start")
+        _emit(on_stage, "INSERT", "end", {"rows": self.rows_per_value})
+        _emit(on_stage, "COMMIT", "start")
+        _emit(on_stage, "COMMIT", "end")
         return self.rows_per_value
 
-    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None) -> int:
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
         # stage_insert 모드: rows_per_value 행을 staging→target 으로 옮긴 것으로 가정.
+        _emit(on_stage, "IMPALA_SUBMIT", "start")
+        _emit(on_stage, "IMPALA_SUBMIT", "end")
+        if staging_ddl:
+            _emit(on_stage, "STAGING_DDL", "start")
+            _emit(on_stage, "STAGING_DDL", "end")
+        _emit(on_stage, "STREAM_COPY", "start")
         if on_progress:
             on_progress(self.rows_per_value)
+        _emit(on_stage, "STREAM_COPY", "end",
+              {"rows": self.rows_per_value, "read_wait_ms": 0, "write_wait_ms": 0,
+               "rows_per_sec": self.rows_per_value})
+        _emit(on_stage, "INSERT", "start")
+        _emit(on_stage, "INSERT", "end", {"rows": self.rows_per_value})
+        _emit(on_stage, "COMMIT", "start")
+        _emit(on_stage, "COMMIT", "end")
         return self.rows_per_value
 
 
@@ -214,7 +258,46 @@ class ImpalaToGreenplumBackend:
         else:
             cur.execute(sql)
 
-    def execute(self, sql: str) -> int:
+    def _stream_to_copy(self, cur, gp_cur, copy_sql: str, on_progress) -> tuple[int, float, float]:
+        """Impala 커서(cur)를 batch 단위로 fetch 하며 Greenplum COPY(STDIN)로 흘려보낸다.
+
+        읽기(fetchmany)와 쓰기(copy.write_row)는 한 루프에서 교차 실행되므로 벽시계로는
+        둘을 나눌 수 없다. 그래서 **각 구간에 든 시간을 따로 누적**(read_wait/write_wait)해,
+        "COPY 가 느리다"의 원인이 Impala 읽기인지 Greenplum 쓰기인지 진단할 수 있게 한다.
+
+        반환: (적재 행수, 읽기 대기 초, 쓰기 대기 초).
+        """
+        loaded = 0
+        read_wait = 0.0
+        write_wait = 0.0
+        with gp_cur.copy(copy_sql) as copy:
+            while True:
+                t = time.monotonic()
+                batch = cur.fetchmany(self.batch_size)   # Impala 읽기
+                read_wait += time.monotonic() - t
+                if not batch:
+                    break
+                t = time.monotonic()
+                for row in batch:
+                    copy.write_row(row)                  # Greenplum 쓰기
+                write_wait += time.monotonic() - t
+                loaded += len(batch)
+                if on_progress:
+                    on_progress(loaded)
+        return loaded, read_wait, write_wait
+
+    @staticmethod
+    def _copy_stats(loaded: int, read_wait: float, write_wait: float) -> dict:
+        """STREAM_COPY 단계 종료 meta(행수/읽기·쓰기 대기 ms/초당 행수)를 만든다."""
+        busy = read_wait + write_wait
+        return {
+            "rows": loaded,
+            "read_wait_ms": int(read_wait * 1000),
+            "write_wait_ms": int(write_wait * 1000),
+            "rows_per_sec": int(loaded / busy) if busy > 0 else 0,
+        }
+
+    def execute(self, sql: str, on_stage=None) -> int:
         """statement 모드: 대상 Greenplum 에서 SQL(예: INSERT ... SELECT)을 그대로 실행.
 
         COPY를 쓰지 않으므로 컬럼 매핑은 SQL(INSERT 컬럼 목록/SELECT)이 책임진다.
@@ -222,12 +305,17 @@ class ImpalaToGreenplumBackend:
         """
         with self._gp_pool.connection() as conn:
             with conn.cursor() as cur:
+                _emit(on_stage, "INSERT", "start")
                 cur.execute(sql)
                 affected = cur.rowcount
+                _emit(on_stage, "INSERT", "end",
+                      {"rows": affected if affected and affected > 0 else None})
+            _emit(on_stage, "COMMIT", "start")
             conn.commit()
+            _emit(on_stage, "COMMIT", "end")
         return affected if affected and affected > 0 else 0
 
-    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None) -> int:
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
         """Impala SELECT → Greenplum staging(TEMP) COPY 적재 → staging→target INSERT.
 
         한 Greenplum 세션(연결) 안에서 CREATE TEMP TABLE → COPY → INSERT 를 수행하므로
@@ -247,30 +335,42 @@ class ImpalaToGreenplumBackend:
         impala_conn = impala_connect(**self.impala_dsn)
         try:
             cur = impala_conn.cursor()
+            _emit(on_stage, "IMPALA_SUBMIT", "start")
             self._impala_execute(cur, impala_select, query_options)
             columns = [d[0] for d in cur.description]
+            _emit(on_stage, "IMPALA_SUBMIT", "end")
 
             with self._gp_pool.connection() as gp:
                 with gp.cursor() as gp_cur:
                     if staging_ddl:
+                        _emit(on_stage, "STAGING_DDL", "start")
                         gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
+                        _emit(on_stage, "STAGING_DDL", "end")
                     # staging_ddl 이 없으면 생성을 건너뛰고 기존 staging_table 에 그대로 COPY.
                     copy_sql = f"COPY {staging_table} ({', '.join(columns)}) FROM STDIN"
-                    with gp_cur.copy(copy_sql) as copy:
-                        for batch in _batches(cur, self.batch_size):
-                            for row in batch:
-                                copy.write_row(row)
-                            loaded += len(batch)
-                            if on_progress:
-                                on_progress(loaded)
+                    logger.debug("stage_insert COPY 시작: %s", copy_sql)
+                    _emit(on_stage, "STREAM_COPY", "start")
+                    loaded, read_wait, write_wait = self._stream_to_copy(
+                        cur, gp_cur, copy_sql, on_progress
+                    )
+                    # STREAM_COPY 종료 = Impala 조회 완료 시점, loaded = 읽은(=staging 적재) 건수.
+                    _emit(on_stage, "STREAM_COPY", "end",
+                          self._copy_stats(loaded, read_wait, write_wait))
+                    logger.debug("stage_insert 적재 완료(%s행) → INSERT 실행: %s",
+                                 loaded, insert_sql)
+                    _emit(on_stage, "INSERT", "start")
                     gp_cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM staging
                     affected = gp_cur.rowcount
+                    _emit(on_stage, "INSERT", "end",
+                          {"rows": affected if affected and affected > 0 else loaded})
+                _emit(on_stage, "COMMIT", "start")
                 gp.commit()
+                _emit(on_stage, "COMMIT", "end")
             return affected if affected and affected > 0 else loaded
         finally:
             impala_conn.close()
 
-    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None) -> int:
+    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None) -> int:
         """copy 모드: Impala 에서 sub_query 결과를 스트리밍해 Greenplum 에 COPY 적재한다.
 
         Impala 커서를 batch_size 단위로 fetch 하며 psycopg COPY(STDIN)로 흘려보내므로,
@@ -290,8 +390,10 @@ class ImpalaToGreenplumBackend:
         impala_conn = impala_connect(**self.impala_dsn)
         try:
             cur = impala_conn.cursor()
+            _emit(on_stage, "IMPALA_SUBMIT", "start")
             self._impala_execute(cur, sub_query, query_options)
             columns = [d[0] for d in cur.description]
+            _emit(on_stage, "IMPALA_SUBMIT", "end")
 
             with self._gp_pool.connection() as gp:
                 with gp.cursor() as gp_cur:
@@ -299,26 +401,33 @@ class ImpalaToGreenplumBackend:
                     # 내는 컬럼이 모두 대상 테이블에 존재하는지 확인한다. 불일치면 여기서
                     # 명확한 에러로 즉시 실패(런타임 COPY 오류로 대용량 읽기 후 깨지는 것 방지).
                     if self.copy_preflight:
+                        _emit(on_stage, "PREFLIGHT", "start")
                         target_cols = _target_columns(gp_cur, target_table)
                         _check_copy_columns(columns, target_cols, target_table)
+                        _emit(on_stage, "PREFLIGHT", "end")
                     if write_mode == "overwrite_partitions" and partition_values:
                         # 멱등성: 적재 대상 파티션을 먼저 삭제 → DELETE+COPY 가 같은 트랜잭션에
                         # 묶여 commit 되므로 재실행해도 중복 없이 해당 파티션만 새 데이터로 교체.
+                        _emit(on_stage, "DELETE", "start")
                         placeholders = ", ".join(["%s"] * len(partition_values))
                         gp_cur.execute(
                             f"DELETE FROM {target_table} "
                             f"WHERE {partition_column} IN ({placeholders})",
                             partition_values,
                         )
+                        _emit(on_stage, "DELETE", "end",
+                              {"rows": gp_cur.rowcount if gp_cur.rowcount and gp_cur.rowcount > 0 else None})
                     copy_sql = f"COPY {target_table} ({', '.join(columns)}) FROM STDIN"
-                    with gp_cur.copy(copy_sql) as copy:
-                        for batch in _batches(cur, self.batch_size):
-                            for row in batch:
-                                copy.write_row(row)
-                            rows_written += len(batch)
-                            if on_progress:
-                                on_progress(rows_written)
+                    logger.debug("copy COPY 시작: %s", copy_sql)
+                    _emit(on_stage, "STREAM_COPY", "start")
+                    rows_written, read_wait, write_wait = self._stream_to_copy(
+                        cur, gp_cur, copy_sql, on_progress
+                    )
+                    _emit(on_stage, "STREAM_COPY", "end",
+                          self._copy_stats(rows_written, read_wait, write_wait))
+                _emit(on_stage, "COMMIT", "start")
                 gp.commit()
+                _emit(on_stage, "COMMIT", "end")
             return rows_written
         finally:
             impala_conn.close()
@@ -373,19 +482,6 @@ def _check_copy_columns(select_columns, target_columns, target_table: str) -> No
             f"COPY 사전검증 실패: 대상 테이블 {target_table} 에 없는 컬럼 {missing}. "
             f"대상 컬럼={sorted(target_columns)}. SELECT 출력 컬럼과 대상 스키마를 맞추세요."
         )
-
-
-def _batches(cursor, size: int) -> Iterator[list]:
-    """DB 커서를 ``size`` 행씩 묶어 순차적으로 내어주는 제너레이터.
-
-    ``fetchmany`` 로 일정 크기만 가져와 메모리 사용을 일정하게 유지하며(스트리밍),
-    더 가져올 행이 없으면(빈 결과) 중단한다.
-    """
-    while True:
-        rows = cursor.fetchmany(size)
-        if not rows:
-            break
-        yield rows
 
 
 def build_impala_dsn(settings) -> dict:

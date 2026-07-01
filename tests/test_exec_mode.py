@@ -21,7 +21,7 @@ class _RecordingBackend:
         self.moved = True
         return 5
 
-    def execute(self, sql):
+    def execute(self, sql, on_stage=None):
         self.executed_sql = sql
         return 9
 

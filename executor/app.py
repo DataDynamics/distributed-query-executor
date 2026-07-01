@@ -18,6 +18,7 @@ coordinator 가 분할한 sub-query(task)를 ``POST /tasks`` 로 접수해 백�
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -45,6 +46,22 @@ logger = logging.getLogger(__name__)
 def _now_iso() -> str:
     """현재 시각을 KST(타임존 없는) ISO 문자열로 반환. started_at/finished_at 기록용."""
     return now_iso()
+
+
+def _snip(text: Optional[str], limit: int = 300) -> str:
+    """긴 SQL 을 로그용으로 한 줄·상한 길이로 줄인다(개행→공백, 초과분은 …).
+
+    상세 로그(DEBUG)에 sub_query/INSERT 전문을 통째로 남기면 로그가 비대해지므로,
+    흐름 추적에 충분한 앞부분만 남긴다.
+    """
+    if not text:
+        return ""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[:limit] + "…"
+
+
+# 진행률 DEBUG 로그를 남기는 행수 간격(이 값마다 한 번씩만 찍어 로그 IO 를 억제).
+_PROGRESS_LOG_EVERY = 100_000
 
 
 # "활성"(처리중)으로 간주하는 task 상태: 처리중 Task 탭 집계 기준.
@@ -166,9 +183,16 @@ def create_app(
         ``history.record`` 로 이력 한 행을 남기고, 종료 시각은 ``finished_at`` 에 기록한다.
         예외를 밖으로 던지지 않는다(백그라운드 task 이므로 자체적으로 마무리).
         """
+        # 진행률 DEBUG 로그 스로틀 상태(마지막으로 로그를 남긴 누적 행수).
+        _last_logged = {"n": 0}
+
         def progress(n: int) -> None:
             # 백엔드가 배치 적재마다 호출하는 진행률 콜백 — 누적 적재 행수를 task 에 반영.
             task.rows_written = n
+            # 상세 추적(DEBUG): 매 배치마다 찍으면 IO 가 커지므로 일정 행수 간격으로만 남긴다.
+            if logger.isEnabledFor(logging.DEBUG) and n - _last_logged["n"] >= _PROGRESS_LOG_EVERY:
+                _last_logged["n"] = n
+                logger.debug("진행률: 누적 %s행 적재", n)
 
         try:
             if task.cancel_requested:
@@ -176,36 +200,51 @@ def create_app(
                 task.finished_at = _now_iso()
                 await history.record(task)  # CANCELLED 이력
                 return
+            # 슬롯 대기(QUEUE_WAIT) 단계 종료: 접수(create_task)에서 시작해 여기서 닫는다.
+            task.on_stage("QUEUE_WAIT", "end")
             task.status = TaskStatus.READING
             task.started_at = _now_iso()
             await history.record(task)  # READING 이력
             loop = asyncio.get_running_loop()
             # impyla/psycopg는 블로킹이므로 스레드에서 실행해 이벤트 루프를 막지 않는다.
+            # 스레드로 넘길 때 현재 로그 컨텍스트(job_id/task_id)를 복사해 함께 넘긴다. 그래야
+            # 백엔드 스레드에서 찍히는 상세 로그(단계 전이·진행률)에도 [job][task] 가 붙는다.
+            ctx = contextvars.copy_context()
             task.status = TaskStatus.WRITING
             await history.record(task)  # WRITING 이력
+            logger.debug(
+                "적재 시작 exec_mode=%s target=%s sub_query=%s",
+                task.exec_mode, task.target_table, _snip(task.sub_query),
+            )
             if task.exec_mode == "statement":
                 # wrapper 로 감싼 INSERT 등을 대상 DB에서 그대로 실행(COPY 미사용)
                 rows = await loop.run_in_executor(
-                    None, lambda: app.state.backend.execute(task.sub_query)
+                    None, lambda: ctx.run(
+                        app.state.backend.execute,
+                        task.sub_query, on_stage=task.on_stage,
+                    )
                 )
             elif task.exec_mode == "stage_insert":
                 # Impala 결과를 Greenplum staging(TEMP)에 COPY → staging→target INSERT
                 rows = await loop.run_in_executor(
                     None,
-                    lambda: app.state.backend.stage_and_insert(
+                    lambda: ctx.run(
+                        app.state.backend.stage_and_insert,
                         task.sub_query,
                         task.staging_table,
                         task.staging_ddl,
                         task.insert_sql,
                         progress,
                         query_options=task.impala_query_options,
+                        on_stage=task.on_stage,
                     ),
                 )
             else:
                 # copy 모드: Impala read → Greenplum COPY
                 rows = await loop.run_in_executor(
                     None,
-                    lambda: app.state.backend.move(
+                    lambda: ctx.run(
+                        app.state.backend.move,
                         task.sub_query,
                         task.target_table,
                         task.write_mode,
@@ -213,6 +252,7 @@ def create_app(
                         task.partition_values,
                         progress,
                         query_options=task.impala_query_options,
+                        on_stage=task.on_stage,
                     ),
                 )
             task.rows_written = rows
@@ -271,6 +311,8 @@ def create_app(
             insert_sql=req.insert_sql,
             impala_query_options=req.impala_query_options,
         )
+        # 접수 시각부터 슬롯 확보까지의 대기(QUEUE_WAIT) 단계를 연다. _run 진입 시 닫힌다.
+        task.on_stage("QUEUE_WAIT", "start")
         tasks[task.task_id] = task
         with job_log_context(task.job_id, task.task_id):
             await history.record(task)  # QUEUED 이력

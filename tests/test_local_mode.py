@@ -50,7 +50,7 @@ async def test_local_dispatcher_statement_uses_execute():
             super().__init__()
             self.executed = []
 
-        def execute(self, sql):
+        def execute(self, sql, on_stage=None):
             self.executed.append(sql)
             return 3
 
@@ -60,6 +60,22 @@ async def test_local_dispatcher_statement_uses_execute():
     await disp.run(job)
     assert len(backend.executed) == 2
     assert job.total_rows_written == 6
+
+
+async def test_local_dispatcher_fills_phase_timeline():
+    disp = LocalDispatcher(core_settings, backend=MockBackend(rows_per_value=5))
+    job = _job(exec_mode="copy", n=2)
+    await disp.run(job)
+    # local 모드도 각 task 의 단계 타임라인/조회 건수를 채운다.
+    for t in job.tasks:
+        names = [p["name"] for p in t.phases]
+        assert "STREAM_COPY" in names and "COMMIT" in names
+        assert t.rows_read == 5
+        assert t.impala_done_at() is not None
+    # job 롤업: 조회 건수 합 + 단계 요약이 status_view 에 노출된다.
+    view = job.status_view()
+    assert view["total_rows_read"] == 10
+    assert "phase_summary" in view
 
 
 async def test_local_dispatcher_cancel():

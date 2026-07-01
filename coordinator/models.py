@@ -18,6 +18,7 @@ Job의 진행률은 종료된(terminal) Task 비율로 계산한다(아래 ``Job
 from __future__ import annotations
 
 import enum
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,7 +26,10 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from core.phases import phase_of, record_stage
 from core.timeutil import now_iso as _now_iso  # KST(naive) ISO 시각 생성
+
+logger = logging.getLogger(__name__)
 
 
 class JobStatus(str, enum.Enum):
@@ -120,6 +124,30 @@ class Task:
     rows_written: int = 0
     attempt: int = 0
     error: Optional[str] = None
+    # 세부 단계 가시화(원격: executor 폴링으로 수집 / local: 직접 실행 중 on_stage 로 채움).
+    rows_read: int = 0
+    current_phase: Optional[str] = None
+    phases: list = field(default_factory=list)
+
+    def on_stage(self, name: str, event: str, meta: Optional[dict] = None) -> None:
+        """local 모드에서 백엔드가 알려 오는 단계 경계를 phases 에 반영한다(executor.Task 와 동형)."""
+        rows = record_stage(self.phases, name, event, meta)
+        if event == "start":
+            self.current_phase = name
+            logger.debug("단계 시작 %s", name)  # 상세 추적(DEBUG). [job][task] 자동 주입
+        elif event == "end":
+            if name == "STREAM_COPY" and rows is not None:
+                self.rows_read = rows
+            phase = phase_of(self.phases, name)
+            dur = phase.get("duration_ms") if phase else None
+            extra = phase.get("extra") if phase else None
+            logger.debug("단계 종료 %s (소요=%sms, 행수=%s, 지표=%s)",
+                         name, dur, rows, extra)
+
+    def impala_done_at(self) -> Optional[str]:
+        """Impala 조회 완료 시각(STREAM_COPY 종료). 없으면 None."""
+        phase = phase_of(self.phases, "STREAM_COPY")
+        return phase["finished_at"] if phase else None
 
     def summary(self) -> dict:
         """상태 조회 응답용 경량 요약 dict를 반환한다(무거운 sub_query 전문은 제외)."""
@@ -128,6 +156,10 @@ class Task:
             "executor_url": self.executor_url,
             "status": self.status.value,
             "rows_written": self.rows_written,
+            "rows_read": self.rows_read,
+            "current_phase": self.current_phase,
+            "impala_done_at": self.impala_done_at(),
+            "phases": [dict(p) for p in self.phases],
             "attempt": self.attempt,
             "partition_values": self.partition_values,
             "error": self.error,
@@ -151,6 +183,9 @@ class Task:
             "task_id": self.task_id,
             "status": self.status.value,
             "rows_written": self.rows_written,
+            "rows_read": self.rows_read,
+            "current_phase": self.current_phase,
+            "phases": self.phases,
             "attempt": self.attempt,
             "error": self.error,
         }
@@ -170,6 +205,9 @@ class Task:
             task_id=d["task_id"],
             status=TaskStatus(d.get("status", "QUEUED")),
             rows_written=d.get("rows_written", 0),
+            rows_read=d.get("rows_read", 0),
+            current_phase=d.get("current_phase"),
+            phases=list(d.get("phases") or []),
             attempt=d.get("attempt", 0),
             error=d.get("error"),
         )
@@ -234,6 +272,27 @@ class Job:
         return sum(t.rows_written for t in self.tasks)
 
     @property
+    def total_rows_read(self) -> int:
+        """모든 Task가 Impala 에서 읽어들인 행 수 합계(=조회 건수 합)."""
+        return sum(getattr(t, "rows_read", 0) for t in self.tasks)
+
+    def phase_summary(self) -> dict:
+        """진행 중(비종료) Task 들이 현재 어느 세부 단계에 있는지 집계한다.
+
+        ``{"STREAM_COPY": 3, "INSERT": 2, ...}`` 형태로, 대시보드에서 "지금 어디까지
+        진행됐나"를 한눈에 보여주는 데 쓴다. 종료된 Task 나 단계 정보가 없는 Task 는 뺀다.
+        """
+        terminal = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        out: dict[str, int] = {}
+        for t in self.tasks:
+            if t.status in terminal:
+                continue
+            phase = getattr(t, "current_phase", None)
+            if phase:
+                out[phase] = out.get(phase, 0) + 1
+        return out
+
+    @property
     def completed(self) -> int:
         """종료(terminal) 상태에 도달한 Task 수.
 
@@ -261,6 +320,8 @@ class Job:
             "total": len(self.tasks),
             "progress_percent": self.progress_percent,
             "total_rows_written": self.total_rows_written,
+            "total_rows_read": self.total_rows_read,
+            "phase_summary": self.phase_summary(),
             "error": self.error,
             "cancel_requested": self.cancel_requested,
             "created_at": self.created_at,
