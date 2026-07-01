@@ -359,6 +359,22 @@ class Settings:
         self.copy_preflight: bool = _to_bool(
             _get_nested("executor", "copy", "preflight", True)
         )
+        # COPY 파이프라인: Impala 읽기(fetch)와 Greenplum 쓰기(COPY)를 별도 스레드로 겹쳐
+        # 실행할지 여부. true 면 리더 스레드가 배치를 큐에 채우고 메인 스레드가 COPY 로 흘려
+        # 보내, 두 구간이 직렬이 아니라 병렬로 진행돼 벽시계가 줄어든다(둘이 비슷할수록 효과 큼).
+        self.copy_pipeline: bool = _to_bool(
+            _get_nested("executor", "copy", "pipeline", True)
+        )
+        # 파이프라인 큐 크기(배치 개수). 리더가 라이터보다 앞서 채워 둘 수 있는 배치 수의 상한 —
+        # backpressure 로 메모리를 제한한다(총 버퍼 ≈ queue_size × batch_size 행).
+        self.copy_queue_size: int = int(
+            _get_nested("executor", "copy", "queue_size", 8)
+        )
+        # COPY 포맷: text(기본) | binary. binary 는 값을 문자열로 인코딩하지 않아 클라이언트
+        # CPU(write_wait)를 줄일 수 있으나, 컬럼 타입을 정확히 알아야 한다(대상 테이블 카탈로그에서
+        # 해석; 실패하면 자동으로 text 로 폴백). write_wait 이 병목일 때만 켜는 실험적 옵션.
+        _fmt = str(_get_nested("executor", "copy", "format", "text")).strip().lower()
+        self.copy_format: str = _fmt if _fmt in ("text", "binary") else "text"
         # Greenplum 커넥션 풀 최대 크기(executor 1대가 동시에 여는 GP 연결 상한).
         # 0/미설정이면 동시 task 당 1 연결이 되도록 executor.max_concurrent_tasks 와 맞춘다
         # (무제한(0)이면 8 로 폴백). 다운스트림 max_connections 보호의 직접 손잡이다.

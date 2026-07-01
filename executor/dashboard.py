@@ -87,6 +87,12 @@ def masked_config(settings) -> list[dict]:
         ("greenplum", "copy_batch_size", settings.copy_batch_size, "COPY 배치 크기(행)"),
         ("greenplum", "copy_preflight", settings.copy_preflight,
          "COPY 전 SELECT 컬럼이 대상 테이블에 있는지 사전검증(불일치 조기 실패)"),
+        ("greenplum", "copy_pipeline", getattr(settings, "copy_pipeline", True),
+         "Impala 읽기와 GP COPY 를 별도 스레드로 겹쳐 실행(벽시계 단축)"),
+        ("greenplum", "copy_queue_size", getattr(settings, "copy_queue_size", 8),
+         "파이프라인 큐 크기(배치 개수). 메모리 ≈ queue_size × batch_size 행"),
+        ("greenplum", "copy_format", getattr(settings, "copy_format", "text"),
+         "COPY 포맷 text|binary. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백)"),
         ("logging", "level", settings.log_level, "메인 로그 레벨(이 레벨 이상 기록)"),
         ("logging", "dir", str(settings.log_dir), "로그 디렉터리(일 단위 롤링)"),
         ("logging", "rolling.backup_count", settings.log_rolling_backup_count,
@@ -262,6 +268,8 @@ function renderPhases(phases){
     const e = p.extra||{};
     if(e.read_wait_ms!==undefined || e.write_wait_ms!==undefined){
       note = `읽기 ${fmtDur(e.read_wait_ms)} / 쓰기 ${fmtDur(e.write_wait_ms)}`;
+      if(e.read_starve_ms) note += ` / Impala대기 ${fmtDur(e.read_starve_ms)}`;
+      if(e.finalize_wait_ms!==undefined) note += ` / 서버 ${fmtDur(e.finalize_wait_ms)}`;
       if(e.rows_per_sec) note += ` · ${fmtNum(e.rows_per_sec)}행/s`;
     }
     h += '<tr>'+

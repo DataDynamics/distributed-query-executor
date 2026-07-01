@@ -187,7 +187,8 @@ class MockBackend:
         if on_progress:
             on_progress(total)
         _emit(on_stage, "STREAM_COPY", "end",
-              {"rows": total, "read_wait_ms": 0, "write_wait_ms": 0, "rows_per_sec": total})
+              {"rows": total, "read_wait_ms": 0, "write_wait_ms": 0,
+               "read_starve_ms": 0, "finalize_wait_ms": 0, "rows_per_sec": total})
         _emit(on_stage, "COMMIT", "start")
         _emit(on_stage, "COMMIT", "end")
         return total
@@ -212,7 +213,7 @@ class MockBackend:
             on_progress(self.rows_per_value)
         _emit(on_stage, "STREAM_COPY", "end",
               {"rows": self.rows_per_value, "read_wait_ms": 0, "write_wait_ms": 0,
-               "rows_per_sec": self.rows_per_value})
+               "read_starve_ms": 0, "finalize_wait_ms": 0, "rows_per_sec": self.rows_per_value})
         _emit(on_stage, "INSERT", "start")
         _emit(on_stage, "INSERT", "end", {"rows": self.rows_per_value})
         _emit(on_stage, "COMMIT", "start")
@@ -233,7 +234,8 @@ class ImpalaToGreenplumBackend:
 
     def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000,
                  query_options: dict | None = None, copy_preflight: bool = True,
-                 pool_max: int = 8):
+                 pool_max: int = 8, pipeline: bool = True, queue_size: int = 8,
+                 copy_format: str = "text"):
         self.impala_dsn = impala_dsn
         self.greenplum_dsn = greenplum_dsn
         self.batch_size = batch_size
@@ -242,6 +244,11 @@ class ImpalaToGreenplumBackend:
         # copy 모드 COPY 전에 SELECT 컬럼이 대상 테이블에 존재하는지 사전검증할지 여부.
         # 대용량 스트리밍을 시작하기 전에 컬럼 불일치를 잡아 빠르게 실패시킨다.
         self.copy_preflight = copy_preflight
+        # COPY 파이프라인: Impala 읽기와 GP 쓰기를 별도 스레드로 겹칠지 여부 + 큐 크기.
+        self.pipeline = pipeline
+        self.queue_size = max(1, int(queue_size))
+        # COPY 포맷(text|binary). binary 는 텍스트 인코딩을 건너뛰어 클라이언트 CPU 를 줄인다.
+        self.copy_format = copy_format if copy_format in ("text", "binary") else "text"
         # Greenplum 커넥션 풀: 동시 GP 연결을 pool_max 로 제한하고 연결을 재사용한다.
         # (Impala 쪽은 task 마다 새로 연결한다 — 읽기 커서가 연결에 묶여 풀링이 까다로움.)
         self._gp_pool = _GreenplumPool(greenplum_dsn, pool_max)
@@ -258,19 +265,53 @@ class ImpalaToGreenplumBackend:
         else:
             cur.execute(sql)
 
-    def _stream_to_copy(self, cur, gp_cur, copy_sql: str, on_progress) -> tuple[int, float, float]:
-        """Impala 커서(cur)를 batch 단위로 fetch 하며 Greenplum COPY(STDIN)로 흘려보낸다.
+    def _build_copy(self, gp_cur, table: str, columns: list[str]) -> tuple[str, list | None]:
+        """COPY SQL 과 (바이너리면) 컬럼 타입 목록을 만든다.
 
-        읽기(fetchmany)와 쓰기(copy.write_row)는 한 루프에서 교차 실행되므로 벽시계로는
-        둘을 나눌 수 없다. 그래서 **각 구간에 든 시간을 따로 누적**(read_wait/write_wait)해,
-        "COPY 가 느리다"의 원인이 Impala 읽기인지 Greenplum 쓰기인지 진단할 수 있게 한다.
+        - text 포맷(기본): ``COPY t (cols) FROM STDIN`` 을 돌려주고 types 는 None.
+        - binary 포맷: ``... WITH (FORMAT BINARY)`` 를 만들고, psycopg 가 각 값을 올바른
+          바이너리로 인코딩하도록 **대상 테이블 카탈로그에서 컬럼 타입(typname)을 해석**해
+          SELECT 컬럼 순서에 맞춰 돌려준다. 하나라도 타입을 못 찾으면(불일치/미존재) 안전하게
+          text 로 폴백한다(바이너리는 타입이 정확해야만 동작하므로).
+        """
+        col_list = ", ".join(columns)
+        if self.copy_format == "binary":
+            types = _resolve_copy_types(gp_cur, table, columns)
+            if types:
+                return f"COPY {table} ({col_list}) FROM STDIN WITH (FORMAT BINARY)", types
+            logger.warning(
+                "바이너리 COPY 타입 해석 실패 → 텍스트 COPY 로 폴백 (table=%s)", table
+            )
+        return f"COPY {table} ({col_list}) FROM STDIN", None
 
-        반환: (적재 행수, 읽기 대기 초, 쓰기 대기 초).
+    def _stream_to_copy(self, cur, gp_cur, copy_sql: str, on_progress, types=None):
+        """Impala 결과를 Greenplum COPY(STDIN)로 흘려보낸다. 설정에 따라 파이프라인/직렬 선택.
+
+        types 가 있으면(바이너리 COPY) copy 진입 후 ``set_types`` 로 각 컬럼 타입을 지정한다.
+        반환: (적재 행수, read_wait, write_wait, finalize_wait, read_starve) — 초 단위.
+        각 구간의 의미와 진단법은 ``_copy_stats`` 주석 참고.
+        """
+        if self.pipeline:
+            return self._stream_pipelined(cur, gp_cur, copy_sql, on_progress, types)
+        return self._stream_serial(cur, gp_cur, copy_sql, on_progress, types)
+
+    def _stream_serial(self, cur, gp_cur, copy_sql: str, on_progress, types=None):
+        """직렬 스트리밍(한 스레드): fetch→write 를 번갈아 수행. read_starve 는 0.
+
+        읽기·쓰기가 교차 실행되므로 구간별 시간을 따로 누적한다:
+        - ``read_wait``  : ``fetchmany`` — Impala 가 행을 보내 줄 때까지 대기(소스 지연).
+        - ``write_wait`` : ``copy.write_row`` — psycopg 송신 버퍼 인코딩+소켓 송신. 서버가
+          소비를 못 따라와 버퍼가 차면 여기서 backpressure 로 막힌다.
+        - ``finalize_wait`` : COPY 종료(``PQputCopyEnd``) — 입력이 끝난 뒤 서버가 남은 데이터를
+          마저 ingest 완료할 때까지의 대기. 크면 서버(GP) 처리 병목.
         """
         loaded = 0
         read_wait = 0.0
         write_wait = 0.0
+        t_end = time.monotonic()
         with gp_cur.copy(copy_sql) as copy:
+            if types:
+                copy.set_types(types)  # 바이너리 COPY: 각 컬럼의 PG 타입을 지정
             while True:
                 t = time.monotonic()
                 batch = cur.fetchmany(self.batch_size)   # Impala 읽기
@@ -279,22 +320,128 @@ class ImpalaToGreenplumBackend:
                     break
                 t = time.monotonic()
                 for row in batch:
-                    copy.write_row(row)                  # Greenplum 쓰기
+                    copy.write_row(row)                  # Greenplum 쓰기(버퍼 인코딩+송신)
                 write_wait += time.monotonic() - t
                 loaded += len(batch)
                 if on_progress:
                     on_progress(loaded)
-        return loaded, read_wait, write_wait
+            t_end = time.monotonic()
+        finalize_wait = time.monotonic() - t_end
+        return loaded, read_wait, write_wait, finalize_wait, 0.0
+
+    def _stream_pipelined(self, cur, gp_cur, copy_sql: str, on_progress, types=None):
+        """파이프라인 스트리밍(2스레드): 리더가 배치를 큐에 채우고, 라이터(현재 스레드)가 COPY.
+
+        읽기(Impala fetch)와 쓰기(GP COPY)를 겹쳐 실행해 벽시계를 줄인다. 큐는 bounded 라
+        한쪽이 느리면 자연히 backpressure 가 걸린다(메모리 ≈ queue_size × batch_size 행).
+
+        연결 안전성: Impala 커서는 **리더 스레드만**, GP 커서/COPY 는 **라이터 스레드만** 만진다
+        (한 연결을 두 스레드가 동시에 건드리지 않음). description 은 호출부에서 리더 시작 전에
+        이미 읽었고, thread.start() 가 메모리 배리어라 안전하다.
+
+        진단 지표(라이터 관점에서 벽시계를 분해):
+        - ``read_starve`` : 라이터가 다음 배치를 기다리며 큐가 빌 때 막힌 시간 → **Impala 가
+          못 따라와** 라이터가 굶는 시간. 크면 소스(Impala)가 병목.
+        - ``write_wait``  : 라이터가 실제 ``write_row`` 에 쓴 시간 → GP 쓰기 비용.
+        - ``finalize_wait`` : COPY 종료(서버 ingest 완료) 대기.
+        대략 ``duration ≈ read_starve + write_wait + finalize`` 로, 어느 항이 큰지가 곧 병목이다.
+        ``read_wait`` (리더의 순수 fetch 시간)은 참고용으로 함께 보고한다.
+        """
+        import queue as _queue
+        import threading
+
+        q: "_queue.Queue" = _queue.Queue(maxsize=self.queue_size)
+        producer_err: list = []
+        read_wait_box = [0.0]
+        stop = threading.Event()  # 라이터가 죽으면 세워, put 에서 막힌 리더를 데드락 없이 깨운다.
+
+        def _producer():
+            # 리더 스레드: Impala 에서 배치를 읽어 큐에 넣는다(큐가 차면 put 에서 막힘=backpressure).
+            rw = 0.0
+            try:
+                while not stop.is_set():
+                    t = time.monotonic()
+                    batch = cur.fetchmany(self.batch_size)
+                    rw += time.monotonic() - t
+                    if not batch:
+                        break
+                    # 큐가 차면 대기하되, 라이터가 죽어 stop 이 서면 빠져나온다(데드락 방지).
+                    while not stop.is_set():
+                        try:
+                            q.put(batch, timeout=0.5)
+                            break
+                        except _queue.Full:
+                            continue
+            except BaseException as exc:  # noqa: BLE001 — 어떤 예외든 라이터로 전달해야 함
+                producer_err.append(exc)
+            finally:
+                read_wait_box[0] = rw
+                # 종료(또는 오류) 신호 — 라이터의 get 을 깨운다. 큐가 차 있으면(라이터가 이미
+                # 떠났을 때) 건너뛴다(어차피 라이터는 더 이상 읽지 않음).
+                try:
+                    q.put_nowait(None)
+                except _queue.Full:
+                    pass
+
+        thread = threading.Thread(target=_producer, name="copy-reader", daemon=True)
+        thread.start()
+
+        loaded = 0
+        write_wait = 0.0
+        read_starve = 0.0
+        t_end = time.monotonic()
+        try:
+            with gp_cur.copy(copy_sql) as copy:
+                if types:
+                    copy.set_types(types)  # 바이너리 COPY: 각 컬럼의 PG 타입을 지정
+                while True:
+                    t = time.monotonic()
+                    batch = q.get()               # 큐가 비면 대기 = Impala 를 기다리며 굶는 시간
+                    read_starve += time.monotonic() - t
+                    if batch is None:
+                        break
+                    t = time.monotonic()
+                    for row in batch:
+                        copy.write_row(row)
+                    write_wait += time.monotonic() - t
+                    loaded += len(batch)
+                    if on_progress:
+                        on_progress(loaded)
+                t_end = time.monotonic()
+            finalize_wait = time.monotonic() - t_end
+        finally:
+            # 라이터가 예외로 빠졌을 수 있으니 리더에 중단을 지시하고, put 에서 막혀 있으면
+            # 큐를 비워 깨운 뒤 조인한다(데드락 방지 — join 이 영원히 대기하지 않게).
+            stop.set()
+            try:
+                while True:
+                    q.get_nowait()
+            except _queue.Empty:
+                pass
+            thread.join()
+        if producer_err:
+            # 리더에서 난 오류를 라이터(호출부)로 올려 트랜잭션이 롤백되게 한다.
+            raise producer_err[0]
+        return loaded, read_wait_box[0], write_wait, finalize_wait, read_starve
 
     @staticmethod
-    def _copy_stats(loaded: int, read_wait: float, write_wait: float) -> dict:
-        """STREAM_COPY 단계 종료 meta(행수/읽기·쓰기 대기 ms/초당 행수)를 만든다."""
-        busy = read_wait + write_wait
+    def _copy_stats(loaded: int, read_wait: float, write_wait: float,
+                    finalize_wait: float = 0.0, read_starve: float = 0.0) -> dict:
+        """STREAM_COPY 단계 종료 meta(행수/각 구간 대기 ms/초당 행수)를 만든다.
+
+        직렬 모드는 read_wait+write_wait+finalize 가 곧 벽시계다. 파이프라인 모드는 읽기·쓰기가
+        겹치므로 라이터 관점의 read_starve(=Impala 대기)+write_wait+finalize 가 벽시계에 가깝다.
+        rows_per_sec 는 실제 벽시계 근사값(파이프라인이면 겹침 반영)으로 계산한다.
+        """
+        wall = max(read_starve + write_wait + finalize_wait,  # 파이프라인 벽시계 근사
+                   read_wait + write_wait + finalize_wait)     # 직렬 벽시계
         return {
             "rows": loaded,
             "read_wait_ms": int(read_wait * 1000),
             "write_wait_ms": int(write_wait * 1000),
-            "rows_per_sec": int(loaded / busy) if busy > 0 else 0,
+            "read_starve_ms": int(read_starve * 1000),
+            "finalize_wait_ms": int(finalize_wait * 1000),
+            "rows_per_sec": int(loaded / wall) if wall > 0 else 0,
         }
 
     def execute(self, sql: str, on_stage=None) -> int:
@@ -347,15 +494,16 @@ class ImpalaToGreenplumBackend:
                         gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
                         _emit(on_stage, "STAGING_DDL", "end")
                     # staging_ddl 이 없으면 생성을 건너뛰고 기존 staging_table 에 그대로 COPY.
-                    copy_sql = f"COPY {staging_table} ({', '.join(columns)}) FROM STDIN"
-                    logger.debug("stage_insert COPY 시작: %s", copy_sql)
+                    copy_sql, copy_types = self._build_copy(gp_cur, staging_table, columns)
+                    logger.debug("stage_insert COPY 시작(pipeline=%s, format=%s): %s",
+                                 self.pipeline, self.copy_format, copy_sql)
                     _emit(on_stage, "STREAM_COPY", "start")
-                    loaded, read_wait, write_wait = self._stream_to_copy(
-                        cur, gp_cur, copy_sql, on_progress
-                    )
+                    loaded, read_wait, write_wait, finalize_wait, read_starve = \
+                        self._stream_to_copy(cur, gp_cur, copy_sql, on_progress, copy_types)
                     # STREAM_COPY 종료 = Impala 조회 완료 시점, loaded = 읽은(=staging 적재) 건수.
                     _emit(on_stage, "STREAM_COPY", "end",
-                          self._copy_stats(loaded, read_wait, write_wait))
+                          self._copy_stats(loaded, read_wait, write_wait,
+                                           finalize_wait, read_starve))
                     logger.debug("stage_insert 적재 완료(%s행) → INSERT 실행: %s",
                                  loaded, insert_sql)
                     _emit(on_stage, "INSERT", "start")
@@ -417,14 +565,15 @@ class ImpalaToGreenplumBackend:
                         )
                         _emit(on_stage, "DELETE", "end",
                               {"rows": gp_cur.rowcount if gp_cur.rowcount and gp_cur.rowcount > 0 else None})
-                    copy_sql = f"COPY {target_table} ({', '.join(columns)}) FROM STDIN"
-                    logger.debug("copy COPY 시작: %s", copy_sql)
+                    copy_sql, copy_types = self._build_copy(gp_cur, target_table, columns)
+                    logger.debug("copy COPY 시작(pipeline=%s, format=%s): %s",
+                                 self.pipeline, self.copy_format, copy_sql)
                     _emit(on_stage, "STREAM_COPY", "start")
-                    rows_written, read_wait, write_wait = self._stream_to_copy(
-                        cur, gp_cur, copy_sql, on_progress
-                    )
+                    rows_written, read_wait, write_wait, finalize_wait, read_starve = \
+                        self._stream_to_copy(cur, gp_cur, copy_sql, on_progress, copy_types)
                     _emit(on_stage, "STREAM_COPY", "end",
-                          self._copy_stats(rows_written, read_wait, write_wait))
+                          self._copy_stats(rows_written, read_wait, write_wait,
+                                           finalize_wait, read_starve))
                 _emit(on_stage, "COMMIT", "start")
                 gp.commit()
                 _emit(on_stage, "COMMIT", "end")
@@ -464,6 +613,36 @@ def _target_columns(gp_cur, target_table: str) -> list[str]:
             (table,),
         )
     return [r[0] for r in gp_cur.fetchall()]
+
+
+def _resolve_copy_types(gp_cur, table: str, columns: list[str]) -> list | None:
+    """바이너리 COPY 용으로 각 SELECT 컬럼의 PG 타입명(typname)을 대상 테이블에서 해석한다.
+
+    ``pg_attribute``/``pg_type`` 을 ``table::regclass`` 로 조회해 {컬럼명(소문자): typname}
+    맵을 만들고, SELECT 컬럼 순서대로 타입 리스트를 만든다. 한 컬럼이라도 타입을 못 찾으면
+    None 을 돌려 호출부가 텍스트 COPY 로 폴백하게 한다(바이너리는 타입이 완전해야 안전).
+
+    temp staging 테이블도 같은 세션이면 search_path(pg_temp)로 ``regclass`` 가 해석된다.
+    조회 자체가 실패하면(권한/구문 등) None 을 돌려 안전하게 텍스트로 되돌린다.
+    """
+    try:
+        gp_cur.execute(
+            "SELECT a.attname, t.typname FROM pg_attribute a "
+            "JOIN pg_type t ON t.oid = a.atttypid "
+            "WHERE a.attrelid = %s::regclass AND a.attnum > 0 AND NOT a.attisdropped",
+            (table,),
+        )
+        typmap = {name.lower(): typ for name, typ in gp_cur.fetchall()}
+    except Exception:
+        logger.warning("바이너리 COPY 타입 조회 실패 (table=%s)", table, exc_info=True)
+        return None
+    types: list = []
+    for col in columns:
+        typ = typmap.get(col.replace('"', "").lower())
+        if not typ:
+            return None
+        types.append(typ)
+    return types
 
 
 def _check_copy_columns(select_columns, target_columns, target_table: str) -> None:
@@ -521,9 +700,10 @@ def build_backend(settings) -> Backend:
     if settings.greenplum_dsn:
         impala_dsn: dict = build_impala_dsn(settings)
         logger.info(
-            "ImpalaToGreenplumBackend 사용 (impala=%s, batch=%s)",
+            "ImpalaToGreenplumBackend 사용 (impala=%s, batch=%s, pipeline=%s)",
             settings.impala_host or "(미설정 → statement 모드만)",
             settings.copy_batch_size,
+            getattr(settings, "copy_pipeline", True),
         )
         return ImpalaToGreenplumBackend(
             impala_dsn=impala_dsn,
@@ -532,6 +712,9 @@ def build_backend(settings) -> Backend:
             query_options=getattr(settings, "impala_query_options", None),
             copy_preflight=getattr(settings, "copy_preflight", True),
             pool_max=getattr(settings, "greenplum_pool_max", 8),
+            pipeline=getattr(settings, "copy_pipeline", True),
+            queue_size=getattr(settings, "copy_queue_size", 8),
+            copy_format=getattr(settings, "copy_format", "text"),
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()

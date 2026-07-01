@@ -361,6 +361,9 @@ executor 마다 따로 적용되는지를 알려 줍니다.
 | `greenplum.pool_max` | 0 | GP 커넥션 풀 크기(동시 GP 연결 상한). 0=`executor.max_concurrent_tasks` 와 동일 |
 | `copy.batch_size` | 10000 | COPY 배치 크기(행). 클수록 처리량↑·메모리↑ |
 | `copy.preflight` | true | COPY 전 컬럼 사전검증(불일치 조기 실패) |
+| `copy.pipeline` | true | Impala 읽기와 GP COPY 를 별도 스레드로 겹쳐 실행(벽시계 단축) |
+| `copy.queue_size` | 8 | 파이프라인 큐 크기(배치 개수). 메모리 ≈ `queue_size × batch_size` 행 |
+| `copy.format` | text | COPY 포맷 `text`\|`binary`. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백) |
 | `impala.query_options` | (빈값) | Impala SET 전역 기본값. 예: `MEM_LIMIT=2g,REQUEST_POOL=etl` |
 | `query.sql_dialect` | hive | 파싱 기본 방언(요청에서 재정의 가능) |
 
@@ -368,6 +371,42 @@ executor 마다 따로 적용되는지를 알려 줍니다.
 한 번에 더 많은 행을 보내 처리량이 오르지만, 그만큼 메모리도 더 쓴다는 트레이드오프가 있습니다.
 또 `copy.preflight` 를 켜 두면 COPY 를 시작하기 전에 컬럼이 서로 맞는지 미리 검사해, 어긋남이
 있을 때 일찌감치 실패시켜 줍니다.
+
+### 3.6 SELECT→COPY 병목 진단·튜닝 (executor 단일 task 관점)
+
+한 task 의 `SELECT → COPY` 가 느릴 때, **먼저 원인을 측정하고 그다음에 손댑니다.** 대시보드의
+단계 타임라인(STREAM_COPY 행)과 `task_history` 컬럼이 벽시계를 네 갈래로 쪼개 보여 줍니다.
+
+| 지표(컬럼) | 의미 | 이게 지배적이면 |
+|---|---|---|
+| `read_wait_ms` | 리더의 Impala `fetchmany` 순수 시간 | 참고용(아래 `read_starve` 로 병목 판단) |
+| `read_starve_ms` | (파이프라인) 라이터가 **다음 배치를 기다린** 시간 | **Impala(소스)가 병목** — 읽기가 못 따라옴 |
+| `write_wait_ms` | 라이터의 `write_row`(인코딩+송신) 시간 | **클라이언트 인코딩/네트워크** 병목 |
+| `finalize_wait_ms` | COPY 종료(서버 ingest 완료) 대기 | **Greenplum COPY 처리**(마스터 단일 스트림) 병목 |
+
+파이프라인 모드에서 벽시계 ≈ `read_starve + write_wait + finalize` 이므로, 셋 중 가장 큰 항이
+곧 병목입니다. 병목별 처방:
+
+- **`read_starve` 지배(= Impala 가 느림)**
+  - 파티션 분할(`parallelism`)을 늘려 **여러 executor 가 서로 다른 파티션을 동시에** 읽게 한다(최우선).
+  - `copy.batch_size` 를 키워 fetch 왕복 횟수를 줄인다(예: 10k→50k). 메모리와 트레이드오프.
+  - Impala 쪽 튜닝: `impala.query_options`(`MEM_LIMIT`, `REQUEST_POOL`), 스캔 대상 축소.
+- **`write_wait` 지배(= 클라이언트 인코딩/전송)**
+  - `copy.format=binary` 로 텍스트 인코딩 CPU 를 줄인다(타입 해석 실패 시 자동 text 폴백).
+  - executor↔GP 네트워크 대역/지연 점검, `copy.batch_size` 상향.
+- **`finalize_wait` 지배(= Greenplum COPY 처리)**
+  - 한 스트림이 마스터로 몰리는 구조라 **`parallelism` 을 늘려 여러 executor 가 동시에 COPY** 하게
+    하는 것이 가장 효과적(GP 세그먼트 병렬 활용). `greenplum.pool_max` 로 동시 GP 연결을 조절.
+  - 대상 테이블 인덱스/트리거/분산키(`DISTRIBUTED BY`) 재검토.
+
+**튜닝 절차(권장)**
+1. 느린 task 하나의 STREAM_COPY 지표를 본다 → 지배 항을 찾는다.
+2. 위 표의 해당 처방을 **하나씩** 적용하고 다시 측정한다(한 번에 하나만 바꿔 효과를 분리).
+3. `read_starve` 와 `write_wait` 가 비슷하다면 이미 파이프라인이 잘 겹치는 상태 → **수평 확장
+   (`parallelism`↑ + executor 추가)** 이 가장 확실한 다음 수. (§1 Scale Out 참고)
+
+> `copy.pipeline=false` 로 두면 읽기·쓰기가 직렬 실행돼 `read_wait`/`write_wait` 가 순수 벽시계로
+> 나뉩니다. 파이프라인이 의심스러울 때 원인 격리를 위해 잠깐 꺼서 비교하는 용도로 유용합니다.
 
 ---
 
