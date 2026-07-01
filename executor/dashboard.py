@@ -156,6 +156,8 @@ DASHBOARD_HTML = """<!doctype html>
            align-items:center; justify-content:center; z-index:50; }
   .modal-box { background:var(--panel); border:1px solid var(--line); border-radius:8px;
                width:min(900px,90%); max-height:80%; overflow:auto; padding:16px; }
+  /* 타임라인(단계) 팝업만 기본 대비 20% 넓게(900→1080px). SQL 팝업(#modal)은 그대로. */
+  #pmodal .modal-box { width:min(1080px,90%); }
   .modal-head { display:flex; justify-content:space-between; align-items:center;
                 gap:20px; margin-bottom:10px; }
   .modal-head button { background:none; border:none; color:var(--mut); font-size:18px; cursor:pointer; }
