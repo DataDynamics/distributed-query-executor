@@ -39,6 +39,44 @@ def test_record_stage_end_without_start_is_noop():
     assert phases == []
 
 
+def test_close_open_phases_closes_running_keeps_finished():
+    from core.phases import close_open_phases
+    phases: list = []
+    record_stage(phases, "IMPALA_SUBMIT", "start")
+    record_stage(phases, "IMPALA_SUBMIT", "end")
+    record_stage(phases, "STREAM_COPY", "start")  # 열린 채로 둔다(실패 단계 모사)
+    done_dur = phase_of(phases, "IMPALA_SUBMIT")["duration_ms"]
+
+    close_open_phases(phases)
+
+    # 모든 단계가 마감됨(더 이상 finished_at=None 없음) → 소요시간이 계속 증가하지 않음.
+    assert all(p["finished_at"] is not None for p in phases)
+    assert all(p["duration_ms"] is not None and p["duration_ms"] >= 0 for p in phases)
+    # 이미 닫혀 있던 단계는 그대로(재마감하지 않음).
+    assert phase_of(phases, "IMPALA_SUBMIT")["duration_ms"] == done_dur
+
+
+async def test_failed_task_closes_open_phase():
+    """단계 도중 실패한 task 는 열린 단계가 남지 않아야 한다(대시보드 소요시간 폭주 방지)."""
+    from executor.backend import MockBackend, _emit
+
+    class _FailAtStream(MockBackend):
+        def move(self, *a, on_stage=None, **k):
+            _emit(on_stage, "IMPALA_SUBMIT", "start")
+            _emit(on_stage, "IMPALA_SUBMIT", "end")
+            _emit(on_stage, "STREAM_COPY", "start")  # end 없이 실패
+            raise RuntimeError("boom")
+
+    st = await _run(create_executor_app(backend=_FailAtStream()),
+                    _payload("tfp", exec_mode="copy"))
+    assert st["status"] == "FAILED"
+    assert st["phases"], "phases 가 비어있으면 안 됨"
+    # 어떤 단계도 열린(finished_at=None) 채로 남지 않는다.
+    assert all(p["finished_at"] is not None for p in st["phases"])
+    sc = next(p for p in st["phases"] if p["name"] == "STREAM_COPY")
+    assert sc["duration_ms"] is not None  # 실패 단계도 소요가 확정됨
+
+
 # ─────────────────────────── 엔드투엔드 ───────────────────────────
 def _payload(task_id, **over):
     base = {

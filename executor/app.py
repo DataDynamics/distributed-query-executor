@@ -33,6 +33,7 @@ from core.config import settings
 from core.dbprobe import clamp_limit, run_impala_select, run_postgres_select
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
+from core.phases import close_open_phases
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.webassets import mount_static, register_offline_docs
 from .backend import Backend, build_backend, build_impala_dsn
@@ -210,6 +211,7 @@ def create_app(
             if task.cancel_requested:
                 task.status = TaskStatus.CANCELLED
                 task.finished_at = _now_iso()
+                close_open_phases(task.phases)  # 열린 단계(QUEUE_WAIT 등) 마감
                 await history.record(task)  # CANCELLED 이력
                 return
             # 슬롯 대기(QUEUE_WAIT) 단계 종료: 접수(create_task)에서 시작해 여기서 닫는다.
@@ -287,6 +289,7 @@ def create_app(
             if task.cancel_requested:
                 task.status = TaskStatus.CANCELLED
                 task.finished_at = _now_iso()
+                close_open_phases(task.phases)  # 실행 중 취소 — 열린 단계 마감
                 logger.info("task %s 취소됨", task.task_id)
                 await history.record(task)
                 return
@@ -298,6 +301,8 @@ def create_app(
             task.status = TaskStatus.FAILED
             task.error = str(exc)
             task.finished_at = _now_iso()
+            # 실패한 단계(start 만 있고 end 없는)를 지금으로 마감 → 소요시간이 계속 증가하지 않게.
+            close_open_phases(task.phases)
             logger.exception("task %s 실패", task.task_id)
             await history.record(task)  # FAILED 이력
 

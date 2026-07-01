@@ -32,6 +32,7 @@ from typing import Optional, Protocol
 import httpx
 
 from core.logging import job_log_context
+from core.phases import close_open_phases
 from . import stage as stage_sql
 from .config import Settings
 from .history import JobHistoryRepository
@@ -935,9 +936,13 @@ class LocalDispatcher(_DispatcherBase):
                 task.status = (
                     TaskStatus.CANCELLED if job.cancel_requested else TaskStatus.DONE
                 )
+                if task.status == TaskStatus.CANCELLED:
+                    close_open_phases(task.phases)  # 취소 — 열린 단계 마감
             except Exception as exc:
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
+                # 실패한 단계를 지금으로 마감 → 대시보드 소요시간이 계속 증가하지 않게.
+                close_open_phases(task.phases)
             finally:
                 self._save(job)
 
