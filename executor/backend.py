@@ -318,8 +318,11 @@ class ImpalaToGreenplumBackend:
     def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000,
                  query_options: dict | None = None, copy_preflight: bool = True,
                  pool_max: int = 8, pipeline: bool = True, queue_size: int = 8,
-                 copy_format: str = "text"):
+                 copy_format: str = "text", stage_convert_types: bool = False):
         self.impala_dsn = impala_dsn
+        # local_stage export 의 impyla 커서에 넘길 convert_types 값. False 면 형변환을 꺼
+        # TIMESTAMP/DATE/DECIMAL 을 wire 문자열 그대로 받아(재파싱 비용 제거) CSV 로 바로 쓴다.
+        self.stage_convert_types = stage_convert_types
         self.greenplum_dsn = greenplum_dsn
         self.batch_size = batch_size
         # Impala 쿼리 옵션 전역 기본값(SET). 요청별 옵션이 이 위에 병합된다.
@@ -335,6 +338,22 @@ class ImpalaToGreenplumBackend:
         # Greenplum 커넥션 풀: 동시 GP 연결을 pool_max 로 제한하고 연결을 재사용한다.
         # (Impala 쪽은 task 마다 새로 연결한다 — 읽기 커서가 연결에 묶여 풀링이 까다로움.)
         self._gp_pool = _GreenplumPool(greenplum_dsn, pool_max)
+
+    def _open_impala_cursor(self, conn, convert_types: bool | None = None):
+        """impyla 커서를 연다. ``convert_types=False`` 면 형변환을 꺼 wire 값을 그대로 받는다.
+
+        TIMESTAMP/DATE/DECIMAL 은 HiveServer2 wire 에서 이미 문자열로 오는데, impyla 기본값
+        (convert_types=True)은 이를 datetime/Decimal 로 되돌려 파싱한다. CSV 로 다시 쓸 export
+        경로에서는 그 변환이 순수 낭비이므로 False 로 꺼 문자열 그대로 받는다(INT/DOUBLE/BOOL 은
+        네이티브라 영향 없음). 해당 kwarg 를 지원하지 않는 impyla 버전이면 기본 커서로 폴백한다.
+        """
+        if convert_types is None:
+            return conn.cursor()
+        try:
+            return conn.cursor(convert_types=convert_types)
+        except TypeError:
+            logger.warning("impyla cursor(convert_types=...) 미지원 — 기본 커서로 폴백")
+            return conn.cursor()
 
     def _impala_execute(self, cur, sql: str, query_options) -> None:
         """Impala 커서로 sql 을 실행한다. 전역+요청별 옵션을 병합해 configuration 으로 넘긴다.
@@ -626,7 +645,8 @@ class ImpalaToGreenplumBackend:
         written = 0
         impala_conn = impala_connect(**self.impala_dsn)
         try:
-            cur = impala_conn.cursor()
+            # convert_types=False 로 형변환을 꺼 timestamp/date/decimal 을 문자열 그대로 받는다.
+            cur = self._open_impala_cursor(impala_conn, convert_types=self.stage_convert_types)
             _emit(on_stage, "IMPALA_SUBMIT", "start")
             self._impala_execute(cur, sub_query, query_options)
             _emit(on_stage, "IMPALA_SUBMIT", "end")
@@ -919,6 +939,7 @@ def build_backend(settings) -> Backend:
             pipeline=getattr(settings, "copy_pipeline", True),
             queue_size=getattr(settings, "copy_queue_size", 8),
             copy_format=getattr(settings, "copy_format", "text"),
+            stage_convert_types=getattr(settings, "stage_impala_convert_types", False),
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()

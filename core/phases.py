@@ -84,6 +84,22 @@ def record_stage(phases: list, name: str, event: str, meta: dict | None = None):
     return None
 
 
+def close_open_phases(phases: list) -> None:
+    """아직 열려 있는(finished_at=None) 모든 단계를 지금 시각으로 마감한다.
+
+    task 가 단계 도중 **실패/취소로 종료**될 때 호출한다. 백엔드가 ``on_stage(name,"start")``
+    만 방출하고 예외로 빠지면 그 단계는 finished_at 이 None 인 채 남는데, 그대로 두면 대시보드가
+    소요시간을 ``now - started_at`` 으로 계속 키워 "진행중"으로 표시한다(종료됐는데도 시간이
+    증가). 종료 시점으로 finished_at/duration_ms 를 확정해 이 문제를 막는다. 이미 닫힌 단계는
+    건드리지 않는다.
+    """
+    end = now_iso()
+    for phase in phases:
+        if phase.get("finished_at") is None and phase.get("started_at"):
+            phase["finished_at"] = end
+            phase["duration_ms"] = _dur_ms(phase["started_at"], end)
+
+
 def phase_of(phases: list, name: str) -> dict | None:
     """이름이 ``name`` 인 마지막 단계 레코드를 반환한다(없으면 None)."""
     for phase in reversed(phases):

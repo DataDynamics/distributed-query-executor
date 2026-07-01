@@ -126,3 +126,4 @@ executor:
     cleanup: ${stage.cleanup:true}                # 적재 성공 후 로컬 CSV 디렉터리/외부테이블 정리 여부
     validate_hosts: ${stage.validate_hosts:true}  # Phase 2 전 file:// 호스트를 gp_segment_configuration 과 대조 검증(불일치 조기 실패)
     max_files_per_host: ${stage.max_files_per_host:0}  # 호스트당 최대 파일 수(0=gp_segment_configuration 의 호스트별 primary 세그먼트 수 S_h)
+    impala_convert_types: ${stage.impala_convert_types:false}  # export fetch 형변환(false=끔: timestamp/date/decimal 을 wire 문자열 그대로 받아 CSV write, 재파싱 비용 제거)
