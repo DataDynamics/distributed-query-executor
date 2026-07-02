@@ -1,0 +1,9 @@
+{# staging 테이블 생성 DDL(선택). stage_insert 는 이 TEMP 테이블에 COPY 한 뒤 target 으로
+   INSERT 한다. 반납 시 DISCARD ALL 로 정리되므로 ON COMMIT DROP 없이도 task 간 격리된다.
+   테이블명은 sql_ident 로 안전하게 인용한다. #}
+CREATE TEMP TABLE {{ staging_table | sql_ident }} (
+  user_id  bigint,
+  amount   numeric,
+  region   text,
+  dt       date
+)

@@ -148,6 +148,25 @@ class Settings:
         # 쿼리 파싱 기본 방언(요청에서 sql_dialect 로 재정의 가능)
         self.query_default_dialect: str = _get("query", "sql_dialect", "hive")
 
+        # ───────── 쿼리 템플릿 엔진 ─────────
+        # SELECT/STAGING DDL/INSERT 를 서버 템플릿 파일로 런타임 생성(요청은 파라미터만 전달).
+        self.template_enabled: bool = _to_bool(_get("template", "enabled", True))
+        # 템플릿 루트 디렉터리(하위 <template_id>/manifest.yml + *.sql.j2). 개발 시
+        # packaging/config/templates 를 QUERY_EXECUTOR_CONFIG_DIR 로 가리키면 그 아래를 쓴다.
+        self.template_dir: str = _get(
+            "template", "dir", str(_CONFIG_DIR / "templates")
+        )
+        # 파일 변경 자동 리로드(개발 편의). 운영에선 false 로 stat 비용 제거.
+        self.template_auto_reload: bool = _to_bool(_get("template", "auto_reload", False))
+        # 커스텀 함수 모듈(쉼표 구분 import 경로). 엔진 기동 시 import 되어 필터/글로벌 등록.
+        self.template_func_modules: list[str] = _csv_list(
+            _get("template", "func_modules", "")
+        )
+        # 렌더된 DDL/INSERT 조각을 단일 SQL 문으로 강제(다중 문 인젝션 방지).
+        self.template_validate_ddl_single_stmt: bool = _to_bool(
+            _get("template", "validate_ddl_single_stmt", True)
+        )
+
         # ───────── 로깅 (공통) ─────────
         self.log_level: str = _get("logging", "level", "INFO")
         self.log_dir: Path = Path(_get("logging", "dir", "logs"))

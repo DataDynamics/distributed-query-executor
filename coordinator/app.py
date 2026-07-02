@@ -61,6 +61,7 @@ from .parser import QueryValidationError, is_row_returning, validate_and_parse
 from .reservation import ReservationRepository, ReservingLoadView
 from .selector import ExecutorSelector, SharedLoadView
 from .splitter import split, wrap
+from .template import TemplateEngine, TemplateError
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,54 @@ def _assign_executors(count: int, executors: list[str]) -> list[Optional[str]]:
     return [next(cycle) for _ in range(count)]
 
 
+def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
+    """template_id 가 지정된 요청을 렌더링해 SQL 필드/스칼라 기본값을 제자리에서 채운다.
+
+    렌더 결과를 기존 요청 필드에 주입하므로, 이후 파이프라인(parser/splitter/dispatcher)은
+    raw-SQL 요청과 완전히 동일하게 동작한다. 병합 원칙:
+
+    - 스칼라(partition_column/target_table/write_mode 등): **요청이 명시한 값이 우선**이고,
+      명시하지 않은 필드만 manifest 기본값으로 채운다(``model_fields_set`` 로 구분).
+    - exec_mode: 요청 명시값 > manifest 기본 > 'copy' 순으로 엔진이 결정한 값으로 확정한다.
+    - SQL 조각: exec_mode 가 요구하는 필드에 렌더 결과를 넣는다. stage_insert 는 관례상
+      INSERT 를 wrapper_query 에 싣고(executor 계약), local_stage 는 insert_sql 에 싣는다.
+    """
+    # 요청이 명시한 스칼라만 추린다(model_fields_set). manifest 기본값을 이기고, 렌더
+    # 컨텍스트에도 노출되어 템플릿이 effective target_table 등을 참조할 수 있게 한다.
+    _scalar_keys = (
+        "exec_mode", "partition_column", "target_table", "staging_table",
+        "write_mode", "split_strategy", "failure_policy", "parallelism",
+        "sql_dialect", "strict_validation",
+    )
+    request_scalars = {
+        k: getattr(req, k) for k in _scalar_keys if k in req.model_fields_set
+    }
+    result = engine.render(req.template_id, req.params, request_scalars=request_scalars)
+
+    # 요청이 명시하지 않은 스칼라만 manifest 기본값으로 채운다(exec_mode 는 아래에서 확정).
+    for key, val in result.defaults.items():
+        if key == "exec_mode":
+            continue
+        if key not in req.model_fields_set and hasattr(req, key):
+            setattr(req, key, val)
+    req.exec_mode = result.exec_mode
+
+    # 렌더된 SQL 조각 주입.
+    req.sql = result.select
+    if result.exec_mode in ("copy", "statement"):
+        if result.wrapper:
+            req.wrapper_query = result.wrapper
+    elif result.exec_mode == "stage_insert":
+        if result.staging_ddl:
+            req.staging_ddl = result.staging_ddl
+        req.wrapper_query = result.insert  # stage_insert 는 wrapper_query 를 INSERT 로 사용
+    elif result.exec_mode == "local_stage":
+        if result.staging_ddl:
+            req.staging_ddl = result.staging_ddl
+        req.insert_sql = result.insert
+        req.external_columns = result.external_columns
+
+
 def create_app(
     runner: Optional[JobRunner] = None,
     store: Optional[JobStore] = None,
@@ -109,6 +158,8 @@ def create_app(
     settings = settings or default_settings
     store = store or build_job_store(settings)
     monitor = HealthMonitor(settings)
+    # 쿼리 템플릿 엔진: 켜져 있으면 1개 생성해 요청 렌더링에 재사용(단일 워커라 in-process 안전).
+    template_engine = TemplateEngine(settings) if settings.template_enabled else None
     started_at = now_dt()
     start_monotonic = time.monotonic()
     # self-report 모드면 executor 상태를 공유 테이블에서 읽는다(coordinator 폴링/기록 안 함)
@@ -240,11 +291,20 @@ def create_app(
     app.state.selector = selector
     app.state.load_view = load_view
     app.state.assign_counts = assign_counts
+    app.state.template_engine = template_engine
 
     @app.exception_handler(QueryValidationError)
     async def _validation_handler(_: Request, exc: QueryValidationError):
         # 검증/분할 단계에서 던지는 도메인 예외를 일관된 422 JSON 으로 변환한다.
         # (error_code 를 본문에 실어 클라이언트가 실패 원인을 분기할 수 있게 한다.)
+        return JSONResponse(
+            status_code=422,
+            content={"error_code": exc.code, "message": exc.message},
+        )
+
+    @app.exception_handler(TemplateError)
+    async def _template_handler(_: Request, exc: TemplateError):
+        # 템플릿 로드/검증/렌더 실패도 검증 오류와 동일하게 422 + error_code 로 변환한다.
         return JSONResponse(
             status_code=422,
             content={"error_code": exc.code, "message": exc.message},
@@ -282,9 +342,29 @@ def create_app(
         5. 수용되면 Job/Task 를 store 에 저장하고 background 로 runner.run 을 예약한 뒤
            202(job_id)를 반환한다.
         """
+        # 템플릿 모드: SQL 을 클라이언트가 보내는 대신, 서버 템플릿을 params 로 렌더링해
+        # sql/staging_ddl/insert_sql/external_columns/wrapper_query 와 스칼라 기본값을 채운다.
+        # 렌더 결과는 아래 raw-SQL 경로와 동일한 필드에 주입되므로 이후 흐름은 바뀌지 않는다.
+        if req.template_id:
+            if template_engine is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="템플릿 기능이 비활성화되어 있습니다(template.enabled=false).",
+                )
+            _apply_template(req, template_engine)  # TemplateError → 422 예외 핸들러
+
+        # 공통 필수 필드 검증(raw/템플릿 공통). 템플릿 모드는 렌더/병합 후 채워졌어야 한다.
+        _missing = [n for n in ("sql", "partition_column", "target_table") if not getattr(req, n)]
+        if _missing:
+            raise QueryValidationError(
+                "MISSING_REQUIRED_FIELDS",
+                f"필수 필드가 비어 있습니다: {', '.join(_missing)}. "
+                "raw 모드는 요청에, 템플릿 모드는 요청 또는 manifest 기본값으로 제공하세요.",
+            )
+
         logger.info(
-            "쿼리 실행 요청 수신 (partition=%s, target=%s, exec_mode=%s, dry_run=%s)",
-            req.partition_column, req.target_table, req.exec_mode, req.dry_run,
+            "쿼리 실행 요청 수신 (template=%s, partition=%s, target=%s, exec_mode=%s, dry_run=%s)",
+            req.template_id, req.partition_column, req.target_table, req.exec_mode, req.dry_run,
         )
         # 동기 검증 + 분할: 비동기 디스패치 전에 마치므로, 여기서 발생하는 오류는
         # 백그라운드 작업으로 넘어가지 않고 즉시(이 요청-응답 사이클에서) 클라이언트에
@@ -443,6 +523,8 @@ def create_app(
                     else None
                 ),
                 impala_query_options=req.impala_query_options,
+                template_id=req.template_id,
+                template_params=(dict(req.params) if req.template_id else None),
                 external_columns=req.external_columns,
                 export_local_dir=req.export_local_dir,
                 csv_delimiter=req.csv_delimiter,
@@ -596,6 +678,8 @@ def create_app(
                     staging_ddl=src.staging_ddl,
                     insert_sql=src.insert_sql,
                     impala_query_options=src.impala_query_options,
+                    template_id=src.template_id,
+                    template_params=src.template_params,
                     status=JobStatus.SPLITTING,
                     retry_of=src.job_id,
                 )
@@ -794,6 +878,18 @@ def create_app(
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
         return format_at_fields(history_reader.read(limit=limit, offset=offset))
+
+    @app.get(
+        "/templates",
+        tags=["Jobs"],
+        summary="사용 가능한 쿼리 템플릿 목록(파라미터 스키마 포함)",
+        description="서버 템플릿 루트를 스캔해 template_id·설명·기본 exec_mode·파라미터 스키마를 반환한다. "
+        "클라이언트는 이 스키마를 보고 params 를 구성해 POST /jobs 에 template_id 로 실행한다.",
+    )
+    def list_templates():
+        if template_engine is None:
+            return {"enabled": False, "templates": []}
+        return {"enabled": True, "templates": template_engine.list_templates()}
 
     @app.get("/datasources", tags=["Monitoring"], summary="테스트 가능한 데이터소스 목록")
     def list_datasources():

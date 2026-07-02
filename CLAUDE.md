@@ -52,6 +52,13 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `HttpDispatcher`(원격), `LocalDispatcher`(in-process). 하위 클래스는 `_execute(job)` 만 구현.
 - `coordinator/parser.py` — sqlglot 검증. `strict_validation=true`(단순 SELECT) vs
   `false`(JOIN/서브쿼리/GROUP BY 등 복합 쿼리에서 파티션 `IN` 절을 트리 어디서든 탐색).
+- `coordinator/template.py` + `template_funcs.py` — **쿼리 템플릿 엔진**. 클라이언트가 SQL
+  전문 대신 `template_id`+`params` 를 보내면, 서버 템플릿(`template.dir/<id>/manifest.yml` +
+  `*.sql.j2`)을 Jinja2 `SandboxedEnvironment` 로 렌더해 SELECT/STAGING DDL/INSERT 를 만들고
+  기존 요청 필드에 주입한다(이후 parser→splitter→dispatch 무변경). 커스텀 함수는
+  `@template_filter`/`@template_global` 레지스트리(내장 `sql_str`/`sql_in`/`sql_ident`/`sql_num`/
+  `date_range`) + 설정 `template.func_modules` 로 확장. `template_id` 미지정 시 기존 raw-SQL
+  방식 그대로(하위 호환). 예제: `packaging/config/templates/sales_migration/`. 자세히는 DESIGN §18.
 - `coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
 - `coordinator/stage.py` — **`local_stage`(file:// 세그먼트 로컬 스테이징) Phase 2 SQL 조립**(순수
   함수): `file://` 외부테이블 DDL·staging 적재·멱등 DELETE·정리 SQL, 파일 예산 배분
@@ -90,6 +97,9 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `executor.max_concurrent_tasks`(executor당 8) / `greenplum.pool_max`(GP 커넥션 풀, 0=동시 task 수와 동일).
 - 멀티 coordinator: `store.backend=postgres` + 공유 `history.db_dsn`, `executor.self_report=true`.
 - 백엔드: `impala.host` + `greenplum.dsn` 둘 다 있으면 실제 백엔드, 아니면 `MockBackend`.
+- 템플릿 엔진: `template.dir`(템플릿 루트, 개발 `packaging/config/templates`) / `template.enabled` /
+  `template.auto_reload`(개발 편의) / `template.func_modules`(커스텀 함수 모듈) /
+  `template.validate_ddl_single_stmt`. 의존성 `Jinja2`(requirements.txt).
 
 ## 관례 / 주의점
 
