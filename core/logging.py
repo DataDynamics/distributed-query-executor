@@ -222,11 +222,14 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
 
     # uvicorn/httpx 등 서드파티의 과도한 로그를 정리한다.
     # access 로그는 메인 레벨이 INFO 이하일 때만 INFO 로 남기고, 그보다 엄격하면
-    # WARNING 으로 올려 요청 단위 잡음을 줄인다. httpx 는 항상 WARNING 이상만 남긴다.
+    # WARNING 으로 올려 요청 단위 잡음을 줄인다. httpx/httpcore 는 항상 WARNING 이상만 남긴다
+    # (DEBUG 모드에서 httpcore 의 저수준 트레이스(_trace.py: send/receive/close 등)가 로그를
+    # 뒤덮지 않도록. 앱의 상세 DEBUG 로그와 분리한다).
     logging.getLogger("uvicorn.access").setLevel(
         logging.INFO if log_level <= logging.INFO else logging.WARNING
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     # 기동 시 유효 로그 레벨을 한 줄 남겨, 파일만 보고도 상세(DEBUG) 추적이 켜졌는지 알 수 있게 한다.
     logging.getLogger(__name__).info(

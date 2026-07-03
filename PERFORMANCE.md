@@ -458,6 +458,12 @@ WHERE dt IN ('2026-07-01','2026-07-02');   -- ← 각 task 의 파티션 버킷
 > 언제 쓰나: **`finalize_wait` 가 벽이고 executor 수평 확장으로도 안 풀릴 때**가 명확한 신호다.
 > 반대로 `read_starve`(Impala) 가 지배적이면 변형 B(Impala 병렬 export)가, 데이터량이 크지 않거나
 > PXF 설치·망 개방이 어려우면 기존 경로의 `parallelism`↑ 가 비용 대비 낫다.
+> **구조적 한계(`finalize_wait` 이 계속 지배)라면 적재 방식 자체를 바꾼다.** `parallelism` 을 더
+> 올려도 결국 각 executor 의 **단일 COPY 스트림이 GP 마스터로 몰리는 것**이 천장일 수 있습니다.
+> 이때는 `exec_mode=local_stage`(DESIGN §17)가 적재 병렬성을 **GP 세그먼트로 이동**시켜 이 병목을
+> 없앱니다 — executor 가 세그먼트 호스트 로컬 CSV 로 export 하고, GP 가 `file://` 외부테이블로
+> **세그먼트별 로컬 파일을 병렬 read** 하므로 단일 소켓 병목이 사라집니다(단, executor 를 GP 세그먼트
+> 호스트에 co-locate 해야 함).
 
 ---
 

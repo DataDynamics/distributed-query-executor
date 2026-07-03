@@ -148,6 +148,25 @@ class Settings:
         # 쿼리 파싱 기본 방언(요청에서 sql_dialect 로 재정의 가능)
         self.query_default_dialect: str = _get("query", "sql_dialect", "hive")
 
+        # ───────── 쿼리 템플릿 엔진 ─────────
+        # SELECT/STAGING DDL/INSERT 를 서버 템플릿 파일로 런타임 생성(요청은 파라미터만 전달).
+        self.template_enabled: bool = _to_bool(_get("template", "enabled", True))
+        # 템플릿 루트 디렉터리(하위 <template_id>/manifest.yml + *.sql.j2). 개발 시
+        # packaging/config/templates 를 QUERY_EXECUTOR_CONFIG_DIR 로 가리키면 그 아래를 쓴다.
+        self.template_dir: str = _get(
+            "template", "dir", str(_CONFIG_DIR / "templates")
+        )
+        # 파일 변경 자동 리로드(개발 편의). 운영에선 false 로 stat 비용 제거.
+        self.template_auto_reload: bool = _to_bool(_get("template", "auto_reload", False))
+        # 커스텀 함수 모듈(쉼표 구분 import 경로). 엔진 기동 시 import 되어 필터/글로벌 등록.
+        self.template_func_modules: list[str] = _csv_list(
+            _get("template", "func_modules", "")
+        )
+        # 렌더된 DDL/INSERT 조각을 단일 SQL 문으로 강제(다중 문 인젝션 방지).
+        self.template_validate_ddl_single_stmt: bool = _to_bool(
+            _get("template", "validate_ddl_single_stmt", True)
+        )
+
         # ───────── 로깅 (공통) ─────────
         self.log_level: str = _get("logging", "level", "INFO")
         self.log_dir: Path = Path(_get("logging", "dir", "logs"))
@@ -313,6 +332,12 @@ class Settings:
             os.getenv("EXECUTOR_ADVERTISE_URL")
             or _get("executor", "advertise_url", "")
         )
+        # local_stage: 이 executor 가 올라가 있는 GP 세그먼트 호스트명. coordinator 가 file://
+        # URI(file://<hostname>/...)를 조립할 때 쓰며, gp_segment_configuration.hostname 과
+        # 정확히 일치해야 세그먼트가 로컬 파일을 찾는다. 미설정 시 OS hostname 을 쓴다.
+        self.executor_gp_hostname: str = (
+            os.getenv("EXECUTOR_GP_HOSTNAME") or _get("executor", "gp_hostname", "")
+        )
         # executor self-report 시 자기 상태를 기록할 테이블과 기록 주기(초).
         self.executor_status_table: str = _qualify_table(self.db_schema, _get("executor", "status_table", "executor_status"))
         self.executor_status_interval_s: float = float(
@@ -386,6 +411,45 @@ class Settings:
         self.greenplum_pool_max: int = int(
             _get_nested("executor", "greenplum", "pool_max", 0)
         ) or _pool_default
+
+        # ───────── local_stage (file:// 세그먼트 로컬 스테이징) ─────────
+        # executor 가 Impala 결과를 CSV 로 떨어뜨릴 로컬 디렉터리 루트. 모든 세그먼트 호스트가
+        # 동일 경로를 쓰되, 그 안의 파일은 호스트마다 다르다(각자 자기 몫만 쓴다). job 별
+        # 하위 디렉터리({local_dir}/{job_id}/)로 격리된다.
+        self.stage_local_dir: str = _get_nested(
+            "executor", "stage", "local_dir", "/data1/query-executor/stage"
+        )
+        # CSV 방언 — executor 의 write 와 GP file:// 외부테이블 FORMAT 'CSV'(...) 에 공통 적용된다.
+        # 양쪽이 정확히 일치해야 하며(불일치 시 조용한 데이터 오염), 기본 구분자는 데이터에 잘
+        # 나타나지 않는 backtick(`). 설정으로 바꿀 수 있다.
+        self.stage_csv_delimiter: str = str(
+            _get_nested("executor", "stage", "csv_delimiter", "`")
+        ) or "`"
+        self.stage_csv_null: str = str(_get_nested("executor", "stage", "csv_null", ""))
+        self.stage_csv_quote: str = str(
+            _get_nested("executor", "stage", "csv_quote", '"')
+        ) or '"'
+        # Phase 3 정리: 적재 성공 후 로컬 CSV 디렉터리와 외부테이블을 제거할지 여부.
+        self.stage_cleanup: bool = _to_bool(
+            _get_nested("executor", "stage", "cleanup", True)
+        )
+        # file:// 호스트 검증: Phase 2 전에 매핑된 세그먼트 호스트가 실제로
+        # gp_segment_configuration 에 있는지 확인해 오타/불일치를 조기 실패시킬지 여부.
+        self.stage_validate_hosts: bool = _to_bool(
+            _get_nested("executor", "stage", "validate_hosts", True)
+        )
+        # 호스트당 최대 파일 수 상한. file:// 규칙상 "호스트당 파일 수 ≤ 그 호스트의 primary
+        # 세그먼트 수(S_h)". 0 이면 gp_segment_configuration 의 S_h 를 그대로 상한으로 쓰고,
+        # >0 이면 min(S_h, 이 값)으로 더 낮춘다(세그먼트보다 적게 쓰고 싶을 때).
+        self.stage_max_files_per_host: int = int(
+            _get_nested("executor", "stage", "max_files_per_host", 0)
+        )
+        # local_stage export 시 impyla 커서에 넘길 convert_types 값. False(기본)면 형변환을 꺼
+        # TIMESTAMP/DATE/DECIMAL 을 wire 문자열 그대로 받아 CSV 로 바로 쓴다(재파싱 비용 제거).
+        # 특수 타입(BINARY 등)이 문자열화에 문제가 되면 true 로 되돌린다.
+        self.stage_impala_convert_types: bool = _to_bool(
+            _get_nested("executor", "stage", "impala_convert_types", False)
+        )
 
 
 def init_settings(

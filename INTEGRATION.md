@@ -147,6 +147,58 @@ DDL 이므로, 뒤따르는 COPY 가 채울 컬럼을 가진 테이블을 만들
 충돌하지 않지만, DDL 을 생략하고 기존 영구 테이블을 공유하면 충돌·간섭이 생길 수 있다는 점을
 앞서 설명한 대로 유의하세요.
 
+### 2.2 템플릿 모드 — SQL 대신 파라미터만 보내기
+
+위 예시처럼 SQL 전문을 직접 담는 대신, **서버에 보관된 쿼리 템플릿**을 지정하고 값(파라미터)만
+보낼 수 있습니다. 쿼리 관리 주체가 서버로 옮겨가므로, 클라이언트는 SQL 을 몰라도 되고 쿼리를
+바꿔도 클라이언트를 다시 배포할 필요가 없습니다.
+
+먼저 어떤 템플릿이 있고 어떤 파라미터를 받는지 `GET /templates` 로 조회합니다.
+
+```bash
+curl http://<coordinator-host>:8088/templates
+```
+
+```json
+{
+  "enabled": true,
+  "templates": [
+    {
+      "template_id": "sales_migration",
+      "description": "일별 매출 Impala→Greenplum 이관(날짜 구간 파라미터로 IN 목록 자동 생성)",
+      "exec_mode": "stage_insert",
+      "partition_column": "dt",
+      "params": [
+        {"name": "start_dt", "type": "date", "required": true, "default": null},
+        {"name": "end_dt",   "type": "date", "required": true, "default": null},
+        {"name": "regions",  "type": "list", "required": false, "default": []}
+      ]
+    }
+  ]
+}
+```
+
+그다음 `template_id` 와 `params` 만 담아 `/jobs` 로 제출합니다. `exec_mode`·`partition_column`·
+`target_table` 같은 값은 템플릿(manifest)의 기본값이 쓰이며, 요청에 명시하면 그 값이 우선합니다.
+
+```json
+{
+  "template_id": "sales_migration",
+  "params": { "start_dt": "2026-01-01", "end_dt": "2026-06-25", "regions": ["KR"] },
+  "username": "etl-bot",
+  "parallelism": 4
+}
+```
+
+서버가 템플릿을 렌더링해 SELECT/STAGING DDL/INSERT 를 만들고, 그 뒤는 앞 절과 완전히 동일하게
+동작합니다(202 + `job_id`). 실행 전에 어떤 SQL 이 만들어지는지 확인하려면 `"dry_run": true` 를
+넣으면 렌더된 계획이 **200** 으로 돌아옵니다. 필수 파라미터가 빠지거나 없는 템플릿을 지정하면
+**422** 로 거부되며, 본문의 `error_code` 로 원인을 구분할 수 있습니다(`TEMPLATE_PARAM_ERROR`,
+`TEMPLATE_NOT_FOUND` 등 — 아래 5.2 참고).
+
+> 템플릿을 쓰지 않고 지금까지처럼 SQL 전문을 직접 담아 보내는 방식도 그대로 지원됩니다
+> (하위 호환). `template_id` 를 넣지 않으면 raw-SQL 모드로 동작합니다.
+
 ---
 
 ## 3. 2단계 — 완료될 때까지 대기 (폴링)

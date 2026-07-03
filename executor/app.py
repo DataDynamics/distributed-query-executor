@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from core.config import settings
 from core.dbprobe import clamp_limit, run_impala_select, run_postgres_select
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
+from core.phases import close_open_phases
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.webassets import mount_static, register_offline_docs
 from .backend import Backend, build_backend, build_impala_dsn
@@ -46,6 +48,17 @@ logger = logging.getLogger(__name__)
 def _now_iso() -> str:
     """현재 시각을 KST(타임존 없는) ISO 문자열로 반환. started_at/finished_at 기록용."""
     return now_iso()
+
+
+def _gp_hostname() -> str:
+    """이 executor 가 보고할 GP 세그먼트 호스트명. 설정값 우선, 없으면 OS hostname.
+
+    local_stage 의 file:// URI(``file://<hostname>/...``)에서 hostname 은
+    ``gp_segment_configuration.hostname`` 과 정확히 일치해야 한다. co-locate 배포에서 OS
+    hostname 이 대개 그 값이지만, FQDN/짧은이름/별칭 차이가 있으면 ``executor.gp_hostname``
+    으로 명시 오버라이드한다. coordinator 는 이 값을 file:// URI 조립의 근거로 쓴다.
+    """
+    return settings.executor_gp_hostname or socket.gethostname()
 
 
 def _snip(text: Optional[str], limit: int = 300) -> str:
@@ -198,6 +211,7 @@ def create_app(
             if task.cancel_requested:
                 task.status = TaskStatus.CANCELLED
                 task.finished_at = _now_iso()
+                close_open_phases(task.phases)  # 열린 단계(QUEUE_WAIT 등) 마감
                 await history.record(task)  # CANCELLED 이력
                 return
             # 슬롯 대기(QUEUE_WAIT) 단계 종료: 접수(create_task)에서 시작해 여기서 닫는다.
@@ -239,6 +253,21 @@ def create_app(
                         on_stage=task.on_stage,
                     ),
                 )
+            elif task.exec_mode == "local_stage":
+                # local_stage: Impala 결과를 자기 호스트 로컬 CSV 로 export(Phase 1).
+                # GP file:// 적재(Phase 2)는 coordinator 가 배리어 후 별도로 수행한다.
+                rows = await loop.run_in_executor(
+                    None,
+                    lambda: ctx.run(
+                        app.state.backend.export_to_local_csv,
+                        task.sub_query,
+                        task.out_path,
+                        task.csv_options,
+                        progress,
+                        query_options=task.impala_query_options,
+                        on_stage=task.on_stage,
+                    ),
+                )
             else:
                 # copy 모드: Impala read → Greenplum COPY
                 rows = await loop.run_in_executor(
@@ -260,6 +289,7 @@ def create_app(
             if task.cancel_requested:
                 task.status = TaskStatus.CANCELLED
                 task.finished_at = _now_iso()
+                close_open_phases(task.phases)  # 실행 중 취소 — 열린 단계 마감
                 logger.info("task %s 취소됨", task.task_id)
                 await history.record(task)
                 return
@@ -271,6 +301,8 @@ def create_app(
             task.status = TaskStatus.FAILED
             task.error = str(exc)
             task.finished_at = _now_iso()
+            # 실패한 단계(start 만 있고 end 없는)를 지금으로 마감 → 소요시간이 계속 증가하지 않게.
+            close_open_phases(task.phases)
             logger.exception("task %s 실패", task.task_id)
             await history.record(task)  # FAILED 이력
 
@@ -310,6 +342,8 @@ def create_app(
             staging_ddl=req.staging_ddl,
             insert_sql=req.insert_sql,
             impala_query_options=req.impala_query_options,
+            out_path=req.out_path,
+            csv_options=req.csv_options,
         )
         # 접수 시각부터 슬롯 확보까지의 대기(QUEUE_WAIT) 단계를 연다. _run 진입 시 닫힌다.
         task.on_stage("QUEUE_WAIT", "start")
@@ -401,6 +435,34 @@ def create_app(
             await history.record(task)
         return format_at_fields(task.view())
 
+    @app.post(
+        "/stage/{job_id}/cleanup",
+        tags=["Tasks"],
+        summary="local_stage 로컬 CSV 디렉터리 정리",
+    )
+    def cleanup_stage(job_id: str):
+        """local_stage 의 로컬 CSV 디렉터리(``{stage.local_dir}/{job_id}``)를 삭제한다.
+
+        Phase 2(GP file:// 적재)가 끝난 뒤 coordinator 가 각 executor 에 호출한다. 경로
+        이탈을 막기 위해 job_id 의 basename 으로 만든 하위 디렉터리만 지우며, 없으면 조용히
+        통과한다(멱등). 반환: 실제 삭제 여부.
+        """
+        import os
+        import shutil
+
+        safe = os.path.basename(job_id)  # 경로 조작 방지: 하위 디렉터리명만 사용
+        target = os.path.join(settings.stage_local_dir, safe)
+        removed = False
+        with job_log_context(job_id):
+            if safe and os.path.isdir(target):
+                shutil.rmtree(target, ignore_errors=True)
+                removed = True
+                logger.info("local_stage 로컬 CSV 정리: %s 삭제", target)
+            else:
+                # coordinator 가 이미 정리했거나 이 호스트엔 파일이 없던 경우(멱등).
+                logger.debug("local_stage 로컬 CSV 정리: 대상 없음(%s)", target)
+        return {"job_id": job_id, "removed": removed}
+
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
         """liveness 체크: 프로세스가 떠 있으면 서비스명/버전과 함께 ok 반환."""
@@ -433,6 +495,8 @@ def create_app(
         m = collect_system_metrics(settings.monitor_disk_path)
         active, queued, mx = _task_counts()
         m["tasks"] = {"active": active, "queued": queued, "max": mx}
+        # local_stage: coordinator 가 file:// URI 조립에 쓸 GP 세그먼트 호스트명(항상 노출).
+        m["gp_hostname"] = _gp_hostname()
         return m
 
     @app.get("/datasources", tags=["Monitoring"], summary="테스트 가능한 데이터소스 목록/구성여부")
@@ -524,6 +588,7 @@ def create_app(
                 "executor_id": _executor_id(),
                 "self_report": settings.executor_self_report,
                 "advertise_url": settings.executor_advertise_url,
+                "gp_hostname": _gp_hostname(),
                 "max_concurrent_tasks": mx,
                 "active_tasks": active,
                 "queued_tasks": queued,
