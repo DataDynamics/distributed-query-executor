@@ -875,7 +875,78 @@ executor가 쓰는 CSV의 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 �
 
 ---
 
-## 18. 향후 확장
+## 18. 쿼리 템플릿 엔진 (Query Template Engine)
+
+지금까지는 클라이언트가 **완성된 SQL 전문**(SELECT·STAGING DDL·INSERT)을 JSON 에 담아 보냈습니다. 이 방식은 클라이언트마다 SQL 조립 로직이 흩어지고, 쿼리를 바꾸려면 모든 클라이언트를 다시 배포해야 하며, 표준화·감사가 어렵다는 문제가 있었습니다. 이를 해결하기 위해, **SQL 을 서버의 템플릿 파일로 보관하고 클라이언트는 파라미터만 보내는** 템플릿 엔진을 추가했습니다.
+
+### 18.1 핵심 아이디어
+
+한마디로 "쿼리는 서버에 두고, 클라이언트는 값만 보낸다"입니다. `POST /jobs` 처리 초입에서 coordinator 가 `template_id` 로 지정된 서버 템플릿을 `params` 로 **런타임 렌더링**해 완성된 SQL 을 만들고, 그 결과를 기존 요청 필드(`sql`/`staging_ddl`/`insert_sql`/`external_columns`/`wrapper_query`)에 그대로 주입합니다. 그 뒤의 검증(parser)·분할(splitter)·디스패치 파이프라인은 **하나도 바뀌지 않습니다** — 렌더는 얇은 선행 단계일 뿐입니다.
+
+```mermaid
+flowchart LR
+    C([Client: template_id + params]) --> R[템플릿 렌더<br/>coordinator/template.py]
+    T[(서버 템플릿 파일<br/>manifest.yml + *.sql.j2)] --> R
+    F[커스텀 함수<br/>template_funcs.py] --> R
+    R -->|sql/staging_ddl/insert_sql 주입| V[validate_and_parse]
+    V --> S[split] --> D[dispatch]
+```
+
+파티션 `IN` 분할과도 자연스럽게 합성됩니다: 템플릿이 `WHERE dt IN ( {{ date_range(start_dt, end_dt) | sql_in }} )` 처럼 IN 목록을 만들고, splitter 가 그 목록을 N분할합니다.
+
+### 18.2 템플릿 저장 구조
+
+`template.dir`(기본 `/data1/query-executor/config/templates`, 개발 시 `packaging/config/templates`) 아래 **`<template_id>/` 디렉터리 하나가 하나의 이관 시나리오**입니다.
+
+```
+<template_dir>/sales_migration/
+  manifest.yml          # 메타 + 파라미터 스키마 + 조각 파일 매핑
+  select.sql.j2         # SELECT (파티션 IN 포함)
+  staging_ddl.sql.j2    # (선택) staging DDL
+  insert.sql.j2         # (선택) staging→target INSERT
+```
+
+`manifest.yml` 은 실행 스칼라 기본값(`exec_mode`·`partition_column`·`target_table`·`staging_table`·`write_mode` 등), 파라미터 스키마(`params`: 이름/타입/필수/기본값), role→파일 매핑(`files`)을 담습니다. manifest 스칼라는 **요청이 명시하면 요청이 이기고, 없으면 기본값**이 쓰이므로(요청 `model_fields_set` 로 구분), 클라이언트는 `template_id`+`params` 만으로도 완전한 작업을 만들 수 있습니다.
+
+`exec_mode` 별 필요한 조각(role):
+
+| exec_mode | 필수 role | 선택 role |
+|---|---|---|
+| `copy` / `statement` | `select` | `wrapper` |
+| `stage_insert` | `select`, `insert` | `staging_ddl` |
+| `local_stage` | `select`, `insert`, `external_columns` | `staging_ddl` |
+
+> `stage_insert` 는 관례상 렌더된 INSERT 를 `wrapper_query` 에 싣고(executor 계약), `local_stage` 는 `insert_sql` 에 싣습니다 — §9·§17 의 기존 필드 계약을 그대로 따릅니다.
+
+### 18.3 엔진과 커스텀 함수
+
+- **엔진**(`coordinator/template.py`, `TemplateEngine`): Jinja2 `SandboxedEnvironment` + `StrictUndefined`(미정의 변수 즉시 실패, 위험 속성 접근 차단), `autoescape=False`(HTML 이 아닌 SQL). 단일 워커 전제라 in-process 캐시가 안전하며, `template.auto_reload` 로 개발 중 변경을 반영합니다. `create_app` 에서 1개 생성해 주입합니다.
+- **커스텀 함수**(`coordinator/template_funcs.py`): `@template_filter`/`@template_global` 데코레이터로 등록하는 레지스트리. 내장 SQL 안전 필터(`sql_str`·`sql_in`·`sql_num`·`sql_ident`)와 도메인 글로벌(`date_range`)을 제공합니다. 설정 `template.func_modules`(쉼표 구분 import 경로)에 모듈을 지정하면 엔진 기동 시 import 되어 앱 코드 수정 없이 함수를 추가할 수 있습니다.
+
+### 18.4 보안
+
+템플릿 파일은 **서버 신뢰 자산**, 파라미터는 **비신뢰 입력**입니다. 두 층으로 방어합니다.
+
+1. **경로 탈출 차단**: `template_id` 는 영숫자/`_`/`-` 만 허용(`TEMPLATE_ID_INVALID`).
+2. **SQL 인젝션 방지**: 파라미터는 반드시 `sql_str`/`sql_in`/`sql_ident`/`sql_num` 필터를 거쳐 이스케이프·검증합니다(`sql_num` 은 비숫자 거부, `sql_in` 은 빈 목록을 안전한 `NULL` 로).
+3. **렌더 후 재검증**: 렌더된 SELECT 는 이후에도 `validate_and_parse` 를 통과해야 하므로, 다중 문/비-SELECT 인젝션은 기존 검증(`MULTIPLE_STATEMENTS`/`NOT_A_SELECT`)에서 걸러집니다.
+4. **DDL/INSERT 단일 문 검사**: parser 를 타지 않는 DDL/INSERT 조각은 `template.validate_ddl_single_stmt`(기본 on)로 `;` 다중 문을 차단합니다(`TEMPLATE_MULTIPLE_STATEMENTS`).
+
+### 18.5 API·감사·재현
+
+- `POST /jobs`: `template_id`+`params` 를 받으면 렌더 후 기존 흐름으로 실행. `dry_run=true` 면 렌더된 SQL 계획만 반환(실행·저장 없음). 렌더/검증 실패는 `422 + error_code`(`TEMPLATE_NOT_FOUND`/`TEMPLATE_PARAM_ERROR`/`TEMPLATE_RENDER_ERROR` 등).
+- `GET /templates`: 사용 가능한 템플릿 목록(설명·기본 exec_mode·파라미터 스키마)을 반환 — 클라이언트가 이 스키마를 보고 `params` 를 구성합니다.
+- **감사·재현**: `Job` 에 `template_id`·`template_params` 를 저장하고, 렌더된 SELECT 전문은 `original_sql` 에 그대로 보관합니다. retry 는 이미 저장된 sub_query 를 재사용하므로 **재렌더 없이** 동작합니다.
+
+### 18.6 하위 호환
+
+`template_id` 를 주지 않으면 기존 raw-SQL 방식이 **완전히 그대로** 동작합니다(`sql`/`partition_column`/`target_table` 을 요청에 직접 담는 방식). 두 방식 모두 공통 필수 필드(`sql`·`partition_column`·`target_table`)가 렌더/병합 후 비어 있으면 `422 MISSING_REQUIRED_FIELDS` 로 거부합니다.
+
+**테스트**: `tests/test_template.py` — 커스텀 함수/인젝션 이스케이프, 엔진 렌더(파라미터 검증·exec_mode 별 조각·단일 문 검사·경로 탈출), API 통합(예제 템플릿 `sales_migration`), 하위 호환까지 실 DB 없이 검증.
+
+---
+
+## 19. 향후 확장
 
 마지막으로, 지금은 없지만 앞으로 더할 만한 기능들을 적어 둡니다. 이 목록은 시스템이 어느 방향으로 발전하려 하는지를 보여 줍니다. 각 항목을 한 줄로 풀어 설명하면 다음과 같습니다.
 

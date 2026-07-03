@@ -1,0 +1,32 @@
+# 쿼리 템플릿 예제 — 일별 매출 Impala→Greenplum 이관.
+#
+# 클라이언트는 이 템플릿을 template_id="sales_migration" 로 지정하고 params(start_dt/end_dt/
+# regions)만 보낸다. coordinator 가 아래 조각 파일을 렌더링해 SELECT/STAGING DDL/INSERT 를
+# 만들고, 파티션 컬럼(dt)의 IN 목록을 splitter 가 N분할한다.
+#
+# manifest 최상위의 스칼라 값(exec_mode/partition_column/target_table/...)은 요청이 명시하면
+# 요청이 이기고, 없으면 여기 기본값이 쓰인다. 조각 템플릿에서도 target_table 등을 참조할 수 있다.
+
+id: sales_migration
+description: 일별 매출 Impala→Greenplum 이관(날짜 구간 파라미터로 IN 목록 자동 생성)
+
+# 기본 실행 방식과 분할/적재 스칼라(요청에서 재정의 가능).
+exec_mode: stage_insert            # Impala SELECT → GP staging(TEMP) COPY → target INSERT
+partition_column: dt               # 이 컬럼의 IN 목록을 splitter 가 분할
+target_table: public.sales         # 최종 적재 대상(요청 target_table 로 재정의 가능)
+staging_table: stg_sales           # staging 테이블(TEMP)
+write_mode: overwrite_partitions   # 담당 파티션 선삭제 후 적재(재실행 멱등)
+strict_validation: false           # 렌더 SELECT 가 복합 쿼리일 수 있어 lenient 로 둔다
+
+# 파라미터 스키마 — 필수/타입/기본값을 선언한다. 렌더 전 검증에 쓰인다.
+params:
+  - {name: start_dt, type: date, required: true}    # 시작일(YYYY-MM-DD)
+  - {name: end_dt,   type: date, required: true}    # 종료일(YYYY-MM-DD)
+  - {name: regions,  type: list, required: false, default: []}   # 지역 필터(비면 전체)
+
+# role → 조각 파일 매핑. exec_mode 가 요구하는 조각만 있으면 된다.
+#   stage_insert: select(필수) + insert(필수) + staging_ddl(선택)
+files:
+  select:      select.sql.j2
+  staging_ddl: staging_ddl.sql.j2
+  insert:      insert.sql.j2

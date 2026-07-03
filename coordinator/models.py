@@ -259,6 +259,10 @@ class Job:
     insert_sql: Optional[str] = None
     # 요청별 Impala 쿼리 옵션(SET). executor 에서 전역 기본값 위에 병합되어 적용된다.
     impala_query_options: Optional[dict] = None
+    # 템플릿 모드로 생성된 job 이면 사용한 template_id 와 렌더 파라미터를 보관(감사·재현용).
+    # original_sql 에는 이미 렌더된 SELECT 전문이 들어가므로 retry 는 재렌더 없이 동작한다.
+    template_id: Optional[str] = None
+    template_params: Optional[dict] = None
     # local_stage 전용(file:// 세그먼트 로컬 스테이징, §17).
     external_columns: Optional[str] = None   # file:// 외부테이블 컬럼 정의(요청자 명시)
     export_local_dir: Optional[str] = None   # 로컬 CSV 루트 오버라이드(없으면 stage.local_dir)
@@ -362,6 +366,8 @@ class Job:
             "staging_ddl": self.staging_ddl,
             "insert_sql": self.insert_sql,
             "impala_query_options": self.impala_query_options,
+            "template_id": self.template_id,
+            "template_params": self.template_params,
             "external_columns": self.external_columns,
             "export_local_dir": self.export_local_dir,
             "csv_delimiter": self.csv_delimiter,
@@ -399,6 +405,8 @@ class Job:
             staging_ddl=d.get("staging_ddl"),
             insert_sql=d.get("insert_sql"),
             impala_query_options=d.get("impala_query_options"),
+            template_id=d.get("template_id"),
+            template_params=d.get("template_params"),
             external_columns=d.get("external_columns"),
             export_local_dir=d.get("export_local_dir"),
             csv_delimiter=d.get("csv_delimiter"),
@@ -456,9 +464,28 @@ class CreateJobRequest(BaseModel):
     서로 연동되며, 도메인 동작은 parser/splitter/executor 모듈에서 처리한다.
     """
 
-    sql: str = Field(..., description="Impala SELECT 쿼리")
-    partition_column: str = Field(..., description="IN 목록으로 분할할 기준 컬럼")
-    target_table: str = Field(..., description="Greenplum 적재 대상 테이블")
+    # ── 템플릿 모드(선택) ──
+    # template_id 를 주면 서버 템플릿을 params 로 렌더링해 sql/staging_ddl/insert_sql/
+    # external_columns/wrapper_query 를 자동 생성한다. 이 경우 아래 sql 등 SQL 필드는 생략 가능
+    # (렌더 결과로 채워진다). partition_column/target_table/exec_mode 등 스칼라는 요청이 명시하면
+    # 요청이, 없으면 manifest 기본값이 쓰인다. template_id 미지정 시 기존 raw-SQL 방식 그대로.
+    template_id: Optional[str] = Field(
+        default=None,
+        description="서버 템플릿 ID(디렉터리명). 지정 시 params 로 SQL 을 런타임 생성한다.",
+    )
+    params: dict = Field(
+        default_factory=dict,
+        description="템플릿 렌더링 파라미터(template_id 지정 시 사용).",
+    )
+
+    # template_id 를 주면 렌더 결과가 채우므로 sql 은 선택이 된다(raw 모드에서는 필수처럼 취급).
+    sql: Optional[str] = Field(default=None, description="Impala SELECT 쿼리(raw 모드 필수)")
+    partition_column: Optional[str] = Field(
+        default=None, description="IN 목록으로 분할할 기준 컬럼(raw 모드 필수, 템플릿은 manifest 기본값 가능)"
+    )
+    target_table: Optional[str] = Field(
+        default=None, description="Greenplum 적재 대상 테이블(raw 모드 필수, 템플릿은 manifest 기본값 가능)"
+    )
     username: Optional[str] = Field(default=None, description="작업을 실행한 사용자")
     write_mode: Literal["append", "overwrite_partitions"] = "append"
     parallelism: int = Field(default=4, ge=1, le=128)
