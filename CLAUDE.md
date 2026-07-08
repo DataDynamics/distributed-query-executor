@@ -17,7 +17,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 178개.
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 354개.
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -108,6 +108,10 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - **대시보드는 빌드 도구 없는 인라인 HTML 문자열**(`coordinator/dashboard.py`,
   `executor/dashboard.py` 의 `DASHBOARD_HTML`). 이 문자열 내부 HTML/CSS/JS 를 수정할 때 따옴표/
   중괄호를 깨뜨리지 않도록 주의하고, 수정 후 `import` 로 무결성을 확인한다.
+  두 대시보드가 공유하는 스타일/JS 헬퍼(포맷터·표·타임라인·모달·페이저·탭 배선·esc 이스케이프)는
+  `core/static/dashboard-common.css`/`dashboard-common.js` 에 있다(`/assets` 서빙). 공통 룩앤필/
+  동작은 이 두 파일만 고치고, 페이지 문자열에 복사본을 되살리지 말 것(회귀 방지:
+  `tests/test_offline_assets.py`). 서버가 준 임의 문자열을 innerHTML 로 뿌릴 땐 `esc()`/`fmt()` 를 거친다.
 - **에어갭(외부 차단) 전제 → 웹 에셋은 내장**. 런타임에 외부 CDN/폰트로 나가면 안 된다.
   Swagger UI(`/docs`)·ReDoc(`/redoc`)·대시보드 폰트(Roboto Condensed)는 모두
   `core/static/` 에 vendoring 하고 `core/webassets.py`(`mount_static`/`register_offline_docs`)
