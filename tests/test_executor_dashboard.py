@@ -72,3 +72,12 @@ async def test_info_and_config_endpoints():
         # 비밀값(greenplum.dsn 등)이 평문으로 노출되지 않는다
         for row in conf["config"]:
             assert ":@" not in str(row["value"]) or "***" in str(row["value"])
+
+
+async def test_dashboard_has_cancel_action():
+    """처리중 탭의 task 취소 버튼(JS 핸들러)이 HTML 에 포함돼야 한다."""
+    app = create_executor_app()
+    async with _client(app) as c:
+        html = (await c.get("/")).text
+    assert "cancelTask(" in html     # 활성 task 취소 → POST /tasks/{id}/cancel
+    assert "postJSON" in html        # 액션 공용 헬퍼

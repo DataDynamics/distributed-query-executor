@@ -94,3 +94,11 @@ def test_dashboard_disabled(monkeypatch):
     c = TestClient(create_app(runner=FakeRunner(), store=InMemoryJobStore()))
     assert c.get("/").status_code == 404      # 대시보드 비활성
     assert c.get("/jobs").status_code == 200   # /jobs 는 항상 제공
+
+
+def test_dashboard_has_cancel_retry_actions(client):
+    """처리중 탭의 취소 버튼과 이력 탭의 재실행 버튼(JS 핸들러)이 HTML 에 포함돼야 한다."""
+    html = client.get("/").text
+    assert "cancelJob(" in html      # 활성 job 취소 → POST /jobs/{id}/cancel
+    assert "retryJob(" in html       # 실패 파티션 재실행 → POST /jobs/{id}/retry
+    assert "postJSON" in html        # 액션 공용 헬퍼

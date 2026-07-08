@@ -150,6 +150,10 @@ DASHBOARD_HTML = """<!doctype html>
   .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
                   padding:6px 12px; border-radius:6px; cursor:pointer; }
   .pager button:disabled { color:var(--mut); cursor:default; opacity:.5; }
+  .btn { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+         padding:2px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
+  .btn:hover { background:#f6f8fa; }
+  .btn.danger { color:var(--bad); border-color:var(--bad); }
   .lnk { color:var(--acc); cursor:pointer; text-decoration:none; }
   .lnk:hover { text-decoration:underline; }
   .modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.4);
@@ -327,6 +331,25 @@ function showSql(id){
 function closeModal(){ $("#modal").style.display = 'none'; }
 const taskLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${id}</a>`;
 async function getJSON(u){ const r = await fetch(u); return r.json(); }
+// POST 액션 공용: 실패 시 서버가 준 detail 메시지를 그대로 예외로 올린다.
+async function postJSON(u){
+  const r = await fetch(u, {method:'POST'});
+  let body = null;
+  try{ body = await r.json(); }catch(_e){ body = null; }
+  if(!r.ok) throw new Error((body&&body.detail) || (r.status+' '+r.statusText));
+  return body;
+}
+// task 취소(협력적): 실행 중이면 다음 안전 지점에서 CANCELLED 로 마무리된다.
+async function cancelTask(id){
+  if(!confirm('task ' + id + ' 을(를) 취소할까요?')) return;
+  try{ await postJSON(`/tasks/${id}/cancel`); }
+  catch(e){ alert('취소 실패: ' + e.message); }
+  refresh();
+}
+// 액션 버튼: 아직 끝나지 않은(QUEUED/READING/WRITING) task 에만 취소를 노출.
+const ACTIVE_TASK = ["QUEUED","READING","WRITING"];
+const taskCancelBtn = r => ACTIVE_TASK.includes(r.status)
+  ? `<button class="btn danger" onclick="cancelTask('${r.task_id}')">취소</button>` : fmt(null);
 
 async function loadTasks(){
   const [d, m] = await Promise.all([
@@ -353,6 +376,7 @@ async function loadTasks(){
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", cls:"col-dur", f:r=>dur(r.started_at, r.finished_at)},
     {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"액션", f:taskCancelBtn},
   ];
   const t = m.tasks || {};
   $("#p-tasks").innerHTML =

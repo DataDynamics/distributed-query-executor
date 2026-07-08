@@ -210,6 +210,10 @@ DASHBOARD_HTML = """<!doctype html>
   .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
                   padding:6px 12px; border-radius:6px; cursor:pointer; }
   .pager button:disabled { color:var(--mut); cursor:default; opacity:.5; }
+  .btn { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+         padding:2px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
+  .btn:hover { background:#f6f8fa; }
+  .btn.danger { color:var(--bad); border-color:var(--bad); }
   .lnk { color:var(--acc); cursor:pointer; text-decoration:none; }
   .lnk:hover { text-decoration:underline; }
   .modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.4);
@@ -392,6 +396,37 @@ function table(cols, rows){
   return h + "</tbody></table>";
 }
 async function getJSON(u){ const r = await fetch(u); return r.json(); }
+// POST 액션 공용: 실패 시 서버가 준 detail 메시지를 그대로 예외로 올린다.
+async function postJSON(u){
+  const r = await fetch(u, {method:'POST'});
+  let body = null;
+  try{ body = await r.json(); }catch(_e){ body = null; }
+  if(!r.ok) throw new Error((body&&body.detail) || (r.status+' '+r.statusText));
+  return body;
+}
+// 진행 중 job 취소: 각 executor 로 취소가 전파되고 job 은 CANCELLED 로 종료된다.
+async function cancelJob(id){
+  if(!confirm('작업 ' + id + ' 을(를) 취소할까요?')) return;
+  try{ await postJSON(`/jobs/${id}/cancel`); }
+  catch(e){ alert('취소 실패: ' + e.message); }
+  refresh();
+}
+// 실패 파티션만 재실행: 성공 파티션은 건너뛰고 새 job_id 로 복제 실행된다(202).
+async function retryJob(id){
+  if(!confirm('작업 ' + id + ' 의 실패/취소 파티션만 재실행할까요?')) return;
+  try{
+    const d = await postJSON(`/jobs/${id}/retry`);
+    alert('재실행 시작: 새 작업 ' + d.job_id + ' (task ' + d.retried_tasks + '개)');
+  }catch(e){ alert('재실행 실패: ' + e.message); }
+  refresh();
+}
+// 액션 버튼: 상태에 따라 취소(활성 job) / 재실행(종료됐지만 실패분이 있는 job)만 노출.
+const ACTIVE_JOB = ["SPLITTING","PENDING","RUNNING"];
+const RETRIABLE_JOB = ["PARTIAL","FAILED","CANCELLED"];
+const cancelBtn = r => ACTIVE_JOB.includes(r.status)
+  ? `<button class="btn danger" onclick="cancelJob('${r.job_id}')">취소</button>` : fmt(null);
+const retryBtn = r => RETRIABLE_JOB.includes(r.status)
+  ? `<button class="btn" onclick="retryJob('${r.job_id}')">재실행</button>` : fmt(null);
 
 async function loadJobs(){
   const d = await getJSON("/jobs?status=active&limit=0");
@@ -411,6 +446,7 @@ async function loadJobs(){
     {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", f:r=>dur(r.started_at, r.finished_at)},
+    {t:"액션", f:cancelBtn},
   ];
   $("#p-jobs").innerHTML =
     `<div class="cards">
@@ -440,6 +476,7 @@ async function loadHist(){
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", cls:"col-dur", f:r=>dur(r.started_at, r.finished_at)},
     {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"액션", f:retryBtn},
   ];
   const n = d.rows ? d.rows.length : 0;
   const from = histTotal ? histOffset + 1 : 0;
