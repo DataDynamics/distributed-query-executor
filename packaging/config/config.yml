@@ -106,6 +106,8 @@ executor:
   status_interval_s: ${executor.status_interval_s:10}    # self-report 주기(초)
   max_concurrent_tasks: ${executor.max_concurrent_tasks:8}   # executor 1대가 동시에 실행하는 task 수(0=무제한)
   shutdown_drain_timeout_s: ${executor.shutdown_drain_timeout_s:25}  # 종료(SIGTERM) 시 진행 중 task 완료를 기다리는 최대 시간(초)
+  source:
+    type: ${source.type:impala}                   # 소스 엔진: impala(기본) | trino
   impala:
     host: ${impala.host:}                         # Impala 호스트(미설정 시 Mock 백엔드)
     port: ${impala.port:21050}
@@ -119,6 +121,18 @@ executor:
     # Impala 쿼리 옵션 전역 기본값(SET). "MEM_LIMIT=2g,REQUEST_POOL=etl" 형태.
     # 비우면 configuration 없이 그대로 실행. 요청별 impala_query_options 가 덮어쓴다.
     query_options: ${impala.query_options:}
+  trino:                                          # source.type=trino 일 때 사용(trino 파이썬 클라이언트)
+    host: ${trino.host:}                          # Trino coordinator 호스트(미설정 + source.type=trino 면 Mock)
+    port: ${trino.port:8080}
+    user: ${trino.user:query-executor}            # Trino 는 무인증이어도 user 헤더가 필수
+    password: ${trino.password:}                  # 설정 시 BasicAuthentication(https 필수)
+    catalog: ${trino.catalog:hive}
+    schema: ${trino.schema:default}
+    http_scheme: ${trino.http_scheme:http}        # http | https(password 사용 시 https)
+    verify: ${trino.verify:}                      # TLS 검증: 비움=기본(true) | true/false | CA 파일 경로
+    # 세션 프로퍼티 전역 기본값. "query_max_run_time=1h,resource_group=etl" 형태.
+    # Trino 는 연결 단위로만 적용된다(요청별 impala_query_options 는 impala 소스 전용).
+    session_properties: ${trino.session_properties:}
   greenplum:
     dsn: ${greenplum.dsn:}                        # Greenplum 적재 대상 DSN(미설정 시 Mock 백엔드)
     pool_max: ${greenplum.pool_max:0}             # GP 커넥션 풀 최대 크기(0=executor.max_concurrent_tasks 와 동일)

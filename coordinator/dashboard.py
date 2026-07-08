@@ -109,6 +109,8 @@ def masked_config(settings) -> list[dict]:
          "종료(SIGTERM) 시 진행 중 task 완료를 기다리는 최대 시간(초)"),
         ("executor", "executors", ", ".join(settings.executors) or "(없음)",
          "디스패치 대상 executor 베이스 URL 목록"),
+        ("source", "type", settings.source_type,
+         "소스 엔진: impala(기본) | trino. executor 의 task 읽기(SELECT)가 이 소스를 사용"),
         ("impala", "host", settings.impala_host or "(미설정→Mock)",
          "Impala(소스) 호스트. 미설정 시 MockBackend"),
         ("impala", "port", settings.impala_port, "Impala 포트(HiveServer2)"),
@@ -125,6 +127,20 @@ def masked_config(settings) -> list[dict]:
         ("impala", "query_options",
          ", ".join(f"{k}={v}" for k, v in (settings.impala_query_options or {}).items()) or "(없음)",
          "Impala 쿼리 옵션 전역 기본값(SET). 요청별 옵션이 이 위에 병합됨"),
+        ("trino", "host", settings.trino_host or "(미설정)",
+         "Trino(소스) 호스트. source.type=trino 일 때 사용(미설정 시 MockBackend)"),
+        ("trino", "port", settings.trino_port, "Trino coordinator HTTP 포트"),
+        ("trino", "user", settings.trino_user, "Trino 사용자(무인증이어도 필수 헤더)"),
+        ("trino", "password", "***" if settings.trino_password else "",
+         "Trino Basic 인증 비밀번호(설정 시 https 필수, *** 마스킹)"),
+        ("trino", "catalog", settings.trino_catalog, "Trino 카탈로그"),
+        ("trino", "schema", settings.trino_schema, "Trino 기본 스키마"),
+        ("trino", "http_scheme", settings.trino_http_scheme, "http | https(password 사용 시 https)"),
+        ("trino", "verify", settings.trino_verify or "(기본 true)",
+         "TLS 검증: true/false 또는 CA 인증서 파일 경로"),
+        ("trino", "session_properties",
+         ", ".join(f"{k}={v}" for k, v in (settings.trino_session_properties or {}).items()) or "(없음)",
+         "Trino 세션 프로퍼티 전역 기본값(연결 단위 적용)"),
         ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn),
          "Greenplum(타깃) 적재 DSN. 미설정 시 MockBackend"),
         ("greenplum", "copy_batch_size", settings.copy_batch_size, "COPY 배치 크기(행)"),
@@ -395,7 +411,12 @@ async function loadDs(){
   const d = await getJSON("/datasources");
   const opts = (d.local||[]).map(s=>
     `<option value="${s.name}" ${s.configured?'':'disabled'}>${s.name}${s.configured?'':' (미구성)'}</option>`);
-  opts.push('<option value="impala">impala (executor 경유 필수)</option>');
+  // coordinator 에 드라이버가 없는 소스(impala/trino 등)는 via_executor 목록에서 받아
+  // executor 경유 전용 옵션으로 추가한다(서버가 소스를 늘리면 UI 는 자동 반영).
+  const localNames = new Set((d.local||[]).map(s=>s.name));
+  for(const n of (d.via_executor||[])){
+    if(!localNames.has(n)) opts.push(`<option value="${esc(n)}">${esc(n)} (executor 경유 필수)</option>`);
+  }
   $("#ds-name").innerHTML = opts.join('');
   $("#ds-exec").innerHTML = '<option value="">coordinator 직접</option>' +
     (d.executors||[]).map(u=>`<option value="${esc(u)}">${esc(u)} 경유</option>`).join('');

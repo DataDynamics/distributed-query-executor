@@ -30,13 +30,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from core.config import settings
-from core.dbprobe import clamp_limit, run_impala_select, run_postgres_select
+from core.dbprobe import clamp_limit, run_impala_select, run_postgres_select, run_trino_select
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.webassets import mount_static, register_offline_docs
-from .backend import Backend, build_backend, build_impala_dsn
+from .backend import Backend, build_backend, build_impala_dsn, build_trino_dsn
 from .dashboard import DASHBOARD_HTML, masked_config
 from .history import TaskHistoryRepository, _executor_id
 from .models import CreateTaskRequest, DatasourceQueryRequest, Task, TaskStatus
@@ -519,9 +519,12 @@ def create_app(
         return {
             "datasources": [
                 {"name": "impala", "configured": bool(settings.impala_host)},
+                {"name": "trino", "configured": bool(settings.trino_host)},
                 {"name": "greenplum", "configured": bool(settings.greenplum_dsn)},
                 {"name": "history", "configured": bool(settings.history_db_dsn)},
-            ]
+            ],
+            # 이 executor 가 task 실행(copy/stage_insert/local_stage 읽기)에 쓰는 소스 종류.
+            "source_type": settings.source_type,
         }
 
     @app.post(
@@ -530,7 +533,7 @@ def create_app(
         summary="데이터소스에 임의 SELECT 실행(연결 확인 + 결과 미리보기)",
     )
     async def query_datasource(name: str, req: DatasourceQueryRequest):
-        """``name`` 데이터소스(impala/greenplum/history)에 임의 SQL 을 실행해 상위 N행을 반환.
+        """``name`` 데이터소스(impala/trino/greenplum/history)에 임의 SQL 을 실행해 상위 N행을 반환.
 
         블로킹 드라이버 호출이므로 ``asyncio.to_thread`` 로 스레드에서 돌려 이벤트 루프를
         막지 않는다. 미구성 데이터소스는 400, 알 수 없는 이름은 404, 연결/인증/SQL 오류는
@@ -546,6 +549,11 @@ def create_app(
                     run_impala_select, dsn, req.sql,
                     query_options=settings.impala_query_options, limit=limit,
                 )
+            elif name == "trino":
+                dsn = build_trino_dsn(settings)
+                if not dsn:
+                    raise HTTPException(status_code=400, detail="trino.host 미설정 — Trino 접속 정보가 없습니다")
+                result = await asyncio.to_thread(run_trino_select, dsn, req.sql, limit=limit)
             elif name == "greenplum":
                 if not settings.greenplum_dsn:
                     raise HTTPException(status_code=400, detail="greenplum.dsn 미설정")
@@ -610,6 +618,7 @@ def create_app(
             return format_at_fields({
                 "version": "0.1.0",
                 "executor_id": _executor_id(),
+                "source_type": settings.source_type,
                 "self_report": settings.executor_self_report,
                 "advertise_url": settings.executor_advertise_url,
                 "gp_hostname": _gp_hostname(),

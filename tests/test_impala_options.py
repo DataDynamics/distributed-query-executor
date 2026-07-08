@@ -51,25 +51,25 @@ def test_kv_dict_value_with_equals():
 
 def test_no_options_omits_configuration():
     cur = _FakeCursor()
-    _backend({})._impala_execute(cur, "SELECT 1", None)
+    _backend({})._source_execute(cur, "SELECT 1", None)
     assert cur.last["configuration"] is _UNSET  # configuration 인자 미전달
 
 
 def test_global_only_applied():
     cur = _FakeCursor()
-    _backend({"MEM_LIMIT": "2g"})._impala_execute(cur, "SELECT 1", None)
+    _backend({"MEM_LIMIT": "2g"})._source_execute(cur, "SELECT 1", None)
     assert cur.last["configuration"] == {"MEM_LIMIT": "2g"}
 
 
 def test_request_only_applied():
     cur = _FakeCursor()
-    _backend({})._impala_execute(cur, "SELECT 1", {"REQUEST_POOL": "etl"})
+    _backend({})._source_execute(cur, "SELECT 1", {"REQUEST_POOL": "etl"})
     assert cur.last["configuration"] == {"REQUEST_POOL": "etl"}
 
 
 def test_request_merges_over_global():
     cur = _FakeCursor()
-    _backend({"MEM_LIMIT": "2g", "REQUEST_POOL": "default"})._impala_execute(
+    _backend({"MEM_LIMIT": "2g", "REQUEST_POOL": "default"})._source_execute(
         cur, "SELECT 1", {"REQUEST_POOL": "etl"}
     )
     # 전역 MEM_LIMIT 유지 + 요청별 REQUEST_POOL 이 전역값을 덮어씀
