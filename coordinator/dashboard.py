@@ -212,8 +212,12 @@ async function showJobPhases(id){
     if(!tasks.length){ $("#pmodal-body").innerHTML = '<p class="mut">task 가 없습니다.</p>'; return; }
     $("#pmodal-body").innerHTML = tasks.map(t=>
       `<div class="tkhd"><code>${fmt(t.task_id)}</code> ${pill(t.status)} · `+
+      `<span class="mut">executor</span> ${fmt(t.executor_url)}`+
+      (t.attempt>1?` · <span class="mut">시도 ${t.attempt}회</span>`:'')+` · `+
       `읽은 ${fmtNum(t.rows_read)} / 적재 ${fmtNum(t.rows_written)} · `+
-      `조회완료 ${fmtDate(t.impala_done_at)}</div>`+renderPhases(t.phases)
+      `조회완료 ${fmtDate(t.impala_done_at)}</div>`+
+      (t.error?`<div class="err" style="margin:0 0 6px">${esc(t.error)}</div>`:'')+
+      renderPhases(t.phases)
     ).join('');
   }catch(e){ $("#pmodal-body").innerHTML = `<span class="err">불러오기 실패: ${esc(e)}</span>`; }
 }
@@ -261,6 +265,7 @@ async function loadJobs(){
     {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", f:r=>dur(r.started_at, r.finished_at)},
+    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
     {t:"액션", f:cancelBtn},
   ];
   $("#p-jobs").innerHTML =

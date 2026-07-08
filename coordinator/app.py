@@ -862,6 +862,7 @@ def create_app(
                 "created_at": j.created_at, "started_at": j.started_at,
                 "finished_at": j.finished_at,
                 "original_sql": j.original_sql,
+                "error": j.error,
             }
             for j in (jobs if limit <= 0 else jobs[:limit])
         ]

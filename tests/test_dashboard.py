@@ -102,3 +102,17 @@ def test_dashboard_has_cancel_retry_actions(client):
     assert "cancelJob(" in html      # 활성 job 취소 → POST /jobs/{id}/cancel
     assert "retryJob(" in html       # 실패 파티션 재실행 → POST /jobs/{id}/retry
     assert "postJSON" in html        # 액션 공용 헬퍼
+
+
+def test_jobs_list_includes_error_field(client, store):
+    """처리중 탭의 에러 컬럼을 위해 /jobs 목록 행에 error 필드가 포함돼야 한다."""
+    j = Job(
+        original_sql="SELECT 1 FROM t WHERE dt IN ('1')",
+        partition_column="dt", target_table="public.t", write_mode="append",
+        parallelism=1, split_strategy="contiguous", failure_policy="fail_fast",
+        status=JobStatus.FAILED,
+    )
+    j.error = "executor 연결 실패"
+    store.add(j)
+    rows = client.get("/jobs").json()["jobs"]
+    assert rows and rows[0]["error"] == "executor 연결 실패"
