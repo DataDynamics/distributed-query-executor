@@ -151,6 +151,49 @@ function pagerHtml(n){
 function histPrev(){ histOffset = Math.max(0, histOffset - HIST_LIMIT); loadHist(); }
 function histNext(){ if(histOffset + HIST_LIMIT < histTotal){ histOffset += HIST_LIMIT; loadHist(); } }
 
+// ---- 실행 이력 검색 필터 ----
+// 페이지 HTML 의 필터 바(#hf-status/#hf-user/#hf-job)를 읽어 /history 쿼리스트링을 만든다.
+// 필터 바는 자동 갱신(innerHTML 재렌더) 대상 밖의 정적 마크업이라 입력이 유지된다.
+function histFilterQS(){
+  const val = id => { const el = $(id); return el ? el.value.trim() : ''; };
+  let qs = '';
+  const st = val('#hf-status'), us = val('#hf-user'), jb = val('#hf-job');
+  if(st) qs += `&status=${encodeURIComponent(st)}`;
+  if(us) qs += `&username=${encodeURIComponent(us)}`;
+  if(jb) qs += `&job_id=${encodeURIComponent(jb)}`;
+  return qs;
+}
+function histSearch(){ histOffset = 0; loadHist(); }
+function histReset(){
+  for(const id of ['#hf-status','#hf-user','#hf-job']){ const el=$(id); if(el) el.value=''; }
+  histOffset = 0; loadHist();
+}
+
+// ---- 데이터소스 미리보기(dbprobe) ----
+// POST /datasources/{name}/query 를 호출해 결과를 #ds-out 에 표로 그린다.
+// extra 는 요청 본문에 병합할 추가 필드(coordinator 의 executor_url 프록시 지정 등).
+async function runDatasourceQuery(extra){
+  const name = $("#ds-name").value;
+  const sql = $("#ds-sql").value.trim();
+  if(!name){ alert('데이터소스를 선택하세요'); return; }
+  if(!sql){ alert('실행할 SELECT 문을 입력하세요'); return; }
+  const limit = Math.max(1, parseInt($("#ds-limit").value, 10) || 100);
+  $("#ds-meta").textContent = '';
+  $("#ds-out").innerHTML = '<p class="mut">실행 중…</p>';
+  try{
+    const d = await postJSON(`/datasources/${encodeURIComponent(name)}/query`,
+                             Object.assign({sql: sql, limit: limit}, extra||{}));
+    renderProbeResult(d);
+  }catch(e){ $("#ds-out").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+// dbprobe 응답({columns, rows(배열의 배열), row_count, truncated, elapsed_ms})을 표로 렌더링.
+function renderProbeResult(d){
+  $("#ds-meta").textContent =
+    `${Number(d.row_count||0).toLocaleString('en-US')}행${d.truncated?' (잘림)':''} · ${d.elapsed_ms}ms`;
+  const cols = (d.columns||[]).map((c,i)=>({t:esc(c), f:r=>fmt(r[i])}));
+  $("#ds-out").innerHTML = cols.length ? table(cols, d.rows||[]) : '<p class="mut">결과 없음</p>';
+}
+
 // ---- 탭 전환 + 자동 갱신 ----
 let active = null, loaders = {};
 async function refresh(){

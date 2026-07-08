@@ -880,13 +880,23 @@ def create_app(
 
     history_reader = JobHistoryRepository(settings)
 
-    @app.get("/history", tags=["Jobs"], summary="과거 실행 이력(페이징)")
-    def get_history(limit: int = 20, offset: int = 0):
+    @app.get("/history", tags=["Jobs"], summary="과거 실행 이력(필터/페이징)")
+    def get_history(
+        limit: int = 20,
+        offset: int = 0,
+        status: Optional[str] = None,
+        username: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ):
         # 외부 입력을 안전 범위로 강제(clamp): limit 은 1~200, offset 은 0 이상.
         # 과도한 페이지 크기나 음수 입력으로 인한 DB 부하/오류를 방지한다.
+        # status/username 은 정확 일치, job_id 는 전방일치(prefix) 필터다(빈 값은 무시).
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
-        return format_at_fields(history_reader.read(limit=limit, offset=offset))
+        return format_at_fields(history_reader.read(
+            limit=limit, offset=offset,
+            status=status, username=username, job_id=job_id,
+        ))
 
     @app.get(
         "/templates",

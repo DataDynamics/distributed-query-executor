@@ -111,3 +111,16 @@ async def test_task_detail_includes_sql():
         assert d["sub_query"] == "SELECT 1 WHERE dt IN ('1')"
         assert d["task_id"] == "t-detail"
         assert (await c.get("/tasks/no-such/detail")).status_code == 404
+
+
+async def test_dashboard_has_datasource_tab_and_hist_filter():
+    """데이터소스 탭과 실행 이력 필터 바가 executor 대시보드 HTML 에 포함돼야 한다."""
+    app = create_executor_app()
+    async with _client(app) as c:
+        html = (await c.get("/")).text
+        body = (await c.get("/history?status=FAILED&username=kim&job_id=abc")).json()
+    assert 'data-tab="ds"' in html
+    assert 'id="hist-filter"' in html
+    assert "runDs(" in html
+    # 이력 비활성(기본 설정)에서도 필터 파라미터가 422 없이 수용돼야 한다
+    assert body["enabled"] is False

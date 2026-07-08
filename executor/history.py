@@ -63,18 +63,30 @@ class TaskHistoryRepository:
         self.executor_id: str = _executor_id()
         self.enabled: bool = bool(self.dsn)
 
-    def read(self, limit: int = 50, offset: int = 0) -> dict:
-        """이 executor 의 task 이력 조회(task_id별 최신 1건, 페이징).
+    def read(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        username: str | None = None,
+        job_id: str | None = None,
+    ) -> dict:
+        """이 executor 의 task 이력 조회(task_id별 최신 1건, 필터링/페이징).
 
         append-only 로그에서 task 당 마지막 상태만 보여주기 위해 PostgreSQL 의
         ``DISTINCT ON (task_id) ... ORDER BY task_id, recorded_at DESC`` 를 사용한다.
         이는 task_id 별로 recorded_at 이 가장 최신인 행 하나만 남기는 패턴이다. 그 결과를
-        바깥 쿼리에서 recorded_at DESC 로 다시 정렬해 최근 활동 순으로 페이징한다.
-        total 은 (이 executor 의) 서로 다른 task_id 개수다.
+        바깥 쿼리에서 검색 필터(WHERE)를 적용하고 recorded_at DESC 로 다시 정렬해 최근
+        활동 순으로 페이징한다. 필터는 "task 의 최신 상태" 기준이어야 하므로(중간 전이
+        행이 아니라) DISTINCT ON 서브쿼리 바깥에 걸고, total 도 같은 필터가 적용된
+        파생 테이블에서 센다.
 
         인자:
             limit: 페이지 크기(행 수).
             offset: 건너뛸 행 수.
+            status: 최종 상태 일치 필터(대소문자 무시, 예: FAILED).
+            username: 요청 사용자 일치 필터.
+            job_id: 작업 ID 전방일치(prefix) 필터.
 
         반환:
             {enabled, rows, total, limit, offset}. 비활성(DSN 미설정) 시 enabled=False,
@@ -84,28 +96,43 @@ class TaskHistoryRepository:
             return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
         import psycopg  # 지연 임포트
 
+        # 검색 필터(WHERE) 조립. 값은 전부 바인드 파라미터로 넘겨 SQL 주입을 차단한다.
+        conds: list[str] = []
+        params: list[object] = []
+        if status:
+            conds.append("status = %s")
+            params.append(status.upper())
+        if username:
+            conds.append("username = %s")
+            params.append(username)
+        if job_id:
+            # 전방일치. job_id 는 서버가 만든 uuid 계열이라 LIKE 와일드카드 이스케이프는 생략.
+            conds.append("job_id LIKE %s")
+            params.append(f"{job_id}%")
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        # 이 executor 소유분에서 task_id 별 최신 한 행만 남기는 파생 테이블(위 docstring 참고).
+        latest = (
+            "SELECT DISTINCT ON (task_id) recorded_at, job_id, task_id, "
+            "  username, status, rows_written, error, started_at, finished_at, "
+            "  sub_query, exec_mode, staging_ddl, insert_sql, rows_read, "
+            "  read_wait_ms, write_wait_ms, read_starve_ms, finalize_wait_ms, "
+            "  impala_done_at, phases "
+            f"FROM {self.table} WHERE executor_id = %s "
+            "ORDER BY task_id, recorded_at DESC"
+        )
+
         # 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT count(DISTINCT task_id) FROM {self.table} WHERE executor_id = %s",
-                    (self.executor_id,),
+                    f"SELECT count(*) FROM ({latest}) t{where}",
+                    (self.executor_id, *params),
                 )
                 total = cur.fetchone()[0]
                 cur.execute(
-                    "SELECT recorded_at, job_id, task_id, username, status, "
-                    "rows_written, error, started_at, finished_at, sub_query, "
-                    "exec_mode, staging_ddl, insert_sql, rows_read, read_wait_ms, "
-                    "write_wait_ms, read_starve_ms, finalize_wait_ms, impala_done_at, phases FROM ("
-                    "  SELECT DISTINCT ON (task_id) recorded_at, job_id, task_id, "
-                    "    username, status, rows_written, error, started_at, finished_at, "
-                    "    sub_query, exec_mode, staging_ddl, insert_sql, rows_read, "
-                    "    read_wait_ms, write_wait_ms, read_starve_ms, finalize_wait_ms, "
-                    "    impala_done_at, phases "
-                    f"  FROM {self.table} WHERE executor_id = %s "
-                    "  ORDER BY task_id, recorded_at DESC"
-                    ") t ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
-                    (self.executor_id, limit, offset),
+                    f"SELECT * FROM ({latest}) t{where} "
+                    "ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
+                    (self.executor_id, *params, limit, offset),
                 )
                 rows = cur.fetchall()
             conn.commit()

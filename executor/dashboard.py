@@ -109,12 +109,36 @@ DASHBOARD_HTML = """<!doctype html>
 <div class="tabs">
   <button data-tab="tasks" class="active">처리중인 Task</button>
   <button data-tab="hist">실행 이력</button>
+  <button data-tab="ds">데이터소스</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
 </div>
 <main>
   <section class="panel active" id="p-tasks"></section>
-  <section class="panel" id="p-hist"></section>
+  <section class="panel" id="p-hist">
+    <div class="filters" id="hist-filter" style="display:none">
+      상태 <select id="hf-status" onchange="histSearch()">
+        <option value="">(전체)</option>
+        <option>DONE</option><option>FAILED</option><option>CANCELLED</option>
+        <option>WRITING</option><option>READING</option><option>QUEUED</option>
+      </select>
+      사용자 <input id="hf-user" placeholder="정확 일치" onkeydown="if(event.key==='Enter')histSearch()">
+      작업 ID <input id="hf-job" placeholder="전방 일치" onkeydown="if(event.key==='Enter')histSearch()">
+      <button class="btn" onclick="histSearch()">검색</button>
+      <button class="btn" onclick="histReset()">초기화</button>
+    </div>
+    <div id="hist-body"></div>
+  </section>
+  <section class="panel" id="p-ds">
+    <div class="filters">
+      데이터소스 <select id="ds-name"></select>
+      상위 <input id="ds-limit" type="number" value="100" min="1" max="10000" style="width:80px"> 행
+      <button class="btn" onclick="runDs()">실행</button>
+      <span class="mut" id="ds-meta"></span>
+    </div>
+    <textarea id="ds-sql" class="sqlbox" placeholder="SELECT ...  (연결 확인/미리보기용 — 상위 N행만 반환됩니다)"></textarea>
+    <div id="ds-out" class="mut">데이터소스를 선택하고 SELECT 를 실행하면 결과 미리보기가 표시됩니다.</div>
+  </section>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
 </main>
@@ -222,9 +246,10 @@ async function loadTasks(){
      </div>` + table(cols, d.tasks);
 }
 async function loadHist(){
-  const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}`);
+  const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}${histFilterQS()}`);
+  $("#hist-filter").style.display = d.enabled ? 'flex' : 'none';
   if(!d.enabled){
-    $("#p-hist").innerHTML = `<p class="mut">이력 DB(history.db_dsn)가 설정되지 않았습니다. ` +
+    $("#hist-body").innerHTML = `<p class="mut">이력 DB(history.db_dsn)가 설정되지 않았습니다. ` +
       `PostgreSQL 설정 시 과거 task 실행 이력이 표시됩니다.</p>`;
     return;
   }
@@ -250,8 +275,21 @@ async function loadHist(){
     {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
   ];
   const n = d.rows ? d.rows.length : 0;
-  $("#p-hist").innerHTML = table(cols, d.rows) + pagerHtml(n);
+  $("#hist-body").innerHTML = table(cols, d.rows) + pagerHtml(n);
 }
+
+// 데이터소스 탭 초기화(1회): 소스 select 를 채운다. 결과 영역은 실행 시에만 갱신
+// (자동 갱신 주기마다 입력/결과가 지워지지 않도록 이 로더는 재호출 시 아무것도 안 한다).
+let dsInit = false;
+async function loadDs(){
+  if(dsInit) return;
+  const d = await getJSON("/datasources");
+  $("#ds-name").innerHTML = (d.datasources||[]).map(s=>
+    `<option value="${s.name}" ${s.configured?'':'disabled'}>${s.name}${s.configured?'':' (미구성)'}</option>`
+  ).join('');
+  dsInit = true;
+}
+function runDs(){ return runDatasourceQuery(); }
 
 async function loadConf(){
   const d = await getJSON("/config");
@@ -289,7 +327,7 @@ async function loadInfo(){
 }
 getJSON("/info").then(d=>{ $("#hdr").textContent =
   `id=${d.executor_id} · max=${d.max_concurrent_tasks} · self_report=${d.self_report} · v${d.version}`; });
-initDashboard({tasks:loadTasks, hist:loadHist, conf:loadConf, info:loadInfo}, "tasks");
+initDashboard({tasks:loadTasks, hist:loadHist, ds:loadDs, conf:loadConf, info:loadInfo}, "tasks");
 </script>
 </body>
 </html>"""

@@ -73,6 +73,15 @@ tr:hover td { background:#f6f8fa; }
 .phdot { font-size:11px; padding:1px 7px; border-radius:9px; background:#ddf4ff;
          color:var(--acc); font-weight:600; }
 .tkhd { margin:14px 0 6px; font-weight:600; }
+/* 이력 검색/데이터소스 미리보기 등 표 위의 입력 줄(자동 갱신에 지워지지 않는 정적 영역) */
+.filters { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap;
+           color:var(--mut); font-size:13px; }
+.filters input, .filters select { background:var(--panel); color:var(--fg);
+  border:1px solid var(--line); border-radius:6px; padding:5px 8px; font:inherit; }
+/* 데이터소스 미리보기 SQL 입력창 */
+.sqlbox { width:100%; min-height:90px; resize:vertical; background:#f6f8fa;
+  border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:10px;
+  font:13px/1.55 ui-monospace,Menlo,Consolas,monospace; color:var(--fg); }
 /* 소요 시간 열과 에러 열의 폭 비율을 1:10 으로 고정한다(에러가 소요의 10배). */
 th.col-dur, td.col-dur { width:60px; }
 th.col-err, td.col-err { width:600px; max-width:600px; }

@@ -574,16 +574,26 @@ def create_app(
             """대시보드 단일 페이지 HTML 을 그대로 서빙한다."""
             return HTMLResponse(DASHBOARD_HTML)
 
-        @app.get("/history", tags=["Monitoring"], summary="이 executor의 task 실행 이력(페이징)")
-        def get_history(limit: int = 50, offset: int = 0):
-            """이 executor 의 task 실행 이력을 페이징 조회한다.
+        @app.get("/history", tags=["Monitoring"], summary="이 executor의 task 실행 이력(필터/페이징)")
+        def get_history(
+            limit: int = 50,
+            offset: int = 0,
+            status: Optional[str] = None,
+            username: Optional[str] = None,
+            job_id: Optional[str] = None,
+        ):
+            """이 executor 의 task 실행 이력을 필터링/페이징 조회한다.
 
             limit 는 1~200 으로 클램프, offset 은 음수 방지. 저장소가 task_id 별 최신 1건만
-            추려서 반환한다(상세는 history.read 참고).
+            추려서 반환한다(상세는 history.read 참고). status/username 은 정확 일치,
+            job_id 는 전방일치(prefix) 필터다(빈 값은 무시).
             """
             limit = max(1, min(limit, 200))
             offset = max(0, offset)
-            return format_at_fields(history_reader.read(limit=limit, offset=offset))
+            return format_at_fields(history_reader.read(
+                limit=limit, offset=offset,
+                status=status, username=username, job_id=job_id,
+            ))
 
         @app.get("/config", tags=["Monitoring"], summary="환경설정(비밀값 마스킹)")
         def get_config():

@@ -166,13 +166,40 @@ DASHBOARD_HTML = """<!doctype html>
   <button data-tab="jobs" class="active">처리중인 Query</button>
   <button data-tab="hist">실행 이력</button>
   <button data-tab="exec">Executor</button>
+  <button data-tab="tpl">템플릿</button>
+  <button data-tab="ds">데이터소스</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
 </div>
 <main>
   <section class="panel active" id="p-jobs"></section>
-  <section class="panel" id="p-hist"></section>
+  <section class="panel" id="p-hist">
+    <div class="filters" id="hist-filter" style="display:none">
+      상태 <select id="hf-status" onchange="histSearch()">
+        <option value="">(전체)</option>
+        <option>DONE</option><option>PARTIAL</option><option>FAILED</option>
+        <option>CANCELLED</option><option>RUNNING</option>
+      </select>
+      사용자 <input id="hf-user" placeholder="정확 일치" onkeydown="if(event.key==='Enter')histSearch()">
+      작업 ID <input id="hf-job" placeholder="전방 일치" onkeydown="if(event.key==='Enter')histSearch()">
+      <button class="btn" onclick="histSearch()">검색</button>
+      <button class="btn" onclick="histReset()">초기화</button>
+    </div>
+    <div id="hist-body"></div>
+  </section>
   <section class="panel" id="p-exec"></section>
+  <section class="panel" id="p-tpl"></section>
+  <section class="panel" id="p-ds">
+    <div class="filters">
+      데이터소스 <select id="ds-name"></select>
+      실행 위치 <select id="ds-exec"></select>
+      상위 <input id="ds-limit" type="number" value="100" min="1" max="10000" style="width:80px"> 행
+      <button class="btn" onclick="runDs()">실행</button>
+      <span class="mut" id="ds-meta"></span>
+    </div>
+    <textarea id="ds-sql" class="sqlbox" placeholder="SELECT ...  (연결 확인/미리보기용 — 상위 N행만 반환됩니다. impala 는 executor 경유를 선택하세요)"></textarea>
+    <div id="ds-out" class="mut">데이터소스를 선택하고 SELECT 를 실행하면 결과 미리보기가 표시됩니다.</div>
+  </section>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
 </main>
@@ -287,9 +314,10 @@ async function loadJobs(){
      </div>` + table(cols, d.jobs);
 }
 async function loadHist(){
-  const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}`);
+  const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}${histFilterQS()}`);
+  $("#hist-filter").style.display = d.enabled ? 'flex' : 'none';
   if(!d.enabled){
-    $("#p-hist").innerHTML = `<p class="mut">이력 DB(history.db_dsn)가 설정되지 않았습니다. ` +
+    $("#hist-body").innerHTML = `<p class="mut">이력 DB(history.db_dsn)가 설정되지 않았습니다. ` +
       `PostgreSQL 설정 시 과거 실행 이력이 표시됩니다.</p>`;
     return;
   }
@@ -309,7 +337,7 @@ async function loadHist(){
     {t:"액션", f:retryBtn},
   ];
   const n = d.rows ? d.rows.length : 0;
-  $("#p-hist").innerHTML = table(cols, d.rows) + pagerHtml(n);
+  $("#hist-body").innerHTML = table(cols, d.rows) + pagerHtml(n);
 }
 
 async function loadExec(){
@@ -335,6 +363,48 @@ async function loadExec(){
     {t:"Error", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
   ];
   $("#p-exec").innerHTML = cards + table(cols, d.executors);
+}
+// 템플릿 탭: 서버에 배포된 쿼리 템플릿과 파라미터 스키마를 나열한다(GET /templates).
+async function loadTpl(){
+  const d = await getJSON("/templates");
+  if(!d.enabled){
+    $("#p-tpl").innerHTML = '<p class="mut">쿼리 템플릿 엔진(template.enabled)이 비활성입니다. ' +
+      '활성화하면 template_id 로 실행 가능한 서버 템플릿 목록이 표시됩니다.</p>';
+    return;
+  }
+  const paramChips = ps => (ps||[]).map(p=>
+    `<span class="phdot">${esc(p.name)}: ${esc(p.type)}${p.required?' *':''}`+
+    `${(p.default!==undefined&&p.default!==null)?' = '+esc(JSON.stringify(p.default)):''}</span>`
+  ).join(' ');
+  const cols = [
+    {t:"template_id", f:r=>`<code>${fmt(r.template_id)}</code>`},
+    {t:"설명", f:r=>`<div class="desc">${fmt(r.description)}</div>`},
+    {t:"기본 exec_mode", k:"exec_mode"},
+    {t:"파티션 컬럼", k:"partition_column"},
+    {t:"파라미터 (* 필수)", cls:"desc", f:r=>paramChips(r.params)||fmt(null)},
+  ];
+  $("#p-tpl").innerHTML =
+    '<p class="mut">클라이언트는 POST /jobs 에 SQL 전문 대신 template_id + params 를 보내 실행할 수 있습니다.</p>'
+    + table(cols, d.templates||[]);
+}
+// 데이터소스 탭 초기화(1회): 소스/실행 위치 select 를 채운다. 결과 영역은 실행 시에만 갱신
+// (자동 갱신 주기마다 입력/결과가 지워지지 않도록 이 로더는 재호출 시 아무것도 안 한다).
+let dsInit = false;
+async function loadDs(){
+  if(dsInit) return;
+  const d = await getJSON("/datasources");
+  const opts = (d.local||[]).map(s=>
+    `<option value="${s.name}" ${s.configured?'':'disabled'}>${s.name}${s.configured?'':' (미구성)'}</option>`);
+  opts.push('<option value="impala">impala (executor 경유 필수)</option>');
+  $("#ds-name").innerHTML = opts.join('');
+  $("#ds-exec").innerHTML = '<option value="">coordinator 직접</option>' +
+    (d.executors||[]).map(u=>`<option value="${esc(u)}">${esc(u)} 경유</option>`).join('');
+  dsInit = true;
+}
+// impala 등은 coordinator 에 드라이버가 없어 executor 경유(executor_url)로 프록시한다.
+function runDs(){
+  const ex = $("#ds-exec").value;
+  return runDatasourceQuery(ex ? {executor_url: ex} : null);
 }
 async function loadConf(){
   const d = await getJSON("/config");
@@ -377,7 +447,8 @@ async function loadInfo(){
 }
 getJSON("/info").then(d=>{ $("#hdr").textContent =
   `id=${d.coordinator_id} · mode=${d.executor_mode} · store=${d.store_backend} · select=${d.executor_select} · v${d.version}`; });
-initDashboard({jobs:loadJobs, hist:loadHist, exec:loadExec, conf:loadConf, info:loadInfo}, "jobs");
+initDashboard({jobs:loadJobs, hist:loadHist, exec:loadExec, tpl:loadTpl, ds:loadDs,
+               conf:loadConf, info:loadInfo}, "jobs");
 </script>
 </body>
 </html>"""

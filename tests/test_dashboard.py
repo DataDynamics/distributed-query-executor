@@ -124,3 +124,19 @@ def test_jobs_list_includes_admission_fields(client):
     assert "pending" in body
     assert body["max_concurrent_jobs"] == core_settings.max_concurrent_jobs
     assert body["max_pending_jobs"] == core_settings.max_pending_jobs
+
+
+def test_dashboard_has_template_datasource_tabs_and_hist_filter(client):
+    """템플릿/데이터소스 탭과 실행 이력 필터 바가 대시보드 HTML 에 포함돼야 한다."""
+    html = client.get("/").text
+    assert 'data-tab="tpl"' in html
+    assert 'data-tab="ds"' in html
+    assert 'id="hist-filter"' in html      # 이력 검색 필터 바(자동 갱신에 지워지지 않는 정적 영역)
+    assert 'id="ds-exec"' in html          # impala 등 executor 경유 실행 위치 선택
+    assert "runDatasourceQuery" in html or "runDs(" in html
+
+
+def test_templates_endpoint_shape(client):
+    """템플릿 탭이 사용하는 GET /templates 응답 형태 확인."""
+    body = client.get("/templates").json()
+    assert "enabled" in body and "templates" in body
