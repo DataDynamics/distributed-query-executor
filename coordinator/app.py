@@ -837,6 +837,8 @@ def create_app(
         total_all = len(all_jobs)
         running = sum(1 for j in all_jobs if j.status == JobStatus.RUNNING)
         active = sum(1 for j in all_jobs if j.status in _active_set)
+        # 대시보드 admission 게이지용: 실행 슬롯을 기다리는(PENDING) job 수.
+        pending = sum(1 for j in all_jobs if j.status == JobStatus.PENDING)
         # 최신순 정렬(created_at 내림차순). created_at 이 없으면 빈 문자열로 안전 비교.
         jobs = sorted(all_jobs, key=lambda j: j.created_at or "", reverse=True)
         if status:
@@ -867,7 +869,13 @@ def create_app(
             for j in (jobs if limit <= 0 else jobs[:limit])
         ]
         return format_at_fields(
-            {"jobs": rows, "total": total_all, "running": running, "active": active}
+            {
+                "jobs": rows, "total": total_all, "running": running, "active": active,
+                # admission 게이지(실행 슬롯/대기 큐 소진율) 표시용. 0 이하는 무제한.
+                "pending": pending,
+                "max_concurrent_jobs": settings.max_concurrent_jobs,
+                "max_pending_jobs": settings.max_pending_jobs,
+            }
         )
 
     history_reader = JobHistoryRepository(settings)

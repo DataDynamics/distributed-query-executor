@@ -155,7 +155,19 @@ function composeSql(q){
   }
   return parts.join('\\n\\n') || '(쿼리문 없음)';
 }
-function showSql(id){ showTextModal(id, composeSql(sqlMap[id])); }
+// SQL 모달: 이력 탭은 sqlMap(이력 응답에 포함된 SQL)을 쓰고, 처리중 task 는 목록 응답에
+// SQL 이 없으므로 클릭 시점에 /tasks/{id}/detail 을 조회해 채운다(한 번 받으면 캐시).
+async function showSql(id){
+  if(!sqlMap[id]){
+    try{
+      const t = await getJSON(`/tasks/${id}/detail`);
+      if(t && t.sub_query!==undefined)
+        sqlMap[id] = {exec_mode:t.exec_mode, sub_query:t.sub_query,
+                      staging_ddl:t.staging_ddl, insert_sql:t.insert_sql};
+    }catch(_e){ /* 조회 실패 시 아래에서 '(쿼리문 없음)' 으로 표기 */ }
+  }
+  showTextModal(id, composeSql(sqlMap[id]));
+}
 const taskLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${esc(id)}</a>`;
 
 // task 취소(협력적): 실행 중이면 다음 안전 지점에서 CANCELLED 로 마무리된다.
@@ -181,7 +193,7 @@ async function loadTasks(){
     : fmt(null);
   const cols = [
     {t:"작업 ID", f:r=>`<code>${fmt(r.job_id)}</code>`},
-    {t:"Task ID", f:r=>`<code>${fmt(r.task_id)}</code>`},
+    {t:"Task ID", f:r=>taskLink(r.task_id)},
     {t:"사용자", k:"username"},
     {t:"상태", f:r=>pill(r.status)},
     {t:"현재 단계", f:phLabel},

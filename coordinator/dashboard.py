@@ -215,13 +215,22 @@ async function showJobPhases(id){
       `<span class="mut">executor</span> ${fmt(t.executor_url)}`+
       (t.attempt>1?` · <span class="mut">시도 ${t.attempt}회</span>`:'')+` · `+
       `읽은 ${fmtNum(t.rows_read)} / 적재 ${fmtNum(t.rows_written)} · `+
-      `조회완료 ${fmtDate(t.impala_done_at)}</div>`+
+      `조회완료 ${fmtDate(t.impala_done_at)} · `+
+      `<a class="lnk" onclick="showTaskSql('${id}','${t.task_id}');return false">SQL</a></div>`+
       (t.error?`<div class="err" style="margin:0 0 6px">${esc(t.error)}</div>`:'')+
       renderPhases(t.phases)
     ).join('');
   }catch(e){ $("#pmodal-body").innerHTML = `<span class="err">불러오기 실패: ${esc(e)}</span>`; }
 }
 const jobPhaseLink = id => `<a class="lnk" onclick="showJobPhases('${id}');return false">타임라인</a>`;
+// 타임라인 모달에서 task 하나가 실제 실행한 sub-query 전문을 SQL 모달로 띄운다
+// (executor 대시보드의 task SQL 열람과 대칭). SQL 모달은 타임라인 모달 위에 겹쳐 뜬다.
+async function showTaskSql(jobId, taskId){
+  try{
+    const t = await getJSON(`/jobs/${jobId}/tasks/${taskId}`);
+    showTextModal(taskId, (t && t.sub_query) || '(쿼리문 없음)');
+  }catch(e){ showTextModal(taskId, '불러오기 실패: ' + e); }
+}
 
 // 진행 중 job 취소: 각 executor 로 취소가 전파되고 job 은 CANCELLED 로 종료된다.
 async function cancelJob(id){
@@ -273,6 +282,8 @@ async function loadJobs(){
        <div class="card"><div class="k">총 작업</div><div class="v">${d.total}</div></div>
        <div class="card"><div class="k">실행중</div><div class="v">${d.running}</div></div>
        <div class="card"><div class="k">활성(대기+실행)</div><div class="v">${d.active}</div></div>
+       <div class="card"><div class="k">실행 슬롯</div><div class="v">${concBar(d.running, d.max_concurrent_jobs)}</div></div>
+       <div class="card"><div class="k">대기 큐</div><div class="v">${concBar(d.pending, d.max_pending_jobs)}</div></div>
      </div>` + table(cols, d.jobs);
 }
 async function loadHist(){

@@ -401,6 +401,20 @@ def create_app(
             raise HTTPException(status_code=404, detail="task not found")
         return format_at_fields(task.view())
 
+    @app.get(
+        "/tasks/{task_id}/detail",
+        tags=["Tasks"],
+        summary="태스크 상세 조회(실행 SQL 전문 포함)",
+        description="목록/상태 응답에서 제외되는 sub_query·staging DDL·INSERT 전문까지 "
+        "포함해 반환한다. coordinator 의 GET /jobs/{job_id}/tasks/{task_id} 와 대칭.",
+    )
+    def get_task_detail(task_id: str):
+        """단일 task 의 상세(실행 SQL 전문 포함)를 조회한다. 없으면 404."""
+        task = tasks.get(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        return format_at_fields(task.detail())
+
     @app.get("/tasks/{task_id}/result", tags=["Tasks"], summary="태스크 결과(적재 행수) 조회")
     def get_task_result(task_id: str):
         """task 의 결과(누적 적재 행수)를 조회한다. 없으면 404.

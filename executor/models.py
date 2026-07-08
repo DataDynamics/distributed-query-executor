@@ -156,6 +156,21 @@ class Task:
             "finished_at": self.finished_at,
         }
 
+    def detail(self) -> dict:
+        """``view()`` 에 실행 SQL 전문(sub_query/staging/insert)을 더한 상세 dict.
+
+        목록 응답을 가볍게 유지하려고 ``view()`` 에서 뺀 원문 SQL 을 단건 상세
+        조회(``GET /tasks/{id}/detail``)에서만 노출한다. 대시보드 처리중 탭의
+        task SQL 열람이 이를 사용한다(이력 탭은 task_history 에 저장된 SQL 사용).
+        """
+        return {
+            **self.view(),
+            "sub_query": self.sub_query,
+            "staging_table": self.staging_table,
+            "staging_ddl": self.staging_ddl,
+            "insert_sql": self.insert_sql,
+        }
+
 
 class CreateTaskRequest(BaseModel):
     """``POST /tasks`` 요청 본문 스키마(coordinator → executor).

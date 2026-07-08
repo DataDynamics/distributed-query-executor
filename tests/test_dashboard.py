@@ -116,3 +116,11 @@ def test_jobs_list_includes_error_field(client, store):
     store.add(j)
     rows = client.get("/jobs").json()["jobs"]
     assert rows and rows[0]["error"] == "executor 연결 실패"
+
+
+def test_jobs_list_includes_admission_fields(client):
+    """처리중 탭의 실행 슬롯/대기 큐 카드용 admission 필드가 /jobs 응답에 있어야 한다."""
+    body = client.get("/jobs").json()
+    assert "pending" in body
+    assert body["max_concurrent_jobs"] == core_settings.max_concurrent_jobs
+    assert body["max_pending_jobs"] == core_settings.max_pending_jobs
