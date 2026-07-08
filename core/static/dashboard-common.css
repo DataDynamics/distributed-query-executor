@@ -1,0 +1,80 @@
+/* 대시보드 공용 스타일 — coordinator·executor 두 앱의 인라인 HTML 이 공유한다.
+   core/webassets.mount_static 이 /assets/dashboard-common.css 로 서빙한다(에어갭 내장).
+   두 대시보드의 룩앤필이 어긋나지 않도록 페이지별 <style> 대신 이 파일만 수정할 것. */
+:root { --bg:#ffffff; --panel:#ffffff; --line:#e1e4e8; --fg:#1f2328; --mut:#6e7781;
+        --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; --acc:#0969da; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+       font:14px/1.5 "Roboto Condensed",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif; }
+header { padding:12px 20px; border-bottom:1px solid var(--line); display:flex;
+         align-items:center; gap:16px; flex-wrap:wrap; }
+header h1 { font-size:16px; margin:0; }
+header .meta { color:var(--mut); font-size:12px; }
+.tabs { display:flex; gap:4px; padding:10px 20px 0; flex-wrap:wrap; }
+.tabs button { background:var(--panel); color:var(--mut); border:1px solid var(--line);
+               border-bottom:none; padding:8px 14px; border-radius:6px 6px 0 0; cursor:pointer; }
+.tabs button.active { color:var(--fg); background:#ddf4ff; border-color:var(--acc); }
+main { padding:16px 20px; }
+.panel { display:none; }
+.panel.active { display:block; }
+.cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+.card { background:#f6f8fa; border:1px solid var(--line); border-radius:8px;
+        padding:12px 16px; min-width:150px; }
+.card .k { color:var(--mut); font-size:12px; }
+.card .v { font-size:20px; font-weight:600; }
+table { width:100%; border-collapse:collapse; background:var(--panel);
+        border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+th,td { text-align:center; padding:8px 10px; border-bottom:1px solid var(--line);
+        font-size:13px; white-space:nowrap; }
+th { color:var(--mut); font-weight:600; background:#f6f8fa; position:sticky; top:0; }
+tr:hover td { background:#f6f8fa; }
+.pill { padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; }
+/* 상태 pill 색 — coordinator(job)·executor(task) 두 앱의 상태값을 모두 정의한다. */
+.s-DONE{color:var(--ok);}
+.s-RUNNING,.s-SPLITTING,.s-PENDING,.s-READING,.s-WRITING,.s-QUEUED{color:var(--acc);}
+.s-FAILED{color:var(--bad);}
+.s-CANCELLED,.s-PARTIAL{color:var(--warn);}
+.ok{color:var(--ok);} .bad{color:var(--bad);}
+.bar { background:#eaeef2; border-radius:6px; height:8px; width:120px; display:inline-block;
+       vertical-align:middle; overflow:hidden; }
+.bar > i { display:block; height:100%; background:var(--acc); }
+.mut{color:var(--mut);} .err{color:var(--bad);} code{color:var(--acc);}
+.desc { text-align:left; color:var(--mut); white-space:normal; max-width:560px; }
+.sec { color:var(--warn); font-weight:600; }
+.pager { display:flex; gap:10px; align-items:center; margin-top:10px; }
+.pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+                padding:6px 12px; border-radius:6px; cursor:pointer; }
+.pager button:disabled { color:var(--mut); cursor:default; opacity:.5; }
+.btn { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+       padding:2px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
+.btn:hover { background:#f6f8fa; }
+.btn.danger { color:var(--bad); border-color:var(--bad); }
+.lnk { color:var(--acc); cursor:pointer; text-decoration:none; }
+.lnk:hover { text-decoration:underline; }
+.modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.4);
+         align-items:center; justify-content:center; z-index:50; }
+.modal-box { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+             width:min(900px,90%); max-height:80%; overflow:auto; padding:16px; }
+/* 타임라인(단계) 팝업만 기본 대비 20% 넓게(900→1080px). SQL 팝업(#modal)은 그대로.
+   SQL 팝업은 타임라인 위에서도 열 수 있으므로 z-index 를 한 단계 높인다. */
+#pmodal .modal-box { width:min(1080px,90%); }
+#modal { z-index:60; }
+.modal-head { display:flex; justify-content:space-between; align-items:center;
+              gap:20px; margin-bottom:10px; }
+.modal-head button { background:none; border:none; color:var(--mut); font-size:18px; cursor:pointer; }
+#modal-sql { white-space:pre-wrap; word-break:break-all; background:#f6f8fa;
+             border:1px solid var(--line); border-radius:6px; padding:12px;
+             font:13px/1.55 ui-monospace,Menlo,Consolas,monospace; color:var(--fg); }
+.tl td { text-align:left; white-space:nowrap; }
+.gtrack { background:#eaeef2; border-radius:4px; height:10px; width:220px;
+          display:inline-block; vertical-align:middle; overflow:hidden; }
+.gtrack > i { display:block; height:100%; background:var(--acc); }
+.gtrack > i.run { background:var(--warn); }
+.phdot { font-size:11px; padding:1px 7px; border-radius:9px; background:#ddf4ff;
+         color:var(--acc); font-weight:600; }
+.tkhd { margin:14px 0 6px; font-weight:600; }
+/* 소요 시간 열과 에러 열의 폭 비율을 1:10 으로 고정한다(에러가 소요의 10배). */
+th.col-dur, td.col-dur { width:60px; }
+th.col-err, td.col-err { width:600px; max-width:600px; }
+td.col-err { text-align:left; white-space:normal; word-break:break-word;
+             font-family:ui-monospace,Menlo,Consolas,monospace; }

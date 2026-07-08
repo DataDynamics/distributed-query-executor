@@ -5,33 +5,18 @@
 /jobs·/cluster·/config·/info·/history 등의 JSON API 를 주기적으로 폴링해 각 탭(처리중인 쿼리,
 실행 이력, Executor, 환경설정, 그외 정보)을 갱신한다.
 
-Python 쪽 코드는 두 가지뿐이다.
-  - mask_dsn(): DSN 문자열의 비밀번호 부분을 가린다.
-  - masked_config(): 환경설정 탭에 뿌릴 (section, key, value) 행 목록을 만들며, 비밀값은 마스킹한다.
-나머지(DASHBOARD_HTML)는 브라우저로 그대로 전달되는 HTML/CSS/JS 코드 문자열이다.
+executor 대시보드와 공유하는 스타일/헬퍼(포맷터·표·타임라인·모달·페이저·탭 배선)는
+``core/static/dashboard-common.css``/``dashboard-common.js`` 로 추출돼 ``/assets`` 로
+서빙된다(에어갭 내장, core/webassets). 이 파일에는 coordinator 전용 로직(job 목록/이력/
+Executor 탭 렌더, job 타임라인 모달, 취소/재실행 액션)만 남는다.
+
+Python 쪽 코드는 masked_config()(환경설정 탭 행 목록, 비밀값 마스킹) 하나이며,
+mask_dsn 은 core.masking 으로 승격돼 여기서는 재수출만 한다(기존 임포트 경로 호환).
 """
 
 from __future__ import annotations
 
-import re
-
-
-def mask_dsn(dsn: str | None) -> str:
-    """DSN 의 비밀번호를 마스킹한다: scheme://user:pass@host → scheme://user:***@host.
-
-    접속 문자열을 화면/응답에 노출할 때 자격증명이 새지 않도록, 'user:password@' 패턴의
-    비밀번호 부분만 '***' 로 치환한다. 사용자명/호스트 등 나머지는 그대로 둔다. 값이 비어
-    있으면 빈 문자열을 돌려준다.
-
-    Args:
-        dsn: 마스킹할 DSN 문자열(없을 수 있음).
-
-    Returns:
-        비밀번호가 가려진 DSN 문자열(입력이 없으면 "").
-    """
-    if not dsn:
-        return ""
-    return re.sub(r"://([^:/@]+):([^@]+)@", r"://\1:***@", dsn)
+from core.masking import mask_dsn  # noqa: F401 — 재수출(기존 `coordinator.dashboard.mask_dsn` 호환)
 
 
 def masked_config(settings) -> list[dict]:
@@ -159,7 +144,8 @@ def masked_config(settings) -> list[dict]:
     return [{"section": s, "key": k, "value": v, "desc": d} for s, k, v, d in rows]
 
 
-# 대시보드 페이지 전체(HTML/CSS/JS)를 담은 문자열. '/' 핸들러가 이 값을 그대로 응답으로 내보낸다.
+# 대시보드 페이지 전체(HTML + coordinator 전용 JS)를 담은 문자열. '/' 핸들러가 이 값을 그대로
+# 응답으로 내보낸다. 공용 스타일/헬퍼는 /assets/dashboard-common.css·js 에서 로드된다.
 # 주의: 아래 문자열 내부는 브라우저로 전송되는 코드이므로 Python 주석을 끼워 넣지 말 것.
 DASHBOARD_HTML = """<!doctype html>
 <html lang="ko">
@@ -168,80 +154,7 @@ DASHBOARD_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Query Coordinator 모니터링</title>
 <link rel="stylesheet" href="/assets/fonts.css">
-<style>
-  :root { --bg:#ffffff; --panel:#ffffff; --line:#e1e4e8; --fg:#1f2328; --mut:#6e7781;
-          --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; --acc:#0969da; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:14px/1.5 "Roboto Condensed",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif; }
-  header { padding:12px 20px; border-bottom:1px solid var(--line); display:flex;
-           align-items:center; gap:16px; flex-wrap:wrap; }
-  header h1 { font-size:16px; margin:0; }
-  header .meta { color:var(--mut); font-size:12px; }
-  .tabs { display:flex; gap:4px; padding:10px 20px 0; flex-wrap:wrap; }
-  .tabs button { background:var(--panel); color:var(--mut); border:1px solid var(--line);
-                 border-bottom:none; padding:8px 14px; border-radius:6px 6px 0 0; cursor:pointer; }
-  .tabs button.active { color:var(--fg); background:#ddf4ff; border-color:var(--acc); }
-  main { padding:16px 20px; }
-  .panel { display:none; }
-  .panel.active { display:block; }
-  .cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
-  .card { background:#f6f8fa; border:1px solid var(--line); border-radius:8px;
-          padding:12px 16px; min-width:150px; }
-  .card .k { color:var(--mut); font-size:12px; }
-  .card .v { font-size:20px; font-weight:600; }
-  table { width:100%; border-collapse:collapse; background:var(--panel);
-          border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  th,td { text-align:center; padding:8px 10px; border-bottom:1px solid var(--line);
-          font-size:13px; white-space:nowrap; }
-  th { color:var(--mut); font-weight:600; background:#f6f8fa; position:sticky; top:0; }
-  tr:hover td { background:#f6f8fa; }
-  .pill { padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; }
-  .s-DONE{color:var(--ok);} .s-RUNNING,.s-SPLITTING,.s-PENDING{color:var(--acc);}
-  .s-FAILED{color:var(--bad);} .s-CANCELLED,.s-PARTIAL{color:var(--warn);}
-  .ok{color:var(--ok);} .bad{color:var(--bad);}
-  .bar { background:#eaeef2; border-radius:6px; height:8px; width:120px; display:inline-block;
-         vertical-align:middle; overflow:hidden; }
-  .bar > i { display:block; height:100%; background:var(--acc); }
-  .mut{color:var(--mut);} .err{color:var(--bad);} code{color:var(--acc);}
-  .desc { text-align:left; color:var(--mut); white-space:normal; max-width:560px; }
-  .sec { color:var(--warn); font-weight:600; }
-  .pager { display:flex; gap:10px; align-items:center; margin-top:10px; }
-  .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
-                  padding:6px 12px; border-radius:6px; cursor:pointer; }
-  .pager button:disabled { color:var(--mut); cursor:default; opacity:.5; }
-  .btn { background:var(--panel); color:var(--fg); border:1px solid var(--line);
-         padding:2px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
-  .btn:hover { background:#f6f8fa; }
-  .btn.danger { color:var(--bad); border-color:var(--bad); }
-  .lnk { color:var(--acc); cursor:pointer; text-decoration:none; }
-  .lnk:hover { text-decoration:underline; }
-  .modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.4);
-           align-items:center; justify-content:center; z-index:50; }
-  .modal-box { background:var(--panel); border:1px solid var(--line); border-radius:8px;
-               width:min(900px,90%); max-height:80%; overflow:auto; padding:16px; }
-  /* 타임라인(단계) 팝업만 기본 대비 20% 넓게(900→1080px). SQL 팝업(#modal)은 그대로. */
-  #pmodal .modal-box { width:min(1080px,90%); }
-  .modal-head { display:flex; justify-content:space-between; align-items:center;
-                gap:20px; margin-bottom:10px; }
-  .modal-head button { background:none; border:none; color:var(--mut); font-size:18px; cursor:pointer; }
-  #modal-sql { white-space:pre-wrap; word-break:break-all; background:#f6f8fa;
-               border:1px solid var(--line); border-radius:6px; padding:12px;
-               font:13px/1.55 ui-monospace,Menlo,Consolas,monospace; color:var(--fg); }
-  .tl td { text-align:left; white-space:nowrap; }
-  .gtrack { background:#eaeef2; border-radius:4px; height:10px; width:200px;
-            display:inline-block; vertical-align:middle; overflow:hidden; }
-  .gtrack > i { display:block; height:100%; background:var(--acc); }
-  .gtrack > i.run { background:var(--warn); }
-  .phdot { font-size:11px; padding:1px 7px; border-radius:9px; background:#ddf4ff;
-           color:var(--acc); font-weight:600; }
-  .tkhd { margin:14px 0 6px; font-weight:600; }
-  /* 소요 시간 열과 에러 열의 폭 비율을 1:10 으로 고정한다(에러가 소요의 10배). */
-  th.col-dur, td.col-dur { width:60px; }
-  th.col-err, td.col-err { width:600px; max-width:600px; }
-  td.col-err { text-align:left; white-space:normal; word-break:break-word;
-               font-family:ui-monospace,Menlo,Consolas,monospace; }
-</style>
+<link rel="stylesheet" href="/assets/dashboard-common.css">
 </head>
 <body>
 <header>
@@ -275,105 +188,24 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="pmodal-body"></div>
   </div>
 </div>
+<script src="/assets/dashboard-common.js"></script>
 <script>
-const $ = s => document.querySelector(s);
-let active = "jobs";
-const fmt = v => (v===null||v===undefined||v==="") ? '<span class="mut">-</span>' : v;
-const fmtNum = v => (v===null||v===undefined||v==="") ? '<span class="mut">-</span>' : Number(v).toLocaleString('en-US');
-const pill = s => `<span class="pill s-${s}">${s}</span>`;
-const pad = n => String(n).padStart(2,'0');
-function fmtDate(s){
-  if(!s) return '<span class="mut">-</span>';
-  const d = new Date(s); if(isNaN(d)) return s;
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} `+
-         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-function dur(start, end){
-  if(!start) return '<span class="mut">-</span>';
-  const s = new Date(start), e = end ? new Date(end) : new Date();
-  let ms = e - s; if(isNaN(ms)||ms<0) return '<span class="mut">-</span>';
-  const sec = Math.floor(ms/1000), h=Math.floor(sec/3600),
-        m=Math.floor((sec%3600)/60), ss=sec%60;
-  return (h?h+'h ':'')+(m||h?m+'m ':'')+ss+'s';
-}
 // 작업 ID → 쿼리문 매핑/모달
 const sqlMap = {};
-function showSql(id){
-  $("#modal-title").textContent = id;
-  $("#modal-sql").textContent = sqlMap[id] || '(쿼리문 없음)';
-  $("#modal").style.display = 'flex';
-}
-function closeModal(){ $("#modal").style.display = 'none'; }
-const jobLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${id}</a>`;
+function showSql(id){ showTextModal(id, sqlMap[id] || '(쿼리문 없음)'); }
+const jobLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${esc(id)}</a>`;
 const bar = p => `<span class="bar"><i style="width:${p||0}%"></i></span> ${p||0}%`;
-function concBar(active, max){
-  if(active===null||active===undefined) return '<span class="mut">-</span>';
-  if(!max || max<=0) return `${active} <span class="mut">(무제한)</span>`;
-  const pct = Math.min(100, Math.round(active/max*100));
-  return `<span class="bar"><i style="width:${pct}%"></i></span> ${active}/${max}`;
-}
-// 밀리초를 사람이 읽는 소요시간으로. 1초 미만은 ms, 이상은 h/m/s.
-function fmtDur(ms){
-  if(ms===null||ms===undefined) return '<span class="mut">-</span>';
-  if(ms<1000) return ms+'ms';
-  const sec=Math.floor(ms/1000), h=Math.floor(sec/3600),
-        m=Math.floor((sec%3600)/60), s=sec%60;
-  return (h?h+'h ':'')+(m||h?m+'m ':'')+s+'s';
-}
-// 진행 중(finished_at 없음)인 단계의 경과 ms 는 지금 시각 기준으로 계산한다.
-function phaseMs(p){
-  if(p.duration_ms!==null && p.duration_ms!==undefined) return p.duration_ms;
-  if(!p.started_at) return null;
-  const s=new Date(p.started_at); if(isNaN(s)) return null;
-  const ms=new Date()-s; return (ms>=0?ms:null);
-}
-const phaseOf = (phases,name)=>(phases||[]).find(p=>p.name===name);
-// 단계 타임라인을 간트형 표로 렌더링(executor 대시보드와 동형).
-function renderPhases(phases){
-  if(!phases || !phases.length) return '<p class="mut">단계 정보가 아직 없습니다.</p>';
-  const durs = phases.map(phaseMs).filter(v=>v!==null&&v!==undefined);
-  const max = durs.length ? Math.max(...durs, 1) : 1;
-  let h = '<table class="tl"><thead><tr>'+
-    ['단계','진행','시작','종료','소요','행수','비고'].map(t=>`<th>${t}</th>`).join('')+
-    '</tr></thead><tbody>';
-  for(const p of phases){
-    const ms = phaseMs(p);
-    const running = (p.finished_at===null||p.finished_at===undefined);
-    const pct = ms!==null&&ms!==undefined ? Math.max(2, Math.round(ms/max*100)) : 0;
-    const bar = `<span class="gtrack"><i class="${running?'run':''}" style="width:${pct}%"></i></span>`;
-    let note = '';
-    const e = p.extra||{};
-    if(e.read_wait_ms!==undefined || e.write_wait_ms!==undefined){
-      note = `읽기 ${fmtDur(e.read_wait_ms)} / 쓰기 ${fmtDur(e.write_wait_ms)}`;
-      if(e.read_starve_ms) note += ` / Impala대기 ${fmtDur(e.read_starve_ms)}`;
-      if(e.finalize_wait_ms!==undefined) note += ` / 서버 ${fmtDur(e.finalize_wait_ms)}`;
-      if(e.rows_per_sec) note += ` · ${fmtNum(e.rows_per_sec)}행/s`;
-    }
-    h += '<tr>'+
-      `<td><span class="phdot">${fmt(p.label||p.name)}</span>${running?' <span class="mut">(진행중)</span>':''}</td>`+
-      `<td>${bar}</td>`+
-      `<td><span class="mut">${fmtDate(p.started_at)}</span></td>`+
-      `<td><span class="mut">${fmtDate(p.finished_at)}</span></td>`+
-      `<td>${fmtDur(ms)}</td>`+
-      `<td>${p.rows!==null&&p.rows!==undefined?fmtNum(p.rows):fmt(null)}</td>`+
-      `<td class="mut">${note||'-'}</td>`+
-    '</tr>';
-  }
-  return h+'</tbody></table>';
-}
 // 현재 단계 집계({STREAM_COPY:3,...})를 라벨 칩들로 요약 표기.
 const PHASE_LABELS = {QUEUE_WAIT:"대기", IMPALA_SUBMIT:"조회", STAGING_DDL:"staging",
   PREFLIGHT:"검증", DELETE:"선삭제", STREAM_COPY:"COPY", INSERT:"INSERT", COMMIT:"커밋"};
 function phaseSummary(s){
   const keys = Object.keys(s||{});
   if(!keys.length) return '<span class="mut">-</span>';
-  return keys.map(k=>`<span class="phdot">${PHASE_LABELS[k]||k} ${s[k]}</span>`).join(' ');
+  return keys.map(k=>`<span class="phdot">${PHASE_LABELS[k]||esc(k)} ${s[k]}</span>`).join(' ');
 }
 // job 상세 모달: /jobs/{id} 를 받아 task 별 단계 타임라인을 세로로 쌓아 보여준다.
 async function showJobPhases(id){
-  $("#pmodal-title").textContent = id + ' · task별 단계 진행/소요';
-  $("#pmodal-body").innerHTML = '<p class="mut">불러오는 중…</p>';
-  $("#pmodal").style.display = 'flex';
+  showPhasesModal(id + ' · task별 단계 진행/소요', '<p class="mut">불러오는 중…</p>');
   try{
     const d = await getJSON(`/jobs/${id}`);
     const tasks = d.tasks||[];
@@ -383,27 +215,10 @@ async function showJobPhases(id){
       `읽은 ${fmtNum(t.rows_read)} / 적재 ${fmtNum(t.rows_written)} · `+
       `조회완료 ${fmtDate(t.impala_done_at)}</div>`+renderPhases(t.phases)
     ).join('');
-  }catch(e){ $("#pmodal-body").innerHTML = `<span class="err">불러오기 실패: ${e}</span>`; }
+  }catch(e){ $("#pmodal-body").innerHTML = `<span class="err">불러오기 실패: ${esc(e)}</span>`; }
 }
-function closePhases(){ $("#pmodal").style.display = 'none'; }
 const jobPhaseLink = id => `<a class="lnk" onclick="showJobPhases('${id}');return false">타임라인</a>`;
 
-function table(cols, rows){
-  const cls = c => c.cls ? ` class="${c.cls}"` : "";
-  let h = "<table><thead><tr>" + cols.map(c=>`<th${cls(c)}>${c.t}</th>`).join("") + "</tr></thead><tbody>";
-  if(!rows.length) h += `<tr><td colspan="${cols.length}" class="mut">데이터 없음</td></tr>`;
-  for(const r of rows){ h += "<tr>" + cols.map(c=>`<td${cls(c)}>${c.f?c.f(r):fmt(r[c.k])}</td>`).join("") + "</tr>"; }
-  return h + "</tbody></table>";
-}
-async function getJSON(u){ const r = await fetch(u); return r.json(); }
-// POST 액션 공용: 실패 시 서버가 준 detail 메시지를 그대로 예외로 올린다.
-async function postJSON(u){
-  const r = await fetch(u, {method:'POST'});
-  let body = null;
-  try{ body = await r.json(); }catch(_e){ body = null; }
-  if(!r.ok) throw new Error((body&&body.detail) || (r.status+' '+r.statusText));
-  return body;
-}
 // 진행 중 job 취소: 각 executor 로 취소가 전파되고 job 은 CANCELLED 로 종료된다.
 async function cancelJob(id){
   if(!confirm('작업 ' + id + ' 을(를) 취소할까요?')) return;
@@ -455,7 +270,6 @@ async function loadJobs(){
        <div class="card"><div class="k">활성(대기+실행)</div><div class="v">${d.active}</div></div>
      </div>` + table(cols, d.jobs);
 }
-let histOffset = 0; const HIST_LIMIT = 50; let histTotal = 0;
 async function loadHist(){
   const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}`);
   if(!d.enabled){
@@ -475,21 +289,12 @@ async function loadHist(){
     {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", cls:"col-dur", f:r=>dur(r.started_at, r.finished_at)},
-    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
     {t:"액션", f:retryBtn},
   ];
   const n = d.rows ? d.rows.length : 0;
-  const from = histTotal ? histOffset + 1 : 0;
-  const to = histOffset + n;
-  const pager = `<div class="pager">
-      <button onclick="histPrev()" ${histOffset<=0?'disabled':''}>← 이전</button>
-      <span class="mut">${from}–${to} / ${histTotal}</span>
-      <button onclick="histNext()" ${to>=histTotal?'disabled':''}>다음 →</button>
-    </div>`;
-  $("#p-hist").innerHTML = table(cols, d.rows) + pager;
+  $("#p-hist").innerHTML = table(cols, d.rows) + pagerHtml(n);
 }
-function histPrev(){ histOffset = Math.max(0, histOffset - HIST_LIMIT); loadHist(); }
-function histNext(){ if(histOffset + HIST_LIMIT < histTotal){ histOffset += HIST_LIMIT; loadHist(); } }
 
 async function loadExec(){
   const d = await getJSON("/cluster");
@@ -511,14 +316,14 @@ async function loadExec(){
     {t:"동시 처리", f:r=>concBar(r.active_tasks, r.max_concurrent_tasks)},
     {t:"누적 배정", f:r=>fmtNum(assign[r.executor_url])},
     {t:"Last Seen", f:r=>`<span class="mut">${fmtDate(r.updated_at||r.last_checked)}</span>`},
-    {t:"Error", cls:"col-err", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"Error", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
   ];
   $("#p-exec").innerHTML = cards + table(cols, d.executors);
 }
 async function loadConf(){
   const d = await getJSON("/config");
   const cols = [
-    {t:"section", f:r=>`<span class="sec">${r.section}</span>`},
+    {t:"section", f:r=>`<span class="sec">${esc(r.section)}</span>`},
     {t:"key", k:"key"},
     {t:"value", f:r=>fmt(String(r.value))},
     {t:"설명", f:r=>`<div class="desc">${fmt(r.desc)}</div>`},
@@ -554,21 +359,9 @@ async function loadInfo(){
     {t:"설명", f:r=>`<div class="desc">${fmt(infoDescOf(r.key))}</div>`}];
   $("#p-info").innerHTML = table(cols, rows.concat(byStatus));
 }
-const loaders = {jobs:loadJobs, hist:loadHist, exec:loadExec, conf:loadConf, info:loadInfo};
-async function refresh(){
-  try{ await loaders[active](); $("#upd").textContent = "갱신: " + new Date().toLocaleTimeString();}
-  catch(e){ $("#upd").textContent = "갱신 실패: " + e; }
-}
-document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("active"));
-  document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
-  b.classList.add("active"); $("#p-"+b.dataset.tab).classList.add("active");
-  active = b.dataset.tab; refresh();
-});
 getJSON("/info").then(d=>{ $("#hdr").textContent =
   `id=${d.coordinator_id} · mode=${d.executor_mode} · store=${d.store_backend} · select=${d.executor_select} · v${d.version}`; });
-refresh();
-setInterval(()=>{ if(!document.hidden) refresh(); }, 3000);
+initDashboard({jobs:loadJobs, hist:loadHist, exec:loadExec, conf:loadConf, info:loadInfo}, "jobs");
 </script>
 </body>
 </html>"""
