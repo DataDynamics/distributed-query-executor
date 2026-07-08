@@ -175,11 +175,37 @@ def test_source_execute_trino_ignores_query_options():
     assert cur.executed == [("SELECT 1", {})]
 
 
-def test_open_source_cursor_trino_ignores_convert_types(fake_trino):
+def test_open_source_cursor_trino_maps_convert_types_to_legacy_primitive_types(fake_trino):
+    """convert_types=False(형변환 끄기)가 trino 에선 legacy_primitive_types=True 로 매핑된다.
+
+    local_stage export 의 재파싱 제거 최적화(impala 의 convert_types=False 와 동일 목적):
+    TIMESTAMP/DATE/DECIMAL 을 datetime/Decimal 로 파싱하지 않고 서버 문자열 그대로 받는다.
+    """
     be = ImpalaToGreenplumBackend(impala_dsn={}, greenplum_dsn="x", source_type="trino")
     conn = _FakeTrinoConn([])
-    be._open_source_cursor(conn, convert_types=False)   # impyla 전용 kwarg → 무시
+    be._open_source_cursor(conn, convert_types=False)
+    assert conn.cursor_kwargs == {"legacy_primitive_types": True}
+    # 형변환 유지(None/True)면 기본 커서
+    be._open_source_cursor(conn, convert_types=None)
     assert conn.cursor_kwargs == {}
+    be._open_source_cursor(conn, convert_types=True)
+    assert conn.cursor_kwargs == {}
+
+
+def test_open_source_cursor_trino_falls_back_on_old_client(fake_trino):
+    """legacy_primitive_types 를 모르는 구버전 trino 클라이언트면 기본 커서로 폴백한다."""
+
+    class _OldConn(_FakeTrinoConn):
+        def cursor(self, **kwargs):
+            if kwargs:
+                raise TypeError("unexpected keyword argument")
+            self.cursor_kwargs = kwargs
+            return self.cursor_obj
+
+    be = ImpalaToGreenplumBackend(impala_dsn={}, greenplum_dsn="x", source_type="trino")
+    conn = _OldConn([])
+    cur = be._open_source_cursor(conn, convert_types=False)
+    assert cur is conn.cursor_obj and conn.cursor_kwargs == {}
 
 
 # ---------- dbprobe.run_trino_select ----------

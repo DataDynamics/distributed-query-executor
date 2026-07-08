@@ -372,15 +372,26 @@ class ImpalaToGreenplumBackend:
         return impala_connect(**self.impala_dsn)
 
     def _open_source_cursor(self, conn, convert_types: bool | None = None):
-        """소스 커서를 연다. impala 는 ``convert_types=False`` 로 형변환을 끌 수 있다.
+        """소스 커서를 연다. ``convert_types=False`` 면 값 형변환을 꺼 서버 문자열 그대로 받는다.
 
-        TIMESTAMP/DATE/DECIMAL 은 HiveServer2 wire 에서 이미 문자열로 오는데, impyla 기본값
-        (convert_types=True)은 이를 datetime/Decimal 로 되돌려 파싱한다. CSV 로 다시 쓸 export
-        경로에서는 그 변환이 순수 낭비이므로 False 로 꺼 문자열 그대로 받는다(INT/DOUBLE/BOOL 은
-        네이티브라 영향 없음). 해당 kwarg 를 지원하지 않는 impyla 버전이면 기본 커서로 폴백한다.
-        trino 클라이언트에는 대응 개념이 없어 항상 기본 커서를 연다(값은 네이티브 파이썬 타입).
+        TIMESTAMP/DATE/DECIMAL 은 wire 에서 이미 문자열로 오는데, 두 클라이언트 모두 기본값은
+        이를 datetime/Decimal 로 되돌려 파싱한다. CSV 로 다시 쓸 export 경로에서는 그 변환이
+        순수 낭비이므로 꺼서 문자열 그대로 받는다(INT/DOUBLE/BOOL 은 네이티브라 영향 없음).
+        엔진별 스위치가 다르다:
+          - impala: ``cursor(convert_types=False)``
+          - trino : ``cursor(legacy_primitive_types=True)`` (동일 목적 — 파싱 생략)
+        해당 kwarg 를 지원하지 않는 구버전 클라이언트면 기본 커서로 폴백한다.
         """
-        if convert_types is None or self.source_type == "trino":
+        if self.source_type == "trino":
+            if convert_types is False:
+                try:
+                    return conn.cursor(legacy_primitive_types=True)
+                except TypeError:
+                    logger.warning(
+                        "trino cursor(legacy_primitive_types=...) 미지원 — 기본 커서로 폴백"
+                    )
+            return conn.cursor()
+        if convert_types is None:
             return conn.cursor()
         try:
             return conn.cursor(convert_types=convert_types)
@@ -686,7 +697,7 @@ class ImpalaToGreenplumBackend:
         impala_conn = self._source_connect()
         try:
             # convert_types=False 로 형변환을 꺼 timestamp/date/decimal 을 문자열 그대로 받는다
-            # (impala 전용 — trino 는 항상 기본 커서).
+            # (impala 는 convert_types, trino 는 legacy_primitive_types 로 동일 효과).
             cur = self._open_source_cursor(impala_conn, convert_types=self.stage_convert_types)
             _emit(on_stage, "IMPALA_SUBMIT", "start")
             self._source_execute(cur, sub_query, query_options)

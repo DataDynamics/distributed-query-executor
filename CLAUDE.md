@@ -74,8 +74,9 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `exec_mode`: `copy`(COPY) / `statement`(INSERT 그대로 실행) / `stage_insert`(TEMP 경유) /
   `local_stage`(executor 가 로컬 CSV export → coordinator 가 `file://` 외부테이블로 세그먼트
   로컬 병렬 read → target INSERT, 2-phase). local_stage 는 executor 를 GP 세그먼트 호스트에
-  co-locate 해야 한다(DESIGN §17). export fetch 는 `convert_types=False` 로 timestamp/date 를
-  wire 문자열 그대로 받아 CSV 로 쓴다(재파싱 비용 제거).
+  co-locate 해야 한다(DESIGN §17). export fetch 는 형변환을 꺼 timestamp/date 를 wire 문자열
+  그대로 받아 CSV 로 쓴다(재파싱 비용 제거 — impala 는 `convert_types=False`, trino 는
+  `legacy_primitive_types=True` 로 동일 적용).
 - `executor/app.py` — task 상태머신(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED),
   `executor.max_concurrent_tasks` 세마포어.
 - `core/logging.py` — 일 단위 롤링 + `[job_id][task_id]` 컨텍스트 주입 + **WARNING 전용
