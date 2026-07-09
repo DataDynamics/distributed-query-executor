@@ -94,3 +94,49 @@ def test_dashboard_disabled(monkeypatch):
     c = TestClient(create_app(runner=FakeRunner(), store=InMemoryJobStore()))
     assert c.get("/").status_code == 404      # 대시보드 비활성
     assert c.get("/jobs").status_code == 200   # /jobs 는 항상 제공
+
+
+def test_dashboard_has_cancel_retry_actions(client):
+    """처리중 탭의 취소 버튼과 이력 탭의 재실행 버튼(JS 핸들러)이 HTML 에 포함돼야 한다."""
+    html = client.get("/").text
+    assert "cancelJob(" in html      # 활성 job 취소 → POST /jobs/{id}/cancel
+    assert "retryJob(" in html       # 실패 파티션 재실행 → POST /jobs/{id}/retry
+    assert "postJSON" in html        # 액션 공용 헬퍼
+
+
+def test_jobs_list_includes_error_field(client, store):
+    """처리중 탭의 에러 컬럼을 위해 /jobs 목록 행에 error 필드가 포함돼야 한다."""
+    j = Job(
+        original_sql="SELECT 1 FROM t WHERE dt IN ('1')",
+        partition_column="dt", target_table="public.t", write_mode="append",
+        parallelism=1, split_strategy="contiguous", failure_policy="fail_fast",
+        status=JobStatus.FAILED,
+    )
+    j.error = "executor 연결 실패"
+    store.add(j)
+    rows = client.get("/jobs").json()["jobs"]
+    assert rows and rows[0]["error"] == "executor 연결 실패"
+
+
+def test_jobs_list_includes_admission_fields(client):
+    """처리중 탭의 실행 슬롯/대기 큐 카드용 admission 필드가 /jobs 응답에 있어야 한다."""
+    body = client.get("/jobs").json()
+    assert "pending" in body
+    assert body["max_concurrent_jobs"] == core_settings.max_concurrent_jobs
+    assert body["max_pending_jobs"] == core_settings.max_pending_jobs
+
+
+def test_dashboard_has_template_datasource_tabs_and_hist_filter(client):
+    """템플릿/데이터소스 탭과 실행 이력 필터 바가 대시보드 HTML 에 포함돼야 한다."""
+    html = client.get("/").text
+    assert 'data-tab="tpl"' in html
+    assert 'data-tab="ds"' in html
+    assert 'id="hist-filter"' in html      # 이력 검색 필터 바(자동 갱신에 지워지지 않는 정적 영역)
+    assert 'id="ds-exec"' in html          # impala 등 executor 경유 실행 위치 선택
+    assert "runDatasourceQuery" in html or "runDs(" in html
+
+
+def test_templates_endpoint_shape(client):
+    """템플릿 탭이 사용하는 GET /templates 응답 형태 확인."""
+    body = client.get("/templates").json()
+    assert "enabled" in body and "templates" in body

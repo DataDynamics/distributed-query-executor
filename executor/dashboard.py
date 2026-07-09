@@ -3,29 +3,16 @@
 remote mode 에서 각 executor 프로세스가 자신의 / 에 단일 HTML 을 서빙하고,
 브라우저가 /tasks·/metrics·/history·/config·/info 를 폴링해 탭을 갱신한다.
 local mode 에서는 executor 프로세스가 따로 없으므로 coordinator 대시보드만 보인다.
+
+coordinator 대시보드와 공유하는 스타일/헬퍼(포맷터·표·타임라인·모달·페이저·탭 배선)는
+``core/static/dashboard-common.css``/``dashboard-common.js`` 로 추출돼 ``/assets`` 로
+서빙된다(에어갭 내장, core/webassets). 이 파일에는 executor 전용 로직(task 목록/이력
+렌더, SQL 조합 모달, 취소 액션)만 남는다. mask_dsn 은 core.masking 재수출이다.
 """
 
 from __future__ import annotations
 
-import re
-
-
-def mask_dsn(dsn: str | None) -> str:
-    """DSN 문자열의 비밀번호를 마스킹한다.
-
-    ``scheme://user:pass@host`` 형태의 자격증명 중 비밀번호 부분만 ``***`` 로 치환해
-    ``scheme://user:***@host`` 로 만든다. 대시보드 환경설정 탭처럼 DSN 을 화면에 그대로
-    노출해야 할 때, 비밀번호가 새지 않도록 가린다. dsn 이 비어 있으면 빈 문자열을 반환한다.
-
-    인자:
-        dsn: 마스킹할 DSN(없을 수 있음).
-
-    반환:
-        비밀번호가 가려진 DSN 문자열(자격증명이 없으면 원본 그대로).
-    """
-    if not dsn:
-        return ""
-    return re.sub(r"://([^:/@]+):([^@]+)@", r"://\1:***@", dsn)
+from core.masking import mask_dsn  # noqa: F401 — 재수출(기존 `executor.dashboard.mask_dsn` 호환)
 
 
 def masked_config(settings) -> list[dict]:
@@ -64,6 +51,8 @@ def masked_config(settings) -> list[dict]:
          "task 이력/공유 상태 DB DSN(미설정 시 이력 비활성)"),
         ("history", "task_table", settings.task_history_table, "task 실행 이력 테이블"),
         ("monitor", "disk_path", settings.monitor_disk_path, "디스크 사용량 측정 경로"),
+        ("source", "type", settings.source_type,
+         "소스 엔진: impala(기본) | trino. task 읽기(SELECT)가 이 소스를 사용"),
         ("impala", "host", settings.impala_host or "(미설정→Mock)",
          "Impala(소스) 호스트. 미설정 시 MockBackend"),
         ("impala", "port", settings.impala_port, "Impala 포트(HiveServer2)"),
@@ -80,6 +69,20 @@ def masked_config(settings) -> list[dict]:
         ("impala", "query_options",
          ", ".join(f"{k}={v}" for k, v in (settings.impala_query_options or {}).items()) or "(없음)",
          "Impala 쿼리 옵션 전역 기본값(SET). 요청별 옵션이 이 위에 병합됨"),
+        ("trino", "host", settings.trino_host or "(미설정)",
+         "Trino(소스) 호스트. source.type=trino 일 때 사용(미설정 시 MockBackend)"),
+        ("trino", "port", settings.trino_port, "Trino coordinator HTTP 포트"),
+        ("trino", "user", settings.trino_user, "Trino 사용자(무인증이어도 필수 헤더)"),
+        ("trino", "password", "***" if settings.trino_password else "",
+         "Trino Basic 인증 비밀번호(설정 시 https 필수, *** 마스킹)"),
+        ("trino", "catalog", settings.trino_catalog, "Trino 카탈로그"),
+        ("trino", "schema", settings.trino_schema, "Trino 기본 스키마"),
+        ("trino", "http_scheme", settings.trino_http_scheme, "http | https(password 사용 시 https)"),
+        ("trino", "verify", settings.trino_verify or "(기본 true)",
+         "TLS 검증: true/false 또는 CA 인증서 파일 경로"),
+        ("trino", "session_properties",
+         ", ".join(f"{k}={v}" for k, v in (settings.trino_session_properties or {}).items()) or "(없음)",
+         "Trino 세션 프로퍼티 전역 기본값(연결 단위 적용)"),
         ("greenplum", "dsn", mask_dsn(settings.greenplum_dsn),
          "Greenplum(타깃) 적재 DSN. 미설정 시 MockBackend"),
         ("greenplum", "pool_max", settings.greenplum_pool_max,
@@ -101,6 +104,9 @@ def masked_config(settings) -> list[dict]:
     return [{"section": s, "key": k, "value": v, "desc": d} for s, k, v, d in rows]
 
 
+# 대시보드 페이지 전체(HTML + executor 전용 JS)를 담은 문자열. '/' 핸들러가 이 값을 그대로
+# 응답으로 내보낸다. 공용 스타일/헬퍼는 /assets/dashboard-common.css·js 에서 로드된다.
+# 주의: 아래 문자열 내부는 브라우저로 전송되는 코드이므로 Python 주석을 끼워 넣지 말 것.
 DASHBOARD_HTML = """<!doctype html>
 <html lang="ko">
 <head>
@@ -108,75 +114,7 @@ DASHBOARD_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Query Executor 모니터링</title>
 <link rel="stylesheet" href="/assets/fonts.css">
-<style>
-  :root { --bg:#ffffff; --panel:#ffffff; --line:#e1e4e8; --fg:#1f2328; --mut:#6e7781;
-          --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; --acc:#0969da; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:14px/1.5 "Roboto Condensed",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif; }
-  header { padding:12px 20px; border-bottom:1px solid var(--line); display:flex;
-           align-items:center; gap:16px; flex-wrap:wrap; }
-  header h1 { font-size:16px; margin:0; }
-  header .meta { color:var(--mut); font-size:12px; }
-  .tabs { display:flex; gap:4px; padding:10px 20px 0; flex-wrap:wrap; }
-  .tabs button { background:var(--panel); color:var(--mut); border:1px solid var(--line);
-                 border-bottom:none; padding:8px 14px; border-radius:6px 6px 0 0; cursor:pointer; }
-  .tabs button.active { color:var(--fg); background:#ddf4ff; border-color:var(--acc); }
-  main { padding:16px 20px; }
-  .panel { display:none; }
-  .panel.active { display:block; }
-  .cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
-  .card { background:#f6f8fa; border:1px solid var(--line); border-radius:8px;
-          padding:12px 16px; min-width:150px; }
-  .card .k { color:var(--mut); font-size:12px; }
-  .card .v { font-size:20px; font-weight:600; }
-  table { width:100%; border-collapse:collapse; background:var(--panel);
-          border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  th,td { text-align:center; padding:8px 10px; border-bottom:1px solid var(--line);
-          font-size:13px; white-space:nowrap; }
-  th { color:var(--mut); font-weight:600; background:#f6f8fa; position:sticky; top:0; }
-  tr:hover td { background:#f6f8fa; }
-  .pill { padding:1px 8px; border-radius:10px; font-size:12px; font-weight:600; }
-  .s-DONE{color:var(--ok);} .s-READING,.s-WRITING,.s-QUEUED{color:var(--acc);}
-  .s-FAILED{color:var(--bad);} .s-CANCELLED{color:var(--warn);}
-  .ok{color:var(--ok);} .bad{color:var(--bad);}
-  .bar { background:#eaeef2; border-radius:6px; height:8px; width:120px; display:inline-block;
-         vertical-align:middle; overflow:hidden; }
-  .bar > i { display:block; height:100%; background:var(--acc); }
-  .mut{color:var(--mut);} .err{color:var(--bad);} code{color:var(--acc);}
-  .desc { text-align:left; color:var(--mut); white-space:normal; max-width:560px; }
-  .sec { color:var(--warn); font-weight:600; }
-  .pager { display:flex; gap:10px; align-items:center; margin-top:10px; }
-  .pager button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
-                  padding:6px 12px; border-radius:6px; cursor:pointer; }
-  .pager button:disabled { color:var(--mut); cursor:default; opacity:.5; }
-  .lnk { color:var(--acc); cursor:pointer; text-decoration:none; }
-  .lnk:hover { text-decoration:underline; }
-  .modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.4);
-           align-items:center; justify-content:center; z-index:50; }
-  .modal-box { background:var(--panel); border:1px solid var(--line); border-radius:8px;
-               width:min(900px,90%); max-height:80%; overflow:auto; padding:16px; }
-  /* 타임라인(단계) 팝업만 기본 대비 20% 넓게(900→1080px). SQL 팝업(#modal)은 그대로. */
-  #pmodal .modal-box { width:min(1080px,90%); }
-  .modal-head { display:flex; justify-content:space-between; align-items:center;
-                gap:20px; margin-bottom:10px; }
-  .modal-head button { background:none; border:none; color:var(--mut); font-size:18px; cursor:pointer; }
-  #modal-sql { white-space:pre-wrap; word-break:break-all; background:#f6f8fa;
-               border:1px solid var(--line); border-radius:6px; padding:12px;
-               font:13px/1.55 ui-monospace,Menlo,Consolas,monospace; color:var(--fg); }
-  .tl td { text-align:left; white-space:nowrap; }
-  .gtrack { background:#eaeef2; border-radius:4px; height:10px; width:220px;
-            display:inline-block; vertical-align:middle; overflow:hidden; }
-  .gtrack > i { display:block; height:100%; background:var(--acc); }
-  .gtrack > i.run { background:var(--warn); }
-  .phdot { font-size:11px; padding:1px 7px; border-radius:9px; background:#ddf4ff;
-           color:var(--acc); font-weight:600; }
-  /* 소요 시간 열과 에러 열의 폭 비율을 1:10 으로 고정한다(에러가 소요의 10배). */
-  th.col-dur, td.col-dur { width:60px; }
-  th.col-err, td.col-err { width:600px; max-width:600px; }
-  td.col-err { text-align:left; white-space:normal; word-break:break-word;
-               font-family:ui-monospace,Menlo,Consolas,monospace; }
-</style>
+<link rel="stylesheet" href="/assets/dashboard-common.css">
 </head>
 <body>
 <header>
@@ -187,12 +125,36 @@ DASHBOARD_HTML = """<!doctype html>
 <div class="tabs">
   <button data-tab="tasks" class="active">처리중인 Task</button>
   <button data-tab="hist">실행 이력</button>
+  <button data-tab="ds">데이터소스</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
 </div>
 <main>
   <section class="panel active" id="p-tasks"></section>
-  <section class="panel" id="p-hist"></section>
+  <section class="panel" id="p-hist">
+    <div class="filters" id="hist-filter" style="display:none">
+      상태 <select id="hf-status" onchange="histSearch()">
+        <option value="">(전체)</option>
+        <option>DONE</option><option>FAILED</option><option>CANCELLED</option>
+        <option>WRITING</option><option>READING</option><option>QUEUED</option>
+      </select>
+      사용자 <input id="hf-user" placeholder="정확 일치" onkeydown="if(event.key==='Enter')histSearch()">
+      작업 ID <input id="hf-job" placeholder="전방 일치" onkeydown="if(event.key==='Enter')histSearch()">
+      <button class="btn" onclick="histSearch()">검색</button>
+      <button class="btn" onclick="histReset()">초기화</button>
+    </div>
+    <div id="hist-body"></div>
+  </section>
+  <section class="panel" id="p-ds">
+    <div class="filters">
+      데이터소스 <select id="ds-name"></select>
+      상위 <input id="ds-limit" type="number" value="100" min="1" max="10000" style="width:80px"> 행
+      <button class="btn" onclick="runDs()">실행</button>
+      <span class="mut" id="ds-meta"></span>
+    </div>
+    <textarea id="ds-sql" class="sqlbox" placeholder="SELECT ...  (연결 확인/미리보기용 — 상위 N행만 반환됩니다)"></textarea>
+    <div id="ds-out" class="mut">데이터소스를 선택하고 SELECT 를 실행하면 결과 미리보기가 표시됩니다.</div>
+  </section>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
 </main>
@@ -208,98 +170,12 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="pmodal-body"></div>
   </div>
 </div>
+<script src="/assets/dashboard-common.js"></script>
 <script>
-const $ = s => document.querySelector(s);
-let active = "tasks";
-const fmt = v => (v===null||v===undefined||v==="") ? '<span class="mut">-</span>' : v;
-const fmtNum = v => (v===null||v===undefined||v==="") ? '<span class="mut">-</span>' : Number(v).toLocaleString('en-US');
-const pill = s => `<span class="pill s-${s}">${s}</span>`;
-const pad = n => String(n).padStart(2,'0');
-function fmtDate(s){
-  if(!s) return '<span class="mut">-</span>';
-  const d = new Date(s); if(isNaN(d)) return s;
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} `+
-         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-function dur(start, end){
-  if(!start) return '<span class="mut">-</span>';
-  const s = new Date(start), e = end ? new Date(end) : new Date();
-  let ms = e - s; if(isNaN(ms)||ms<0) return '<span class="mut">-</span>';
-  const sec = Math.floor(ms/1000), h=Math.floor(sec/3600),
-        m=Math.floor((sec%3600)/60), ss=sec%60;
-  return (h?h+'h ':'')+(m||h?m+'m ':'')+ss+'s';
-}
-function concBar(active, max){
-  if(active===null||active===undefined) return '<span class="mut">-</span>';
-  if(!max || max<=0) return `${active} <span class="mut">(무제한)</span>`;
-  const pct = Math.min(100, Math.round(active/max*100));
-  return `<span class="bar"><i style="width:${pct}%"></i></span> ${active}/${max}`;
-}
-// 밀리초를 사람이 읽는 소요시간으로. 1초 미만은 ms, 이상은 h/m/s.
-function fmtDur(ms){
-  if(ms===null||ms===undefined) return '<span class="mut">-</span>';
-  if(ms<1000) return ms+'ms';
-  const sec=Math.floor(ms/1000), h=Math.floor(sec/3600),
-        m=Math.floor((sec%3600)/60), s=sec%60;
-  return (h?h+'h ':'')+(m||h?m+'m ':'')+s+'s';
-}
 // task_id → phases 배열 매핑(처리중 + 이력에서 채운다). 단계 타임라인 모달이 참조한다.
 const phaseMap = {};
-// 진행 중(finished_at 없음)인 단계의 경과 ms 는 지금 시각 기준으로 계산한다.
-function phaseMs(p){
-  if(p.duration_ms!==null && p.duration_ms!==undefined) return p.duration_ms;
-  if(!p.started_at) return null;
-  const s=new Date(p.started_at); if(isNaN(s)) return null;
-  const ms=new Date()-s; return (ms>=0?ms:null);
-}
-const phaseOf = (phases,name)=>(phases||[]).find(p=>p.name===name);
-// 단계 타임라인을 간트형 표로 렌더링. 가장 긴 단계를 100%로 잡아 상대 막대를 그린다.
-function renderPhases(phases){
-  if(!phases || !phases.length) return '<p class="mut">단계 정보가 아직 없습니다.</p>';
-  const durs = phases.map(phaseMs).filter(v=>v!==null&&v!==undefined);
-  const max = durs.length ? Math.max(...durs, 1) : 1;
-  let h = '<table class="tl"><thead><tr>'+
-    ['단계','진행','시작','종료','소요','행수','비고'].map(t=>`<th>${t}</th>`).join('')+
-    '</tr></thead><tbody>';
-  for(const p of phases){
-    const ms = phaseMs(p);
-    const running = (p.finished_at===null||p.finished_at===undefined);
-    const pct = ms!==null&&ms!==undefined ? Math.max(2, Math.round(ms/max*100)) : 0;
-    const bar = `<span class="gtrack"><i class="${running?'run':''}" style="width:${pct}%"></i></span>`;
-    let note = '';
-    const e = p.extra||{};
-    if(e.read_wait_ms!==undefined || e.write_wait_ms!==undefined){
-      note = `읽기 ${fmtDur(e.read_wait_ms)} / 쓰기 ${fmtDur(e.write_wait_ms)}`;
-      if(e.read_starve_ms) note += ` / Impala대기 ${fmtDur(e.read_starve_ms)}`;
-      if(e.finalize_wait_ms!==undefined) note += ` / 서버 ${fmtDur(e.finalize_wait_ms)}`;
-      if(e.rows_per_sec) note += ` · ${fmtNum(e.rows_per_sec)}행/s`;
-    }
-    h += '<tr>'+
-      `<td><span class="phdot">${fmt(p.label||p.name)}</span>${running?' <span class="mut">(진행중)</span>':''}</td>`+
-      `<td>${bar}</td>`+
-      `<td><span class="mut">${fmtDate(p.started_at)}</span></td>`+
-      `<td><span class="mut">${fmtDate(p.finished_at)}</span></td>`+
-      `<td>${fmtDur(ms)}</td>`+
-      `<td>${p.rows!==null&&p.rows!==undefined?fmtNum(p.rows):fmt(null)}</td>`+
-      `<td class="mut">${note||'-'}</td>`+
-    '</tr>';
-  }
-  return h+'</tbody></table>';
-}
-function showPhases(id){
-  $("#pmodal-title").textContent = id + ' · 단계별 진행/소요';
-  $("#pmodal-body").innerHTML = renderPhases(phaseMap[id]);
-  $("#pmodal").style.display = 'flex';
-}
-function closePhases(){ $("#pmodal").style.display = 'none'; }
+function showPhases(id){ showPhasesModal(id + ' · 단계별 진행/소요', renderPhases(phaseMap[id])); }
 const phaseLink = (id,label)=>`<a class="lnk" onclick="showPhases('${id}');return false">${label}</a>`;
-function table(cols, rows){
-  const cls = c => c.cls ? ` class="${c.cls}"` : "";
-  let h = "<table><thead><tr>" + cols.map(c=>`<th${cls(c)}>${c.t}</th>`).join("") + "</tr></thead><tbody>";
-  if(!rows.length) h += `<tr><td colspan="${cols.length}" class="mut">데이터 없음</td></tr>`;
-  for(const r of rows){ h += "<tr>" + cols.map(c=>`<td${cls(c)}>${c.f?c.f(r):fmt(r[c.k])}</td>`).join("") + "</tr>"; }
-  return h + "</tbody></table>";
-}
 // Task ID → 쿼리 정보 매핑/모달. 행 클릭 시 SELECT 와 (있으면) INSERT 를 함께 보여준다.
 // 값은 {exec_mode, sub_query, staging_ddl, insert_sql} 형태.
 const sqlMap = {};
@@ -319,14 +195,32 @@ function composeSql(q){
   }
   return parts.join('\\n\\n') || '(쿼리문 없음)';
 }
-function showSql(id){
-  $("#modal-title").textContent = id;
-  $("#modal-sql").textContent = composeSql(sqlMap[id]);
-  $("#modal").style.display = 'flex';
+// SQL 모달: 이력 탭은 sqlMap(이력 응답에 포함된 SQL)을 쓰고, 처리중 task 는 목록 응답에
+// SQL 이 없으므로 클릭 시점에 /tasks/{id}/detail 을 조회해 채운다(한 번 받으면 캐시).
+async function showSql(id){
+  if(!sqlMap[id]){
+    try{
+      const t = await getJSON(`/tasks/${id}/detail`);
+      if(t && t.sub_query!==undefined)
+        sqlMap[id] = {exec_mode:t.exec_mode, sub_query:t.sub_query,
+                      staging_ddl:t.staging_ddl, insert_sql:t.insert_sql};
+    }catch(_e){ /* 조회 실패 시 아래에서 '(쿼리문 없음)' 으로 표기 */ }
+  }
+  showTextModal(id, composeSql(sqlMap[id]));
 }
-function closeModal(){ $("#modal").style.display = 'none'; }
-const taskLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${id}</a>`;
-async function getJSON(u){ const r = await fetch(u); return r.json(); }
+const taskLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${esc(id)}</a>`;
+
+// task 취소(협력적): 실행 중이면 다음 안전 지점에서 CANCELLED 로 마무리된다.
+async function cancelTask(id){
+  if(!confirm('task ' + id + ' 을(를) 취소할까요?')) return;
+  try{ await postJSON(`/tasks/${id}/cancel`); }
+  catch(e){ alert('취소 실패: ' + e.message); }
+  refresh();
+}
+// 액션 버튼: 아직 끝나지 않은(QUEUED/READING/WRITING) task 에만 취소를 노출.
+const ACTIVE_TASK = ["QUEUED","READING","WRITING"];
+const taskCancelBtn = r => ACTIVE_TASK.includes(r.status)
+  ? `<button class="btn danger" onclick="cancelTask('${r.task_id}')">취소</button>` : fmt(null);
 
 async function loadTasks(){
   const [d, m] = await Promise.all([
@@ -339,7 +233,7 @@ async function loadTasks(){
     : fmt(null);
   const cols = [
     {t:"작업 ID", f:r=>`<code>${fmt(r.job_id)}</code>`},
-    {t:"Task ID", f:r=>`<code>${fmt(r.task_id)}</code>`},
+    {t:"Task ID", f:r=>taskLink(r.task_id)},
     {t:"사용자", k:"username"},
     {t:"상태", f:r=>pill(r.status)},
     {t:"현재 단계", f:phLabel},
@@ -352,7 +246,8 @@ async function loadTasks(){
     {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", cls:"col-dur", f:r=>dur(r.started_at, r.finished_at)},
-    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
+    {t:"액션", f:taskCancelBtn},
   ];
   const t = m.tasks || {};
   $("#p-tasks").innerHTML =
@@ -366,11 +261,11 @@ async function loadTasks(){
        <div class="card"><div class="k">DISK</div><div class="v">${m.disk.percent}%</div></div>
      </div>` + table(cols, d.tasks);
 }
-let histOffset = 0; const HIST_LIMIT = 50; let histTotal = 0;
 async function loadHist(){
-  const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}`);
+  const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}${histFilterQS()}`);
+  $("#hist-filter").style.display = d.enabled ? 'flex' : 'none';
   if(!d.enabled){
-    $("#p-hist").innerHTML = `<p class="mut">이력 DB(history.db_dsn)가 설정되지 않았습니다. ` +
+    $("#hist-body").innerHTML = `<p class="mut">이력 DB(history.db_dsn)가 설정되지 않았습니다. ` +
       `PostgreSQL 설정 시 과거 task 실행 이력이 표시됩니다.</p>`;
     return;
   }
@@ -393,25 +288,29 @@ async function loadHist(){
     {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", cls:"col-dur", f:r=>dur(r.started_at, r.finished_at)},
-    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${r.error}</span>`:fmt(null)},
+    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
   ];
   const n = d.rows ? d.rows.length : 0;
-  const from = histTotal ? histOffset + 1 : 0;
-  const to = histOffset + n;
-  const pager = `<div class="pager">
-      <button onclick="histPrev()" ${histOffset<=0?'disabled':''}>← 이전</button>
-      <span class="mut">${from}–${to} / ${histTotal}</span>
-      <button onclick="histNext()" ${to>=histTotal?'disabled':''}>다음 →</button>
-    </div>`;
-  $("#p-hist").innerHTML = table(cols, d.rows) + pager;
+  $("#hist-body").innerHTML = table(cols, d.rows) + pagerHtml(n);
 }
-function histPrev(){ histOffset = Math.max(0, histOffset - HIST_LIMIT); loadHist(); }
-function histNext(){ if(histOffset + HIST_LIMIT < histTotal){ histOffset += HIST_LIMIT; loadHist(); } }
+
+// 데이터소스 탭 초기화(1회): 소스 select 를 채운다. 결과 영역은 실행 시에만 갱신
+// (자동 갱신 주기마다 입력/결과가 지워지지 않도록 이 로더는 재호출 시 아무것도 안 한다).
+let dsInit = false;
+async function loadDs(){
+  if(dsInit) return;
+  const d = await getJSON("/datasources");
+  $("#ds-name").innerHTML = (d.datasources||[]).map(s=>
+    `<option value="${s.name}" ${s.configured?'':'disabled'}>${s.name}${s.configured?'':' (미구성)'}</option>`
+  ).join('');
+  dsInit = true;
+}
+function runDs(){ return runDatasourceQuery(); }
 
 async function loadConf(){
   const d = await getJSON("/config");
   const cols = [
-    {t:"section", f:r=>`<span class="sec">${r.section}</span>`},
+    {t:"section", f:r=>`<span class="sec">${esc(r.section)}</span>`},
     {t:"key", k:"key"},
     {t:"value", f:r=>fmt(String(r.value))},
     {t:"설명", f:r=>`<div class="desc">${fmt(r.desc)}</div>`},
@@ -422,6 +321,7 @@ async function loadConf(){
 const infoDesc = {
   version: "애플리케이션 버전",
   executor_id: "이 executor 인스턴스 식별자(host:port)",
+  source_type: "소스 엔진(impala | trino) — task 읽기(SELECT)가 사용",
   self_report: "자기 상태 self-report 사용 여부",
   advertise_url: "self-report 에 기록하는 자기 base URL(HA URL 키 부하 뷰)",
   max_concurrent_tasks: "동시에 실행하는 task 상한(0=무제한)",
@@ -442,21 +342,9 @@ async function loadInfo(){
     {t:"설명", f:r=>`<div class="desc">${fmt(infoDescOf(r.key))}</div>`}];
   $("#p-info").innerHTML = table(cols, rows.concat(byStatus));
 }
-const loaders = {tasks:loadTasks, hist:loadHist, conf:loadConf, info:loadInfo};
-async function refresh(){
-  try{ await loaders[active](); $("#upd").textContent = "갱신: " + new Date().toLocaleTimeString();}
-  catch(e){ $("#upd").textContent = "갱신 실패: " + e; }
-}
-document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("active"));
-  document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
-  b.classList.add("active"); $("#p-"+b.dataset.tab).classList.add("active");
-  active = b.dataset.tab; refresh();
-});
 getJSON("/info").then(d=>{ $("#hdr").textContent =
   `id=${d.executor_id} · max=${d.max_concurrent_tasks} · self_report=${d.self_report} · v${d.version}`; });
-refresh();
-setInterval(()=>{ if(!document.hidden) refresh(); }, 3000);
+initDashboard({tasks:loadTasks, hist:loadHist, ds:loadDs, conf:loadConf, info:loadInfo}, "tasks");
 </script>
 </body>
 </html>"""

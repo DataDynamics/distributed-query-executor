@@ -31,7 +31,9 @@ async def test_executor_list_datasources():
     async with _exec_client(create_executor_app()) as c:
         body = (await c.get("/datasources")).json()
     names = {d["name"] for d in body["datasources"]}
-    assert names == {"impala", "greenplum", "history"}
+    assert names == {"impala", "trino", "greenplum", "history"}
+    # task 실행에 쓰는 소스 종류도 함께 노출한다(기본 impala)
+    assert body["source_type"] == "impala"
 
 
 async def test_executor_query_unknown_datasource():

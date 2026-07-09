@@ -73,8 +73,15 @@ class JobHistoryRepository:
         except Exception:
             logger.exception("job %s 이력 기록 실패", job.job_id)
 
-    def read(self, limit: int = 20, offset: int = 0) -> dict:
-        """과거 실행 이력을 job_id 별 "최신 상태" 한 행씩 페이징해 조회한다.
+    def read(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        status: str | None = None,
+        username: str | None = None,
+        job_id: str | None = None,
+    ) -> dict:
+        """과거 실행 이력을 job_id 별 "최신 상태" 한 행씩 필터링/페이징해 조회한다.
 
         이력 테이블에는 한 job_id 에 대해 상태 전이마다 여러 행이 쌓여 있다. 대시보드의
         '실행 이력' 탭은 각 Job 의 최종(가장 최근) 상태만 보여주면 되므로, PostgreSQL 의
@@ -82,14 +89,19 @@ class JobHistoryRepository:
 
           - 내부 서브쿼리: ORDER BY job_id, recorded_at DESC 로 정렬한 뒤
             DISTINCT ON (job_id) 가 각 job_id 의 첫 행(= recorded_at 이 가장 큰, 즉 최신 행)만 남긴다.
-          - 외부 쿼리: 그렇게 추린 "job 별 최신 행" 집합을 recorded_at DESC 로 다시 정렬해
-            최근 실행이 위로 오게 하고 LIMIT/OFFSET 으로 페이지를 자른다.
+          - 외부 쿼리: 그렇게 추린 "job 별 최신 행" 집합에 검색 필터(WHERE)를 적용하고
+            recorded_at DESC 로 다시 정렬해 LIMIT/OFFSET 으로 페이지를 자른다.
 
-        total 은 페이징 계산을 위해 서로 다른 job_id 의 개수(count(DISTINCT job_id))로 센다.
+        필터는 "job 의 최신 상태" 기준으로 적용해야 하므로(중간 전이 행이 아니라)
+        DISTINCT ON 서브쿼리 **바깥**에 건다. total 도 같은 필터가 적용된 파생
+        테이블에서 세어 페이저와 어긋나지 않게 한다.
 
         Args:
             limit: 한 페이지에 반환할 최대 Job 수.
             offset: 건너뛸 Job 수(페이지 오프셋).
+            status: 최종 상태 일치 필터(대소문자 무시, 예: FAILED).
+            username: 요청 사용자 일치 필터.
+            job_id: 작업 ID 전방일치(prefix) 필터.
 
         Returns:
             dict: {enabled, rows, total, limit, offset}. enabled=False 면 빈 결과를 돌려준다.
@@ -98,23 +110,39 @@ class JobHistoryRepository:
             return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
         import psycopg  # 지연 임포트(이력 미사용 환경에서 psycopg 의존을 강제하지 않기 위함)
 
+        # 검색 필터(WHERE) 조립. 값은 전부 바인드 파라미터로 넘겨 SQL 주입을 차단한다.
+        conds: list[str] = []
+        params: list[object] = []
+        if status:
+            conds.append("status = %s")
+            params.append(status.upper())
+        if username:
+            conds.append("username = %s")
+            params.append(username)
+        if job_id:
+            # 전방일치. LIKE 와일드카드(%/_)가 값에 있어도 이스케이프하지 않는 단순 구현
+            # (job_id 는 서버가 만든 uuid 계열이라 실사용에서 문제되지 않음).
+            conds.append("job_id LIKE %s")
+            params.append(f"{job_id}%")
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        # job_id 별 최신 한 행만 남기는 파생 테이블(위 docstring 참고). count/페이지 쿼리가 공유한다.
+        latest = (
+            "SELECT DISTINCT ON (job_id) recorded_at, job_id, username, status, "
+            "  partition_column, target_table, completed_tasks, total_tasks, "
+            "  total_rows_written, error, started_at, finished_at, original_sql "
+            f"FROM {self.table} ORDER BY job_id, recorded_at DESC"
+        )
+
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 # 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
-                # 페이징용 전체 건수: 행 수가 아니라 "서로 다른 job 개수"를 센다.
-                cur.execute(f"SELECT count(DISTINCT job_id) FROM {self.table}")
+                # 페이징용 전체 건수: 필터가 적용된 "job 별 최신 행" 수를 센다.
+                cur.execute(f"SELECT count(*) FROM ({latest}) t{where}", tuple(params))
                 total = cur.fetchone()[0]
-                # DISTINCT ON 으로 job_id 별 최신 한 행만 추린 뒤 최근순 페이징한다(위 docstring 참고).
                 cur.execute(
-                    "SELECT recorded_at, job_id, username, status, partition_column, "
-                    "target_table, completed_tasks, total_tasks, total_rows_written, error, "
-                    "started_at, finished_at, original_sql FROM ("
-                    "  SELECT DISTINCT ON (job_id) recorded_at, job_id, username, status, "
-                    "    partition_column, target_table, completed_tasks, total_tasks, "
-                    "    total_rows_written, error, started_at, finished_at, original_sql "
-                    f"  FROM {self.table} ORDER BY job_id, recorded_at DESC"
-                    ") t ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
-                    (limit, offset),
+                    f"SELECT * FROM ({latest}) t{where} "
+                    "ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
+                    tuple(params) + (limit, offset),
                 )
                 rows = cur.fetchall()
             conn.commit()

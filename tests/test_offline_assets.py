@@ -57,6 +57,8 @@ async def test_static_assets_served(which: str):
     async with _async_client(_make_app(which)) as c:
         for path in (
             "/assets/fonts.css",
+            "/assets/dashboard-common.css",
+            "/assets/dashboard-common.js",
             "/assets/swagger-ui-bundle.js",
             "/assets/swagger-ui.css",
             "/assets/redoc.standalone.js",
@@ -77,7 +79,25 @@ async def test_no_external_references(which: str):
             "docs": (await c.get("/docs")).text,
             "redoc": (await c.get("/redoc")).text,
             "fonts.css": (await c.get("/assets/fonts.css")).text,
+            "dashboard-common.css": (await c.get("/assets/dashboard-common.css")).text,
+            "dashboard-common.js": (await c.get("/assets/dashboard-common.js")).text,
         }
         for tag, body in bodies.items():
             for host in _EXTERNAL_HOSTS:
                 assert host not in body, f"{which} {tag} 에 외부 참조({host}) 잔존"
+
+
+@pytest.mark.parametrize("which", ["coordinator", "executor"])
+async def test_dashboard_uses_common_assets(which: str):
+    """두 대시보드가 공용 스타일/스크립트(/assets/dashboard-common.*)를 로드해야 한다.
+
+    공용 에셋으로 추출한 뒤 페이지별 <style>/헬퍼 복사본이 되살아나 드리프트가
+    재발하는 것을 막는 회귀 테스트.
+    """
+    async with _async_client(_make_app(which)) as c:
+        html = (await c.get("/")).text
+    assert '/assets/dashboard-common.css' in html
+    assert '/assets/dashboard-common.js' in html
+    # 공용 파일로 옮긴 헬퍼가 페이지에 다시 복제되지 않았는지(대표 시그니처로 확인)
+    assert "function renderPhases(" not in html
+    assert "function initDashboard(" not in html

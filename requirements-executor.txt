@@ -7,6 +7,8 @@
 #   - cyrus-sasl-gssapi / krb5-devel: impyla GSSAPI(Kerberos) 인증
 -r requirements.txt
 impyla>=0.19
+# Trino 소스(source.type=trino) 클라이언트. 에어갭 환경에선 오프라인 wheel 로 설치한다.
+trino>=0.320
 psycopg[binary]>=3.2
 # Impala SASL/Kerberos(GSSAPI) 인증
 thrift-sasl>=0.4.3

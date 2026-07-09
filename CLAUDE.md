@@ -17,7 +17,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 178개.
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 354개.
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -64,24 +64,29 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   함수): `file://` 외부테이블 DDL·staging 적재·멱등 DELETE·정리 SQL, 파일 예산 배분
   (`plan_file_budget`, 호스트당 ≤ S_h), executor_url→gp_hostname 유도. 자세히는 DESIGN §17.
 - `coordinator/job_store.py` — `InMemoryJobStore`(단일) / `SqlJobStore`(멀티 coordinator, JSONB).
-- `executor/backend.py` — `ImpalaToGreenplumBackend`(impyla→psycopg) + `MockBackend`.
+- `executor/backend.py` — `ImpalaToGreenplumBackend`(소스 impyla|trino → psycopg) + `MockBackend`.
+  소스 엔진은 `source.type`(impala 기본 | trino)으로 고르며, 연결을 여는 지점만
+  `_source_connect`/`_open_source_cursor`/`_source_execute` 로 분기하고 스트리밍/적재 로직은 공유한다.
+  trino 는 쿼리 단위 옵션이 없어 요청별 `impala_query_options` 는 impala 소스에서만 적용된다
+  (trino 는 `trino.session_properties` 로 연결 단위 적용).
   GP 연결은 `_GreenplumPool`(표준 라이브러리 기반)로 재사용하며, 반납 시 `DISCARD ALL` 로
   세션을 초기화해 stage_insert 의 TEMP 테이블이 다음 task 와 충돌하지 않게 한다.
   `exec_mode`: `copy`(COPY) / `statement`(INSERT 그대로 실행) / `stage_insert`(TEMP 경유) /
   `local_stage`(executor 가 로컬 CSV export → coordinator 가 `file://` 외부테이블로 세그먼트
   로컬 병렬 read → target INSERT, 2-phase). local_stage 는 executor 를 GP 세그먼트 호스트에
-  co-locate 해야 한다(DESIGN §17). export fetch 는 `convert_types=False` 로 timestamp/date 를
-  wire 문자열 그대로 받아 CSV 로 쓴다(재파싱 비용 제거).
+  co-locate 해야 한다(DESIGN §17). export fetch 는 형변환을 꺼 timestamp/date 를 wire 문자열
+  그대로 받아 CSV 로 쓴다(재파싱 비용 제거 — impala 는 `convert_types=False`, trino 는
+  `legacy_primitive_types=True` 로 동일 적용).
 - `executor/app.py` — task 상태머신(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED),
   `executor.max_concurrent_tasks` 세마포어.
 - `core/logging.py` — 일 단위 롤링 + `[job_id][task_id]` 컨텍스트 주입 + **WARNING 전용
   로그(`*-warn.log`) 분리**.
 - `core/dbprobe.py` — **데이터소스 SELECT 미리보기/연결 테스트 공용 로직**. 임의 SQL 을
-  Impala/Greenplum/history DB 에 실행해 상위 N행을 JSON 안전 형태로 반환(`fetchmany` 로
+  Impala/Trino/Greenplum/history DB 에 실행해 상위 N행을 JSON 안전 형태로 반환(`fetchmany` 로
   잘라 truncated 표시, PostgreSQL 은 커밋 없이 닫아 implicit rollback). 두 앱의
   `GET /datasources` + `POST /datasources/{name}/query` 엔드포인트가 이를 호출한다.
-  executor 는 세 소스를 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala 는
-  요청 본문 `executor_url` 로 executor 에 프록시한다(coordinator 에는 impyla 가 없음).
+  executor 는 소스들을 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala/trino 는
+  요청 본문 `executor_url` 로 executor 에 프록시한다(coordinator 에는 소스 드라이버가 없음).
 
 ## 설정
 
@@ -96,7 +101,9 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   큐 100) → 합 초과 시 429 / `coordinator.max_dispatch_concurrency`(task 디스패치 32) /
   `executor.max_concurrent_tasks`(executor당 8) / `greenplum.pool_max`(GP 커넥션 풀, 0=동시 task 수와 동일).
 - 멀티 coordinator: `store.backend=postgres` + 공유 `history.db_dsn`, `executor.self_report=true`.
-- 백엔드: `impala.host` + `greenplum.dsn` 둘 다 있으면 실제 백엔드, 아니면 `MockBackend`.
+- 백엔드: 소스 호스트(`source.type` 에 따라 `impala.host` 또는 `trino.host`) + `greenplum.dsn`
+  둘 다 있으면 실제 백엔드, 아니면 `MockBackend`. trino 접속은 `trino.*`(host/port/user/password/
+  catalog/schema/http_scheme/verify/session_properties, 의존성 `trino` — requirements-executor.txt).
 - 템플릿 엔진: `template.dir`(템플릿 루트, 개발 `packaging/config/templates`) / `template.enabled` /
   `template.auto_reload`(개발 편의) / `template.func_modules`(커스텀 함수 모듈) /
   `template.validate_ddl_single_stmt`. 의존성 `Jinja2`(requirements.txt).
@@ -108,6 +115,10 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - **대시보드는 빌드 도구 없는 인라인 HTML 문자열**(`coordinator/dashboard.py`,
   `executor/dashboard.py` 의 `DASHBOARD_HTML`). 이 문자열 내부 HTML/CSS/JS 를 수정할 때 따옴표/
   중괄호를 깨뜨리지 않도록 주의하고, 수정 후 `import` 로 무결성을 확인한다.
+  두 대시보드가 공유하는 스타일/JS 헬퍼(포맷터·표·타임라인·모달·페이저·탭 배선·esc 이스케이프)는
+  `core/static/dashboard-common.css`/`dashboard-common.js` 에 있다(`/assets` 서빙). 공통 룩앤필/
+  동작은 이 두 파일만 고치고, 페이지 문자열에 복사본을 되살리지 말 것(회귀 방지:
+  `tests/test_offline_assets.py`). 서버가 준 임의 문자열을 innerHTML 로 뿌릴 땐 `esc()`/`fmt()` 를 거친다.
 - **에어갭(외부 차단) 전제 → 웹 에셋은 내장**. 런타임에 외부 CDN/폰트로 나가면 안 된다.
   Swagger UI(`/docs`)·ReDoc(`/redoc`)·대시보드 폰트(Roboto Condensed)는 모두
   `core/static/` 에 vendoring 하고 `core/webassets.py`(`mount_static`/`register_offline_docs`)

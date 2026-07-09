@@ -40,9 +40,9 @@ def test_open_impala_cursor_convert_types_and_fallback():
             return _Cur(**kw)
 
     # convert_types=False → kwarg 로 전달
-    assert be._open_impala_cursor(_ConnNew(), convert_types=False).kw == {"convert_types": False}
+    assert be._open_source_cursor(_ConnNew(), convert_types=False).kw == {"convert_types": False}
     # None → 기본 커서(kwarg 없음)
-    assert be._open_impala_cursor(_ConnNew(), convert_types=None).kw == {}
+    assert be._open_source_cursor(_ConnNew(), convert_types=None).kw == {}
 
     class _ConnOld:
         def cursor(self, **kw):
@@ -51,7 +51,7 @@ def test_open_impala_cursor_convert_types_and_fallback():
             return _Cur(**kw)
 
     # 구버전 impyla(kwarg 미지원) → 기본 커서로 폴백
-    assert be._open_impala_cursor(_ConnOld(), convert_types=False).kw == {}
+    assert be._open_source_cursor(_ConnOld(), convert_types=False).kw == {}
 
 
 def test_host_of_from_url_and_fallback():

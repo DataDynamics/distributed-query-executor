@@ -374,6 +374,32 @@ class Settings:
         self.impala_query_options: dict[str, str] = _kv_dict(
             _get_nested("executor", "impala", "query_options", "")
         )
+        # 소스 엔진 선택: impala(기본) | trino. executor 가 SELECT 를 실행할 소스 DB 종류.
+        # copy/stage_insert/local_stage 의 읽기 쪽과 /datasources 미리보기가 이 값을 따른다.
+        self.source_type: str = str(
+            _get_nested("executor", "source", "type", "impala")
+        ).strip().lower() or "impala"
+        # Trino (source) — source.type=trino 일 때 사용하는 접속 정보.
+        # trino 파이썬 클라이언트(trino.dbapi.connect)에 그대로 전달할 값들이다.
+        self.trino_host: str = _get_nested("executor", "trino", "host", "")
+        self.trino_port: int = int(_get_nested("executor", "trino", "port", 8080))
+        # Trino 는 인증이 없어도 user 헤더(X-Trino-User)가 필수라 기본값을 둔다.
+        self.trino_user: str = _get_nested("executor", "trino", "user", "query-executor")
+        # password 를 설정하면 BasicAuthentication 사용(클라이언트 제약상 https 필수).
+        self.trino_password: str = _get_nested("executor", "trino", "password", "")
+        self.trino_catalog: str = _get_nested("executor", "trino", "catalog", "hive")
+        self.trino_schema: str = _get_nested("executor", "trino", "schema", "default")
+        self.trino_http_scheme: str = str(
+            _get_nested("executor", "trino", "http_scheme", "http")
+        ).strip().lower() or "http"
+        # TLS 검증: 비우면 기본(true), "true"/"false" 또는 CA 인증서 파일 경로를 지정할 수 있다.
+        self.trino_verify: str = str(_get_nested("executor", "trino", "verify", "")).strip()
+        # 세션 프로퍼티 전역 기본값. "query_max_run_time=1h,..." 형태 → dict.
+        # Trino 클라이언트는 연결 단위로만 세션 프로퍼티를 받으므로 요청별 재정의는 없다
+        # (요청별 impala_query_options 는 impala 소스에서만 적용).
+        self.trino_session_properties: dict[str, str] = _kv_dict(
+            _get_nested("executor", "trino", "session_properties", "")
+        )
         # Greenplum (target) — 읽어온 데이터를 적재할 대상 DB 접속 DSN.
         self.greenplum_dsn: str = _get_nested("executor", "greenplum", "dsn", "")
         # source→target 복사 시 한 번에 처리할 행 수. 메모리 사용량과 처리량의 균형값.
@@ -444,8 +470,9 @@ class Settings:
         self.stage_max_files_per_host: int = int(
             _get_nested("executor", "stage", "max_files_per_host", 0)
         )
-        # local_stage export 시 impyla 커서에 넘길 convert_types 값. False(기본)면 형변환을 꺼
+        # local_stage export 시 소스 커서의 값 형변환 여부. False(기본)면 형변환을 꺼
         # TIMESTAMP/DATE/DECIMAL 을 wire 문자열 그대로 받아 CSV 로 바로 쓴다(재파싱 비용 제거).
+        # impala 는 impyla 의 convert_types, trino 는 legacy_primitive_types 로 동일하게 적용된다.
         # 특수 타입(BINARY 등)이 문자열화에 문제가 되면 true 로 되돌린다.
         self.stage_impala_convert_types: bool = _to_bool(
             _get_nested("executor", "stage", "impala_convert_types", False)

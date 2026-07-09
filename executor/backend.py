@@ -305,21 +305,31 @@ class MockBackend:
 
 
 class ImpalaToGreenplumBackend:
-    """실제 백엔드: impyla로 Impala에서 스트리밍, psycopg COPY로 Greenplum에 적재.
+    """실제 백엔드: 소스(Impala 또는 Trino)에서 스트리밍해 psycopg COPY 로 Greenplum 에 적재.
 
-    impala_dsn 은 impyla connect() 에 그대로 전달된다. TLS + Kerberos 환경에서는
-    아래 키를 포함한다:
-      auth_mechanism='GSSAPI', kerberos_service_name='impala',
-      use_ssl=True, ca_cert='/path/to/ca.pem'
-    Kerberos 티켓은 OS 자격증명 캐시(KRB5CCNAME)를 사용하므로, 서비스 실행 전에
-    keytab 으로 kinit 되어 있어야 한다(systemd kinit 서비스 참고).
+    소스 엔진은 ``source_type``("impala" 기본 | "trino")으로 고른다. 두 드라이버 모두
+    DBAPI(cursor/execute/fetchmany/description)를 따르므로 연결을 여는 지점만 분기하고
+    (``_source_connect``), 스트리밍/적재 로직은 공유한다. 클래스명은 하위 호환을 위해
+    유지한다(테스트·문서에서 임포트).
+
+    impala_dsn 은 소스 접속 dict 로, source_type 에 따라 impyla ``connect()`` 또는
+    trino ``dbapi.connect()`` 에 그대로 전달된다.
+      - impala(TLS+Kerberos): auth_mechanism='GSSAPI', kerberos_service_name='impala',
+        use_ssl=True, ca_cert='/path/to/ca.pem'. Kerberos 티켓은 OS 자격증명 캐시
+        (KRB5CCNAME)를 사용하므로 서비스 실행 전에 keytab 으로 kinit 되어 있어야 한다.
+      - trino: host/port/user/catalog/schema/http_scheme(+auth/verify/session_properties).
+        password 는 dict 의 password 키로 받아 연결 시 BasicAuthentication 으로 변환한다.
     """
 
     def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000,
                  query_options: dict | None = None, copy_preflight: bool = True,
                  pool_max: int = 8, pipeline: bool = True, queue_size: int = 8,
-                 copy_format: str = "text", stage_convert_types: bool = False):
+                 copy_format: str = "text", stage_convert_types: bool = False,
+                 source_type: str = "impala"):
+        # 소스 접속 dict. 이름은 하위 호환상 impala_dsn 이지만 source_type 에 따라
+        # impyla 또는 trino 클라이언트로 전달된다(_source_connect 참고).
         self.impala_dsn = impala_dsn
+        self.source_type = (source_type or "impala").lower()
         # local_stage export 의 impyla 커서에 넘길 convert_types 값. False 면 형변환을 꺼
         # TIMESTAMP/DATE/DECIMAL 을 wire 문자열 그대로 받아(재파싱 비용 제거) CSV 로 바로 쓴다.
         self.stage_convert_types = stage_convert_types
@@ -339,14 +349,48 @@ class ImpalaToGreenplumBackend:
         # (Impala 쪽은 task 마다 새로 연결한다 — 읽기 커서가 연결에 묶여 풀링이 까다로움.)
         self._gp_pool = _GreenplumPool(greenplum_dsn, pool_max)
 
-    def _open_impala_cursor(self, conn, convert_types: bool | None = None):
-        """impyla 커서를 연다. ``convert_types=False`` 면 형변환을 꺼 wire 값을 그대로 받는다.
+    def _source_connect(self):
+        """소스 연결을 연다 — source_type 에 따라 impyla 또는 trino 클라이언트로 분기.
 
-        TIMESTAMP/DATE/DECIMAL 은 HiveServer2 wire 에서 이미 문자열로 오는데, impyla 기본값
-        (convert_types=True)은 이를 datetime/Decimal 로 되돌려 파싱한다. CSV 로 다시 쓸 export
-        경로에서는 그 변환이 순수 낭비이므로 False 로 꺼 문자열 그대로 받는다(INT/DOUBLE/BOOL 은
-        네이티브라 영향 없음). 해당 kwarg 를 지원하지 않는 impyla 버전이면 기본 커서로 폴백한다.
+        드라이버는 지연 임포트한다(반대쪽 소스만 쓰는 배포에서 미설치 드라이버의 임포트
+        오류를 피하기 위함). trino 의 password 는 dict 그대로 넘길 수 없어(클라이언트가
+        password kwarg 를 받지 않음) 여기서 ``BasicAuthentication`` 으로 변환한다.
         """
+        if self.source_type == "trino":
+            import trino  # 지연 임포트(trino 소스 전용 드라이버)
+
+            kwargs = dict(self.impala_dsn)
+            password = kwargs.pop("password", None)
+            if password:
+                # Basic 인증은 trino 클라이언트 제약상 https 에서만 허용된다(빌드 시 보장).
+                kwargs["auth"] = trino.auth.BasicAuthentication(
+                    kwargs.get("user", ""), password
+                )
+            return trino.dbapi.connect(**kwargs)
+        from impala.dbapi import connect as impala_connect  # 지연 임포트
+
+        return impala_connect(**self.impala_dsn)
+
+    def _open_source_cursor(self, conn, convert_types: bool | None = None):
+        """소스 커서를 연다. ``convert_types=False`` 면 값 형변환을 꺼 서버 문자열 그대로 받는다.
+
+        TIMESTAMP/DATE/DECIMAL 은 wire 에서 이미 문자열로 오는데, 두 클라이언트 모두 기본값은
+        이를 datetime/Decimal 로 되돌려 파싱한다. CSV 로 다시 쓸 export 경로에서는 그 변환이
+        순수 낭비이므로 꺼서 문자열 그대로 받는다(INT/DOUBLE/BOOL 은 네이티브라 영향 없음).
+        엔진별 스위치가 다르다:
+          - impala: ``cursor(convert_types=False)``
+          - trino : ``cursor(legacy_primitive_types=True)`` (동일 목적 — 파싱 생략)
+        해당 kwarg 를 지원하지 않는 구버전 클라이언트면 기본 커서로 폴백한다.
+        """
+        if self.source_type == "trino":
+            if convert_types is False:
+                try:
+                    return conn.cursor(legacy_primitive_types=True)
+                except TypeError:
+                    logger.warning(
+                        "trino cursor(legacy_primitive_types=...) 미지원 — 기본 커서로 폴백"
+                    )
+            return conn.cursor()
         if convert_types is None:
             return conn.cursor()
         try:
@@ -355,12 +399,22 @@ class ImpalaToGreenplumBackend:
             logger.warning("impyla cursor(convert_types=...) 미지원 — 기본 커서로 폴백")
             return conn.cursor()
 
-    def _impala_execute(self, cur, sql: str, query_options) -> None:
-        """Impala 커서로 sql 을 실행한다. 전역+요청별 옵션을 병합해 configuration 으로 넘긴다.
+    def _source_execute(self, cur, sql: str, query_options) -> None:
+        """소스 커서로 sql 을 실행한다. impala 는 전역+요청별 옵션을 configuration 으로 병합.
 
         병합 결과가 비어 있으면(둘 다 미지정) configuration 인자를 아예 넘기지 않고
         그대로 실행한다(요청자 의도: 옵션이 없으면 기본 동작 유지).
+        trino 커서는 쿼리 단위 configuration 을 받지 않으므로(세션 프로퍼티는 연결 시
+        session_properties 로만 적용) 요청별 옵션이 와도 무시하고 로그만 남긴다.
         """
+        if self.source_type == "trino":
+            if query_options:
+                logger.debug(
+                    "trino 소스는 요청별 query_options 를 지원하지 않아 무시합니다: %s",
+                    query_options,
+                )
+            cur.execute(sql)
+            return
         opts = {**self.query_options, **(query_options or {})}
         if opts:
             cur.execute(sql, configuration=opts)
@@ -578,14 +632,12 @@ class ImpalaToGreenplumBackend:
         같은 영구 테이블을 공유하면 COPY/INSERT 가 서로 간섭할 수 있다 — 호출자가 격리를
         보장해야 한다(예: job·파티션별 고유 staging_table 사용).
         """
-        from impala.dbapi import connect as impala_connect  # 지연 임포트
-
         loaded = 0
-        impala_conn = impala_connect(**self.impala_dsn)
+        impala_conn = self._source_connect()
         try:
             cur = impala_conn.cursor()
             _emit(on_stage, "IMPALA_SUBMIT", "start")
-            self._impala_execute(cur, impala_select, query_options)
+            self._source_execute(cur, impala_select, query_options)
             columns = [d[0] for d in cur.description]
             _emit(on_stage, "IMPALA_SUBMIT", "end")
 
@@ -630,7 +682,6 @@ class ImpalaToGreenplumBackend:
         """
         import csv
         import os
-        from impala.dbapi import connect as impala_connect  # 지연 임포트
 
         opts = csv_options or {}
         delimiter = opts.get("delimiter", "`")
@@ -643,12 +694,13 @@ class ImpalaToGreenplumBackend:
             os.makedirs(parent, exist_ok=True)
 
         written = 0
-        impala_conn = impala_connect(**self.impala_dsn)
+        impala_conn = self._source_connect()
         try:
-            # convert_types=False 로 형변환을 꺼 timestamp/date/decimal 을 문자열 그대로 받는다.
-            cur = self._open_impala_cursor(impala_conn, convert_types=self.stage_convert_types)
+            # convert_types=False 로 형변환을 꺼 timestamp/date/decimal 을 문자열 그대로 받는다
+            # (impala 는 convert_types, trino 는 legacy_primitive_types 로 동일 효과).
+            cur = self._open_source_cursor(impala_conn, convert_types=self.stage_convert_types)
             _emit(on_stage, "IMPALA_SUBMIT", "start")
-            self._impala_execute(cur, sub_query, query_options)
+            self._source_execute(cur, sub_query, query_options)
             _emit(on_stage, "IMPALA_SUBMIT", "end")
             _emit(on_stage, "EXPORT_WRITE", "start")
             with open(out_path, "w", newline="", encoding="utf-8") as f:
@@ -760,14 +812,12 @@ class ImpalaToGreenplumBackend:
 
         반환: COPY 로 적재한 총 행 수.
         """
-        from impala.dbapi import connect as impala_connect  # 지연 임포트
-
         rows_written = 0
-        impala_conn = impala_connect(**self.impala_dsn)
+        impala_conn = self._source_connect()
         try:
             cur = impala_conn.cursor()
             _emit(on_stage, "IMPALA_SUBMIT", "start")
-            self._impala_execute(cur, sub_query, query_options)
+            self._source_execute(cur, sub_query, query_options)
             columns = [d[0] for d in cur.description]
             _emit(on_stage, "IMPALA_SUBMIT", "end")
 
@@ -919,22 +969,70 @@ def build_impala_dsn(settings) -> dict:
     return dsn
 
 
+def build_trino_dsn(settings) -> dict:
+    """settings 로부터 trino ``dbapi.connect(**dsn)`` 에 넘길 접속 dict 를 만든다.
+
+    trino.host 가 비어 있으면 빈 dict 를 반환한다(Trino 미사용). password 는 dict 에
+    그대로 담아 두고 연결 시점(``_source_connect``/``run_trino_select``)에
+    ``BasicAuthentication`` 으로 변환한다 — trino 클라이언트가 password kwarg 를 받지
+    않기 때문. Basic 인증은 클라이언트 제약상 https 에서만 허용되므로 password 가 있으면
+    http_scheme 을 https 로 승격한다. ``build_backend`` 와 ``/datasources`` 연결 테스트
+    엔드포인트가 공유한다.
+    """
+    if not getattr(settings, "trino_host", ""):
+        return {}
+    scheme = getattr(settings, "trino_http_scheme", "http") or "http"
+    password = getattr(settings, "trino_password", "")
+    if password and scheme != "https":
+        logger.warning("trino.password 설정 시 Basic 인증은 https 필수 — http_scheme 을 https 로 승격")
+        scheme = "https"
+    dsn: dict = {
+        "host": settings.trino_host,
+        "port": getattr(settings, "trino_port", 8080),
+        "user": getattr(settings, "trino_user", "query-executor") or "query-executor",
+        "catalog": getattr(settings, "trino_catalog", "hive"),
+        "schema": getattr(settings, "trino_schema", "default"),
+        "http_scheme": scheme,
+    }
+    if password:
+        dsn["password"] = password
+    # TLS 검증: 비움=클라이언트 기본(true), true/false 문자열, 그 외는 CA 파일 경로로 해석.
+    verify = getattr(settings, "trino_verify", "")
+    if verify:
+        low = verify.lower()
+        dsn["verify"] = True if low == "true" else False if low == "false" else verify
+    props = getattr(settings, "trino_session_properties", None)
+    if props:
+        dsn["session_properties"] = dict(props)
+    return dsn
+
+
+def build_source_dsn(settings) -> dict:
+    """source.type 에 맞는 소스 접속 dict 를 만든다(impala 기본 | trino)."""
+    if getattr(settings, "source_type", "impala") == "trino":
+        return build_trino_dsn(settings)
+    return build_impala_dsn(settings)
+
+
 def build_backend(settings) -> Backend:
     """설정에 따라 실제 백엔드 또는 MockBackend를 선택한다(coordinator·executor 공용).
 
-    greenplum.dsn 이 설정되면 실제 백엔드(statement/stage_insert 가능, copy 는 impala.host 도 필요),
-    아무 것도 없으면 MockBackend(실제 I/O 없음 — 로컬 검증용).
+    greenplum.dsn 이 설정되면 실제 백엔드(statement/stage_insert 가능, copy 는 소스
+    호스트 — source.type 에 따라 impala.host 또는 trino.host — 도 필요), 아무 것도
+    없으면 MockBackend(실제 I/O 없음 — 로컬 검증용).
     """
     if settings.greenplum_dsn:
-        impala_dsn: dict = build_impala_dsn(settings)
+        source_type = getattr(settings, "source_type", "impala")
+        source_dsn: dict = build_source_dsn(settings)
         logger.info(
-            "ImpalaToGreenplumBackend 사용 (impala=%s, batch=%s, pipeline=%s)",
-            settings.impala_host or "(미설정 → statement 모드만)",
+            "ImpalaToGreenplumBackend 사용 (source=%s@%s, batch=%s, pipeline=%s)",
+            source_type,
+            source_dsn.get("host") or "(미설정 → statement 모드만)",
             settings.copy_batch_size,
             getattr(settings, "copy_pipeline", True),
         )
         return ImpalaToGreenplumBackend(
-            impala_dsn=impala_dsn,
+            impala_dsn=source_dsn,
             greenplum_dsn=settings.greenplum_dsn,
             batch_size=settings.copy_batch_size,
             query_options=getattr(settings, "impala_query_options", None),
@@ -944,6 +1042,7 @@ def build_backend(settings) -> Backend:
             queue_size=getattr(settings, "copy_queue_size", 8),
             copy_format=getattr(settings, "copy_format", "text"),
             stage_convert_types=getattr(settings, "stage_impala_convert_types", False),
+            source_type=source_type,
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()

@@ -135,3 +135,30 @@ def run_impala_select(
         return _shape(columns, raw, limit, started)
     finally:
         conn.close()
+
+
+def run_trino_select(trino_dsn: dict, sql: str, *, limit: int) -> QueryResult:
+    """trino 클라이언트로 Trino 에 ``sql`` 을 실행해 상위 ``limit`` 행을 반환한다.
+
+    ``trino_dsn`` 은 ``build_trino_dsn`` 이 만든 dict 로, password 키가 있으면 여기서
+    ``BasicAuthentication`` 으로 변환해 연결한다(executor 백엔드의 ``_source_connect`` 와
+    동일 규약). 세션 프로퍼티는 dict 의 session_properties 로 연결 단위 적용된다.
+    """
+    import trino  # 지연 임포트(trino 소스 전용 드라이버)
+
+    started = time.perf_counter()
+    kwargs = dict(trino_dsn)
+    password = kwargs.pop("password", None)
+    if password:
+        kwargs["auth"] = trino.auth.BasicAuthentication(kwargs.get("user", ""), password)
+    conn = trino.dbapi.connect(**kwargs)
+    try:
+        cur = conn.cursor()
+        cur.execute(sql)
+        if cur.description is None:
+            return _shape([], [], limit, started)
+        columns = [d[0] for d in cur.description]
+        raw = cur.fetchmany(limit + 1)
+        return _shape(columns, raw, limit, started)
+    finally:
+        conn.close()

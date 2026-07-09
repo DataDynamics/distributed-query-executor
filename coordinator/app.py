@@ -837,6 +837,8 @@ def create_app(
         total_all = len(all_jobs)
         running = sum(1 for j in all_jobs if j.status == JobStatus.RUNNING)
         active = sum(1 for j in all_jobs if j.status in _active_set)
+        # 대시보드 admission 게이지용: 실행 슬롯을 기다리는(PENDING) job 수.
+        pending = sum(1 for j in all_jobs if j.status == JobStatus.PENDING)
         # 최신순 정렬(created_at 내림차순). created_at 이 없으면 빈 문자열로 안전 비교.
         jobs = sorted(all_jobs, key=lambda j: j.created_at or "", reverse=True)
         if status:
@@ -862,22 +864,39 @@ def create_app(
                 "created_at": j.created_at, "started_at": j.started_at,
                 "finished_at": j.finished_at,
                 "original_sql": j.original_sql,
+                "error": j.error,
             }
             for j in (jobs if limit <= 0 else jobs[:limit])
         ]
         return format_at_fields(
-            {"jobs": rows, "total": total_all, "running": running, "active": active}
+            {
+                "jobs": rows, "total": total_all, "running": running, "active": active,
+                # admission 게이지(실행 슬롯/대기 큐 소진율) 표시용. 0 이하는 무제한.
+                "pending": pending,
+                "max_concurrent_jobs": settings.max_concurrent_jobs,
+                "max_pending_jobs": settings.max_pending_jobs,
+            }
         )
 
     history_reader = JobHistoryRepository(settings)
 
-    @app.get("/history", tags=["Jobs"], summary="과거 실행 이력(페이징)")
-    def get_history(limit: int = 20, offset: int = 0):
+    @app.get("/history", tags=["Jobs"], summary="과거 실행 이력(필터/페이징)")
+    def get_history(
+        limit: int = 20,
+        offset: int = 0,
+        status: Optional[str] = None,
+        username: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ):
         # 외부 입력을 안전 범위로 강제(clamp): limit 은 1~200, offset 은 0 이상.
         # 과도한 페이지 크기나 음수 입력으로 인한 DB 부하/오류를 방지한다.
+        # status/username 은 정확 일치, job_id 는 전방일치(prefix) 필터다(빈 값은 무시).
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
-        return format_at_fields(history_reader.read(limit=limit, offset=offset))
+        return format_at_fields(history_reader.read(
+            limit=limit, offset=offset,
+            status=status, username=username, job_id=job_id,
+        ))
 
     @app.get(
         "/templates",
@@ -895,15 +914,15 @@ def create_app(
     def list_datasources():
         """coordinator 가 SELECT 테스트할 수 있는 데이터소스를 반환한다.
 
-        history/greenplum 은 coordinator 가 직접(psycopg) 테스트하고, impala 는 드라이버가
-        없어 ``executor_url`` 을 지정해 executor 로 프록시해야 한다.
+        history/greenplum 은 coordinator 가 직접(psycopg) 테스트하고, impala/trino 는
+        드라이버가 없어 ``executor_url`` 을 지정해 executor 로 프록시해야 한다.
         """
         return {
             "local": [
                 {"name": "history", "configured": bool(settings.history_db_dsn)},
                 {"name": "greenplum", "configured": bool(settings.greenplum_dsn)},
             ],
-            "via_executor": ["impala", "greenplum", "history"],
+            "via_executor": ["impala", "trino", "greenplum", "history"],
             "executors": list(settings.executors),
         }
 
@@ -915,7 +934,7 @@ def create_app(
     async def query_datasource(name: str, req: DatasourceQueryRequest):
         """``name`` 데이터소스에 임의 SQL 을 실행해 상위 N행을 반환한다.
 
-        ``executor_url`` 이 있으면 그 executor 의 동일 엔드포인트로 프록시한다(impala 등
+        ``executor_url`` 이 있으면 그 executor 의 동일 엔드포인트로 프록시한다(impala/trino 등
         coordinator 에 드라이버가 없는 데이터소스용). 없으면 coordinator 가 직접 접속
         가능한 history/greenplum 만 로컬 실행한다.
         """
@@ -954,10 +973,11 @@ def create_app(
                 if not settings.history_db_dsn:
                     raise HTTPException(status_code=400, detail="history.db_dsn(또는 monitor.db_dsn) 미설정")
                 result = await asyncio.to_thread(run_postgres_select, settings.history_db_dsn, req.sql, limit=limit)
-            elif name == "impala":
+            elif name in ("impala", "trino"):
+                # coordinator 에는 소스 드라이버(impyla/trino)가 없다 — executor 로 프록시해야 한다.
                 raise HTTPException(
                     status_code=400,
-                    detail="impala 는 coordinator 에서 직접 테스트할 수 없습니다 — executor_url 을 지정하세요",
+                    detail=f"{name} 은(는) coordinator 에서 직접 테스트할 수 없습니다 — executor_url 을 지정하세요",
                 )
             else:
                 raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {name}")
