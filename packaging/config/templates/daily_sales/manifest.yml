@@ -1,0 +1,26 @@
+# 날짜 태스크 컬럼 fan-out 예제 — 일별 매출 이관(stage_insert).
+#
+# /jobs 에 template_id="daily_sales" + task_column="dt" + task_range=[-7,0] 를 보내면,
+# coordinator 가 오늘 기준 상대 일수 범위를 날짜 목록으로 펼쳐 **하루 = 1 task** 로 실행한다.
+# 각 task 는 그 하루치만 SELECT(select.sql.j2, task_date 주입) → staging(TEMP) COPY → INSERT.
+# INSERT/staging_ddl 은 날짜 독립이라 1회 렌더해 모든 task 가 공유한다.
+#
+# 파티션 IN 분할과 달리 partition_column 은 쓰지 않는다(task_column 이 대체).
+
+id: daily_sales
+description: 일별 매출 이관(stage_insert, 날짜 태스크 컬럼 fan-out — 하루=1 task)
+
+exec_mode: stage_insert              # fan-out 은 stage_insert 전용
+target_table: public.sales           # 최종 적재 대상(요청 target_table 로 재정의 가능)
+staging_table: stg_sales             # staging(TEMP)
+strict_validation: false
+
+# 파라미터 스키마 — task_column/task_date 는 시스템이 주입하므로 여기 선언하지 않는다.
+params:
+  - {name: region, type: string, required: false}   # 지역 필터(비면 전체)
+
+# role → 조각 파일 매핑. stage_insert: select(필수)+insert(필수)+staging_ddl(선택).
+files:
+  select:      select.sql.j2
+  insert:      insert.sql.j2
+  staging_ddl: staging_ddl.sql.j2

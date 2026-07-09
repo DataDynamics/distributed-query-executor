@@ -17,7 +17,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 354개.
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 400개.
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -70,6 +70,11 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   참조 구현·설정은 QUERY.md / `examples/query_funcs/trino_runner.py`. 임의 SQL 미리보기(`/datasources/
   {name}/query`)는 별개 운영 점검용으로 built-in 유지.
 - `coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
+  **날짜 태스크 컬럼 fan-out**(DESIGN §18.8): `/jobs` 에 `task_column`+`task_range`(오늘 기준 상대
+  일수, 양끝 포함)를 주면 IN 분할 대신 **날짜=1 task** 로 펼친다(`app.py` `_build_fanout`/`_compute_task_dates`,
+  IN 파싱·split 우회). 날짜별 SELECT 만 `render_query` 로 렌더, INSERT/staging 은 날짜 독립이라 1회
+  렌더해 job 공유. stage_insert 전용이며 **append** 적재(프레임워크는 대상에 DELETE 안 함 — 멱등이
+  필요하면 대상 선비우기/날짜별 물리 테이블). 예제: `templates/daily_sales/`.
 - `coordinator/stage.py` — **`local_stage`(file:// 세그먼트 로컬 스테이징) Phase 2 SQL 조립**(순수
   함수): `file://` 외부테이블 DDL·staging 적재·멱등 DELETE·정리 SQL, 파일 예산 배분
   (`plan_file_budget`, 호스트당 ≤ S_h), executor_url→gp_hostname 유도. 자세히는 DESIGN §17.

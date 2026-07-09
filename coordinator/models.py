@@ -486,6 +486,24 @@ class CreateJobRequest(BaseModel):
     target_table: Optional[str] = Field(
         default=None, description="Greenplum 적재 대상 테이블(raw 모드 필수, 템플릿은 manifest 기본값 가능)"
     )
+    # ── 날짜 태스크 컬럼 fan-out 모드(파티션 IN 분할 대체) ──
+    # task_column 을 주면 IN 값 분할 대신 '날짜별 1 task' 로 펼친다. task_range(오늘 기준 상대
+    # 일수, 양끝 포함)로 날짜 목록을 만들고, 각 날짜마다 SELECT 템플릿을 task_date 로 렌더해
+    # 하루치만 조회하는 sub-query 를 만든다. 템플릿 stage_insert 전용(select+insert 템플릿 필요).
+    task_column: Optional[str] = Field(
+        default=None,
+        description="날짜 태스크 컬럼(지정 시 IN 분할 대신 날짜 fan-out 모드). partition_column 을 대체한다.",
+    )
+    task_range: Optional[list[int]] = Field(
+        default=None,
+        description="오늘 기준 상대 일수 범위 [start, end](양끝 포함). 예: [-7, 0] → 오늘 포함 8일.",
+    )
+    task_column_type: str = Field(
+        default="date", description="태스크 컬럼 타입(현재 date 만 지원)."
+    )
+    task_date_format: str = Field(
+        default="%Y-%m-%d", description="task_date 로 주입할 날짜 문자열 포맷(strftime)."
+    )
     username: Optional[str] = Field(default=None, description="작업을 실행한 사용자")
     write_mode: Literal["append", "overwrite_partitions"] = "append"
     parallelism: int = Field(default=4, ge=1, le=128)

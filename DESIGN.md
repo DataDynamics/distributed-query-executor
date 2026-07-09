@@ -958,6 +958,18 @@ flowchart LR
 
 **테스트**: `tests/test_query_execute.py`(render_query·coordinator 직접 실행·trino→/query-run 프록시·failover·오류 전파·에러 경로) + `tests/test_datasource_query.py`(executor `/query-run` 커스텀 함수 호출·dict 반환·미설정 400·함수 예외 502·`_load_query_func` 로딩·`_collect_prefix` 자유 설정 수집)를 실 DB 없이 검증.
 
+### 18.8 날짜 태스크 컬럼 fan-out (`/jobs`, IN 분할 대체)
+
+기본 분할(§8)은 파티션 컬럼의 `IN` 값 목록을 N등분합니다. 여기에 더해, `/jobs`(이관)는 **날짜 태스크 컬럼 기반 fan-out** 모드를 지원합니다 — `IN` 을 쓰지 않고 **날짜 하나 = task 하나**로 펼쳐, executor 마다 하루치를 맡깁니다(일별 배치 이관에 자연스러운 모델).
+
+- **요청**: 템플릿 stage_insert 에 `task_column`(날짜 컬럼) + `task_range`(오늘 기준 상대 일수, **양끝 포함**)를 추가합니다. 예: `task_column:"dt", task_range:[-7,0]` → 오늘 포함 8일. `partition_column`/`parallelism`/`split_strategy` 는 이 모드에서 쓰이지 않습니다(task 수 = 날짜 수).
+- **분할**(`coordinator/app.py` `_build_fanout`, IN 파싱·`split` 우회): 서버 오늘(KST) 기준으로 날짜 목록을 만들고(`_compute_task_dates`), **날짜마다 SELECT 조각만** `render_query()` 로 렌더해(컨텍스트에 `task_column`·`task_date` 주입) 하루치 sub-query 를 만듭니다. `INSERT`/`staging_ddl` 은 **날짜 독립**이라 대표 날짜로 **1회** 렌더해 job-level 로 공유합니다(§18.5 의 per-task `sub_query` / job-level 나머지 plumbing 그대로). 각 task 의 `partition_values` 에는 그 날짜를 담습니다(관측/표시용).
+- **적재 방식**: stage_insert 는 **append** 입니다(그 날짜 SELECT → staging(TEMP) COPY → target INSERT). 하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나(TRUNCATE 등) 날짜별 물리 테이블을 씁니다 — 프레임워크는 대상에 DELETE 를 하지 않습니다.
+- **템플릿 계약**: SELECT 조각은 `WHERE {{ task_column | sql_ident }} = {{ task_date | sql_str }}` 처럼 하루치를 조회하고, INSERT/staging 은 날짜를 참조하지 않습니다. 예제: `packaging/config/templates/daily_sales/`.
+- **예시**(today=2026-07-10, `[-7,0]`): `2026-07-03 … 2026-07-10` = 8 task, executor 당 1일. 각 task: 그 날짜 SELECT → staging(TEMP) COPY → INSERT.
+
+**테스트**: `tests/test_task_fanout.py` — `_compute_task_dates`(양끝 포함·역순·포맷·오류), dry-run(날짜별 1 task·날짜별 partition_values·IN 없음·INSERT 공유), 템플릿/exec_mode/range 검증(422).
+
 ---
 
 ## 19. 향후 확장

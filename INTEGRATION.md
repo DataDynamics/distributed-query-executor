@@ -199,6 +199,24 @@ curl http://<coordinator-host>:8088/templates
 > 템플릿을 쓰지 않고 지금까지처럼 SQL 전문을 직접 담아 보내는 방식도 그대로 지원됩니다
 > (하위 호환). `template_id` 를 넣지 않으면 raw-SQL 모드로 동작합니다.
 
+#### 날짜별 분할 — `task_column` + `task_range`
+
+일별 이관에서는 파티션 `IN` 분할 대신 **날짜 하나 = task 하나**로 펼치는 모드를 쓸 수 있습니다.
+템플릿 stage_insert 요청에 `task_column`(날짜 컬럼)과 `task_range`(오늘 기준 상대 일수, 양끝
+포함)를 넣으면, 서버가 날짜 목록을 만들어 날짜별로 SELECT 를 렌더해 실행합니다(executor 당 하루씩).
+
+```jsonc
+{
+  "template_id": "daily_sales",
+  "params": { "region": "KR" },
+  "task_column": "dt",
+  "task_range": [-7, 0]     // 오늘 포함 8일 → 8 task (executor 당 1일)
+}
+```
+
+적재는 stage_insert append 입니다. 응답·폴링·재시도는 일반 `/jobs` 와 동일합니다. 자세한 규약은
+[README.md](README.md)·DESIGN §18.8 참고.
+
 ---
 
 ## 3. 2단계 — 완료될 때까지 대기 (폴링)

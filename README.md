@@ -411,6 +411,29 @@ dry-run 의 응답을 읽을 때 알아 둘 점이 두 가지 있습니다.
   그대로 보여 주므로, 어떤 쿼리가 만들어졌는지 눈으로 직접 검토할 수 있습니다.
 - 검증은 실제 실행 때와 똑같이 수행되므로, 잘못된 쿼리는 dry-run 에서도 422 로 거부됩니다.
 
+### 날짜 태스크 컬럼 fan-out (일별 이관)
+
+파티션 `IN` 분할 대신, **날짜 하나 = task 하나**로 펼쳐 executor 마다 하루치를 맡기는 모드입니다.
+템플릿 stage_insert 요청에 `task_column`(날짜 컬럼) + `task_range`(오늘 기준 상대 일수, **양끝
+포함**)를 넣으면, 서버가 날짜 목록을 만들어 날짜별로 SELECT 를 렌더해 실행합니다(자세히는 DESIGN §18.8).
+
+```bash
+curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
+  "template_id": "daily_sales",
+  "params": {"region": "KR"},
+  "task_column": "dt",
+  "task_range": [-7, 0]
+}'
+# 오늘 포함 8일 → 8 task, executor 당 1일. 각 task 는 그 하루치만 조회(WHERE dt = '<date>').
+```
+
+- `task_range:[-7,0]` + 오늘(2026-07-10) → `2026-07-03 … 2026-07-10`(8일). 정확히 7일이 필요하면
+  `[-7,-1]` 또는 `[-6,0]` 을 씁니다. `partition_column`/`parallelism`/`split_strategy` 는 미사용
+  (task 수 = 날짜 수).
+- 적재는 stage_insert **append** 입니다(각 task: 그 날짜 SELECT → staging(TEMP) → target INSERT).
+  하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을
+  씁니다. 예제 템플릿: `packaging/config/templates/daily_sales/`.
+
 ### 결과 반환 실행 (`POST /query-execute`)
 
 `POST /jobs` 가 데이터를 옮기는 **이관**이라면, `POST /query-execute` 는 같은 템플릿으로 만든

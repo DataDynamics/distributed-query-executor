@@ -1,0 +1,8 @@
+{# staging 테이블 생성 DDL. stage_insert 는 이 TEMP 테이블에 COPY 한 뒤 target 으로 INSERT 한다.
+   반납 시 DISCARD ALL 로 정리되므로 task 간 격리된다. 컬럼은 SELECT 순서와 일치해야 한다. #}
+CREATE TEMP TABLE {{ staging_table | sql_ident }} (
+  user_id  bigint,
+  amount   numeric,
+  region   text,
+  {{ task_column | sql_ident }} date
+)

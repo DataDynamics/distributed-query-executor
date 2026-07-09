@@ -1,0 +1,6 @@
+{# staging → target 적재 INSERT. 날짜 독립(모든 task 공유). append 적재이므로, 재실행 멱등이
+   필요하면 대상 테이블을 job 밖에서 미리 비우거나(TRUNCATE 등) 날짜별 물리 테이블을 쓴다.
+   테이블명은 sql_ident 로 인용한다. #}
+INSERT INTO {{ target_table | sql_ident }} (user_id, amount, region, {{ task_column | sql_ident }})
+SELECT user_id, amount, region, {{ task_column | sql_ident }}
+FROM {{ staging_table | sql_ident }}

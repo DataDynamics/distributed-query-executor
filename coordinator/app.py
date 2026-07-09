@@ -26,7 +26,7 @@ import itertools
 import logging
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -67,7 +67,7 @@ from .parser import (
 )
 from .reservation import ReservationRepository, ReservingLoadView
 from .selector import ExecutorSelector, SharedLoadView
-from .splitter import split, wrap
+from .splitter import SubQuery, split, wrap
 from .template import TemplateEngine, TemplateError
 
 logger = logging.getLogger(__name__)
@@ -109,6 +109,96 @@ def _query_params_to_dict(params: list) -> dict:
     return out
 
 
+# 템플릿 렌더 시 manifest 기본값과 병합하는 스칼라 필드(요청이 명시하면 요청이 이긴다).
+_TEMPLATE_SCALAR_KEYS = (
+    "exec_mode", "partition_column", "target_table", "staging_table",
+    "write_mode", "split_strategy", "failure_policy", "parallelism",
+    "sql_dialect", "strict_validation",
+)
+
+
+def _compute_task_dates(task_range, today, fmt: str = "%Y-%m-%d") -> list[str]:
+    """오늘(``today``) 기준 상대 일수 범위 ``[start, end]``(양끝 포함)를 절대 날짜 문자열 목록으로 만든다.
+
+    예: today=2026-07-10, task_range=[-7, 0] → 2026-07-03 … 2026-07-10 (8일).
+    start>end 로 뒤집혀 와도 정상 정렬해 처리한다. 형식 위반은 QueryValidationError(422).
+    """
+    if not task_range or len(task_range) != 2:
+        raise QueryValidationError(
+            "TASK_RANGE_INVALID", "task_range 는 [start, end] 두 정수여야 합니다."
+        )
+    try:
+        start, end = int(task_range[0]), int(task_range[1])
+    except (TypeError, ValueError) as exc:
+        raise QueryValidationError("TASK_RANGE_INVALID", f"task_range 정수 변환 실패: {exc}") from exc
+    lo, hi = (start, end) if start <= end else (end, start)
+    return [(today + timedelta(days=d)).strftime(fmt) for d in range(lo, hi + 1)]
+
+
+def _build_fanout(
+    req: "CreateJobRequest", engine: Optional[TemplateEngine], today, *, default_dialect: str
+) -> list:
+    """날짜 태스크 컬럼 fan-out: 상대 일수 범위 → 날짜 목록 → **하루 = 1 sub-query**.
+
+    IN 값 분할(validate_and_parse+split)을 우회한다. 동작:
+      1) task_range 로 날짜 목록을 만든다(양끝 포함).
+      2) INSERT/staging 은 날짜 독립이라 대표 날짜로 **1회** 렌더해 req 필드(staging_ddl/
+         wrapper_query=INSERT)와 manifest 스칼라 기본값을 채운다.
+      3) 날짜마다 SELECT 조각만 render_query 로 렌더해 sub-query 를 만들고, partition_values 에
+         그 날짜를 담는다(관측/표시용). stage_insert 는 append 적재다.
+      4) partition_column 을 task_column 으로 확정한다(필수필드 충족).
+
+    템플릿 stage_insert 전용이다(select+insert 필요). template_id 미지정/타 exec_mode 는 422.
+    """
+    if engine is None:
+        raise HTTPException(
+            status_code=400, detail="템플릿 기능이 비활성화되어 있습니다(template.enabled=false)."
+        )
+    if not req.template_id:
+        raise QueryValidationError(
+            "FANOUT_REQUIRES_TEMPLATE", "task_column(날짜 fan-out) 모드는 template_id 가 필요합니다."
+        )
+    dates = _compute_task_dates(req.task_range, today, req.task_date_format)
+    if not dates:
+        raise QueryValidationError("TASK_RANGE_EMPTY", "task_range 로 만든 날짜가 없습니다.")
+
+    params = dict(req.params or {})
+    request_scalars = {k: getattr(req, k) for k in _TEMPLATE_SCALAR_KEYS if k in req.model_fields_set}
+    # INSERT/staging 은 날짜 독립 → 대표 날짜로 1회 렌더(모든 task 공유). task_date/task_column 노출.
+    base = engine.render(
+        req.template_id,
+        {**params, "task_column": req.task_column, "task_date": dates[0]},
+        request_scalars=request_scalars,
+    )
+    # manifest 스칼라 기본값 채움(요청이 명시하지 않은 것만). exec_mode 는 아래에서 확정.
+    for key, val in base.defaults.items():
+        if key == "exec_mode":
+            continue
+        if key not in req.model_fields_set and hasattr(req, key):
+            setattr(req, key, val)
+    req.exec_mode = base.exec_mode
+    if base.exec_mode != "stage_insert":
+        raise QueryValidationError(
+            "FANOUT_REQUIRES_STAGE_INSERT",
+            f"task_column(날짜 fan-out) 모드는 exec_mode=stage_insert 만 지원합니다(현재 {base.exec_mode}).",
+        )
+    if base.staging_ddl:
+        req.staging_ddl = base.staging_ddl
+    req.wrapper_query = base.insert          # stage_insert INSERT → job.insert_sql 로 실린다
+    req.partition_column = req.task_column   # 필수필드(partition_column) 충족용(표시)
+
+    dialect = req.sql_dialect or default_dialect
+    sub_queries: list = []
+    for d in dates:
+        select_sql = engine.render_query(
+            req.template_id, {**params, "task_column": req.task_column, "task_date": d}
+        )
+        validate_select_query(select_sql, dialect=dialect)  # 단일 SELECT 방어(다중 문/비-SELECT 차단)
+        sub_queries.append(SubQuery(sql=select_sql, partition_values=[d]))
+    req.sql = sub_queries[0].sql  # original_sql 기록/필수필드 검증용 대표값
+    return sub_queries
+
+
 def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
     """template_id 가 지정된 요청을 렌더링해 SQL 필드/스칼라 기본값을 제자리에서 채운다.
 
@@ -123,13 +213,8 @@ def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
     """
     # 요청이 명시한 스칼라만 추린다(model_fields_set). manifest 기본값을 이기고, 렌더
     # 컨텍스트에도 노출되어 템플릿이 effective target_table 등을 참조할 수 있게 한다.
-    _scalar_keys = (
-        "exec_mode", "partition_column", "target_table", "staging_table",
-        "write_mode", "split_strategy", "failure_policy", "parallelism",
-        "sql_dialect", "strict_validation",
-    )
     request_scalars = {
-        k: getattr(req, k) for k in _scalar_keys if k in req.model_fields_set
+        k: getattr(req, k) for k in _TEMPLATE_SCALAR_KEYS if k in req.model_fields_set
     }
     result = engine.render(req.template_id, req.params, request_scalars=request_scalars)
 
@@ -364,10 +449,18 @@ def create_app(
         5. 수용되면 Job/Task 를 store 에 저장하고 background 로 runner.run 을 예약한 뒤
            202(job_id)를 반환한다.
         """
+        # 날짜 태스크 컬럼 fan-out 모드: task_column 이 있으면 IN 값 분할 대신 '날짜별 1 task' 로
+        # 펼친다(_build_fanout 이 날짜 목록 생성 + 날짜별 SELECT 렌더 + req 필드 주입까지 끝낸다).
+        fanout = bool(req.task_column)
+        if fanout:
+            sub_queries = _build_fanout(
+                req, template_engine, now_dt().date(),
+                default_dialect=settings.query_default_dialect,
+            )
         # 템플릿 모드: SQL 을 클라이언트가 보내는 대신, 서버 템플릿을 params 로 렌더링해
         # sql/staging_ddl/insert_sql/external_columns/wrapper_query 와 스칼라 기본값을 채운다.
         # 렌더 결과는 아래 raw-SQL 경로와 동일한 필드에 주입되므로 이후 흐름은 바뀌지 않는다.
-        if req.template_id:
+        elif req.template_id:
             if template_engine is None:
                 raise HTTPException(
                     status_code=400,
@@ -391,15 +484,17 @@ def create_app(
         # 동기 검증 + 분할: 비동기 디스패치 전에 마치므로, 여기서 발생하는 오류는
         # 백그라운드 작업으로 넘어가지 않고 즉시(이 요청-응답 사이클에서) 클라이언트에
         # 반환된다. dialect 가 지정되지 않으면 설정의 기본 방언으로 파싱한다.
-        dialect = req.sql_dialect or settings.query_default_dialect
-        parsed = validate_and_parse(
-            req.sql,
-            req.partition_column,
-            dialect=dialect,
-            strict=req.strict_validation,
-        )
-        # 파티션 컬럼 기준으로 parallelism 개의 sub-query로 분할(전략에 따라 분배 방식 결정).
-        sub_queries = split(parsed, req.parallelism, req.split_strategy)
+        # fan-out 모드는 _build_fanout 이 이미 날짜별 sub_queries 를 만들었으므로 IN 분할을 건너뛴다.
+        if not fanout:
+            dialect = req.sql_dialect or settings.query_default_dialect
+            parsed = validate_and_parse(
+                req.sql,
+                req.partition_column,
+                dialect=dialect,
+                strict=req.strict_validation,
+            )
+            # 파티션 컬럼 기준으로 parallelism 개의 sub-query로 분할(전략에 따라 분배 방식 결정).
+            sub_queries = split(parsed, req.parallelism, req.split_strategy)
 
         if req.exec_mode == "stage_insert":
             # stage_insert: Impala SELECT 결과를 Greenplum staging 테이블에 적재한 뒤
