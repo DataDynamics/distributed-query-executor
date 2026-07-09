@@ -21,8 +21,8 @@
 
 | 디렉터리 | 내용 | 용도 |
 |---|---|---|
-| `coordinator/` | coordinator 런타임 의존성(`requirements.txt`) + pip/setuptools/wheel 부트스트랩 | 기본 설치(모든 구성의 베이스) |
-| `executor/` | executor 추가 드라이버(impyla·thrift·SASL) + `gssapi` **sdist** + Cython | 실 Impala/Greenplum 연동 |
+| `coordinator/` | coordinator 런타임 의존성(`requirements.txt`, Jinja2 템플릿 엔진 포함) + pip/setuptools/wheel 부트스트랩 | 기본 설치(모든 구성의 베이스) |
+| `executor/` | executor 추가 드라이버(impyla·thrift·SASL·**trino**) + `gssapi` **sdist** + Cython | 실 Impala/Trino/Greenplum 연동 |
 | `dev/` | pytest·pytest-asyncio 등 테스트 의존성 | 타깃에서 테스트 실행 시 |
 
 이렇게 나눈 데에는 이유가 있습니다. 세 디렉터리는 서로 독립적인 묶음이 아니라, `coordinator/`
