@@ -30,7 +30,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from core.config import settings
-from core.dbprobe import clamp_limit, run_impala_select, run_postgres_select, run_trino_select
+from core.dbprobe import QueryResult, clamp_limit, run_impala_select, run_postgres_select, run_trino_select
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
@@ -39,10 +39,41 @@ from core.webassets import mount_static, register_offline_docs
 from .backend import Backend, build_backend, build_impala_dsn, build_trino_dsn
 from .dashboard import DASHBOARD_HTML, masked_config
 from .history import TaskHistoryRepository, _executor_id
-from .models import CreateTaskRequest, DatasourceQueryRequest, Task, TaskStatus
+from .models import CreateTaskRequest, DatasourceQueryRequest, QueryRunRequest, Task, TaskStatus
 from .status import ExecutorStatusReporter
 
 logger = logging.getLogger(__name__)
+
+# query-execute 위임용 커스텀 실행 함수 캐시(dotted path → callable). executor 는 단일 워커라
+# 프로세스 내 캐시가 안전하다. 첫 호출에서 import 후 재사용한다.
+_query_func_cache: dict = {}
+
+
+def _load_query_func(dotted: str):
+    """``module:func`` 또는 ``module.func`` dotted path 로 커스텀 실행 함수를 import 한다.
+
+    template.func_modules 로딩과 같은 importlib 방식이며, 결과를 캐시한다. import/getattr
+    실패는 ValueError 로 올려 호출부가 502 로 변환하게 한다.
+    """
+    fn = _query_func_cache.get(dotted)
+    if fn is not None:
+        return fn
+    import importlib
+
+    mod_path, sep, attr = dotted.partition(":")
+    if not sep:  # ':' 가 없으면 마지막 '.' 을 함수명 경계로 본다
+        mod_path, _, attr = dotted.rpartition(".")
+    if not mod_path or not attr:
+        raise ValueError(f"잘못된 함수 경로: {dotted!r} (module:func 형식이어야 함)")
+    try:
+        module = importlib.import_module(mod_path)
+        fn = getattr(module, attr)
+    except Exception as exc:
+        raise ValueError(f"커스텀 실행 함수 로드 실패: {dotted} ({exc})") from exc
+    if not callable(fn):
+        raise ValueError(f"커스텀 실행 함수가 호출 가능하지 않습니다: {dotted}")
+    _query_func_cache[dotted] = fn
+    return fn
 
 
 def _now_iso() -> str:
@@ -569,6 +600,39 @@ def create_app(
         except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
             raise HTTPException(status_code=502, detail=f"{name} 쿼리 실패: {e}")
         return {"datasource": name, "limit": limit, **result.to_dict()}
+
+    @app.post(
+        "/query-run",
+        tags=["Query"],
+        summary="query-execute 위임: 설정된 커스텀 함수로 SELECT 실행",
+    )
+    async def query_run(req: QueryRunRequest):
+        """coordinator 가 렌더·검증한 SELECT 를 **설정된 커스텀 함수**에 실행 위임한다.
+
+        executor 는 Trino 등 백엔드를 직접 알지 않는다 — ``query.func.module`` 로 지정한 외부
+        함수에 SQL·설정(``query.func.config.*``)·limit 을 넘겨 호출하고, 반환된 결과
+        (QueryResult 또는 동일 키 dict)를 그대로 응답한다. 블로킹일 수 있으므로 to_thread 로 감싼다.
+        미설정 시 400, 함수 로드/실행 실패 시 502.
+        """
+        if not settings.query_func_module:
+            raise HTTPException(
+                status_code=400,
+                detail="query.func.module 미설정 — query-execute 실행 함수가 구성되지 않았습니다",
+            )
+        limit = clamp_limit(req.limit)
+        try:
+            fn = _load_query_func(settings.query_func_module)
+        except ValueError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        try:
+            result = await asyncio.to_thread(
+                fn, req.sql, config=dict(settings.query_func_config), limit=limit
+            )
+        except Exception as e:  # 커스텀 함수 내부 오류(연결/인증/SQL 등) → 502 + 원인
+            raise HTTPException(status_code=502, detail=f"커스텀 실행 함수 실패: {e}")
+        # 반환은 QueryResult 또는 {columns, rows, row_count, truncated, elapsed_ms} dict 를 허용한다.
+        body = result.to_dict() if isinstance(result, QueryResult) else dict(result)
+        return {"limit": limit, **body}
 
     # 대시보드 활성화 시에만 UI 및 보조 조회 엔드포인트(/, /history, /config, /info)를 등록.
     # started_at/start_monotonic 은 /info 의 uptime 계산 기준점(monotonic 은 시계 변경에 둔감).

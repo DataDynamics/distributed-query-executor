@@ -201,17 +201,19 @@ def _fake_client_factory(recorder, *, fail_urls=(), status_map=None):
 
         async def post(self, url, json=None):
             recorder.append(url)
-            base = url.rsplit("/datasources/", 1)[0]
+            base = "/".join(url.split("/")[:3])  # scheme://host:port (경로 무관하게 executor base)
             if base in fail_urls:
                 raise httpx.ConnectError("refused")
             if status_map and base in status_map:
                 return _Resp(status_code=status_map[base], payload={"detail": "쿼리 실패: boom"})
-            # 실제 executor 처럼 URL 의 데이터소스명을 응답에 그대로 실어 돌려준다.
+            common = {"limit": 100, "columns": ["a"], "rows": [[1]],
+                      "row_count": 1, "truncated": False, "elapsed_ms": 1.0}
+            if url.endswith("/query-run"):
+                # trino 위임 경로 — executor 는 datasource 를 모른다(응답에 datasource 없음).
+                return _Resp(payload=dict(common))
+            # 데이터소스 미리보기 경로는 실제 executor 처럼 datasource 명을 실어 돌려준다.
             name = url.rsplit("/datasources/", 1)[1].split("/", 1)[0]
-            return _Resp(payload={
-                "datasource": name, "limit": 100, "columns": ["a"], "rows": [[1]],
-                "row_count": 1, "truncated": False, "elapsed_ms": 1.0,
-            })
+            return _Resp(payload={"datasource": name, **common})
 
     return _FakeClient
 
@@ -242,11 +244,12 @@ def test_query_execute_impala_proxies_to_executor(qe_client, monkeypatch):
     assert "proxied_to" not in body and "executor_url" not in body
 
 
-def test_query_execute_trino_proxies_to_trino_endpoint(qe_client, monkeypatch):
-    """datasource='trino' 는 source.type(impala)과 무관하게 executor 의 /datasources/trino/query 로 간다.
+def test_query_execute_trino_proxies_to_query_run(qe_client, monkeypatch):
+    """datasource='trino' 는 executor 의 /query-run(커스텀 함수 위임)으로 프록시된다.
 
-    운영 라우팅: 이관(/jobs)은 Impala 로 읽지만(source.type=impala), query-execute 는
-    클라이언트가 datasource='trino' 를 명시해 Trino 로 실행한다 — 둘은 독립적으로 붙는다.
+    운영 라우팅: 이관(/jobs)은 Impala 로 읽지만(source.type=impala), query-execute 의 trino 는
+    executor 에 설정된 커스텀 실행 함수(/query-run)에 위임한다 — Trino 직접 접속은 하지 않는다.
+    datasource 는 /query-run 응답에 없으므로 coordinator 가 확정값으로 보정한다.
     """
     import coordinator.app as ca
     monkeypatch.setattr(core_config.settings, "source_type", "impala", raising=False)
@@ -260,7 +263,8 @@ def test_query_execute_trino_proxies_to_trino_endpoint(qe_client, monkeypatch):
     })
     assert resp.status_code == 200, resp.text
     assert resp.json()["datasource"] == "trino"
-    assert len(calls) == 1 and calls[0].endswith("/datasources/trino/query")
+    assert resp.json()["executed_by"] == "http://exec1:8001"
+    assert len(calls) == 1 and calls[0].endswith("/query-run")
 
 
 def test_query_execute_impala_failover_on_transport_error(qe_client, monkeypatch):

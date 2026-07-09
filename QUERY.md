@@ -19,7 +19,8 @@ sequenceDiagram
     participant C as Client / 대시보드
     participant CO as Coordinator
     participant EX as Executor (선택됨)
-    participant SRC as Source (Trino/Impala)
+    participant FN as 커스텀 함수(query.func.module)
+    participant SRC as Trino
     participant GP as Greenplum/History
 
     C->>CO: POST /query-execute {template_id, params[], datasource?, limit}
@@ -31,12 +32,18 @@ sequenceDiagram
     alt datasource = greenplum / history
         CO->>GP: 렌더된 SELECT 직접 실행 (psycopg)
         GP-->>CO: 상위 N행 (executed_by = null)
-    else datasource = impala / trino
+    else datasource = trino
         Note over CO: executor 선택 = /jobs 와 동일 정책<br/>(least_loaded / p2c / round_robin)
-        CO->>EX: POST /datasources/{ds}/query {sql, limit}
+        CO->>EX: POST /query-run {sql, limit}
         Note over CO,EX: 연결 실패 시 다음 executor 로 failover
-        EX->>SRC: 렌더된 SELECT 실행
-        SRC-->>EX: 상위 N행
+        EX->>FN: run(sql, config=query.func.config.*, limit)
+        Note over EX,FN: executor 는 Trino 를 직접 모른다 — 커스텀 함수에 위임
+        FN->>SRC: (함수 내부에서) SELECT 실행
+        SRC-->>FN: 상위 N행
+        FN-->>EX: QueryResult
+        EX-->>CO: 결과 (executed_by = 실행 executor URL)
+    else datasource = impala
+        CO->>EX: POST /datasources/impala/query {sql, limit}  (built-in)
         EX-->>CO: 결과 (executed_by = 실행 executor URL)
     end
     CO-->>C: {template_id, datasource, sql, columns, rows, row_count, truncated, limit, elapsed_ms, executed_by}
@@ -120,8 +127,8 @@ Content-Type: application/json
 
 > **이관 소스와 분리**: `datasource` 를 생략하면 전역 `source.type` 을 따른다. "이관(`/jobs`)은
 > Impala, query-execute 는 Trino" 처럼 나누려면 `source.type=impala` 로 두고 요청에
-> `"datasource": "trino"` 를 명시한다. 이때 executor 에 `impala.*` 와 `trino.*` 접속 정보가
-> **둘 다** 설정돼 있어야 한다.
+> `"datasource": "trino"` 를 명시한다. query-execute 의 trino 실행은 executor 가 직접 접속하지
+> 않고 **커스텀 함수(`query.func.module`)에 위임**한다(아래 [커스텀 실행 함수](#커스텀-실행-함수) 참고).
 
 ### 위 요청이 렌더하는 SQL
 
@@ -237,11 +244,11 @@ coordinator.executor_select=p2c
 
 ### Executor
 
-query-execute 를 **Trino** 로 실행하되 이관(`/jobs`)은 **Impala** 로 읽으려면, executor 에
-`impala.*` 와 `trino.*` 접속 정보가 **둘 다** 있어야 한다(둘은 독립적으로 붙는다).
+query-execute 의 **Trino 실행은 executor 가 직접 접속하지 않고, 설정으로 지정한 커스텀 함수에
+위임**한다. 이관(`/jobs`)은 그대로 Impala 로 읽고 Greenplum 에 적재한다.
 
 ```properties
-# 이관(/jobs)의 읽기 소스 — Impala 로 둔다(#2). query-execute 는 요청의 datasource 로 오버라이드.
+# 이관(/jobs)의 읽기 소스 — Impala (#2).
 source.type=impala
 
 # Impala (source, 이관 읽기용)
@@ -250,16 +257,21 @@ impala.port=21050
 impala.database=default
 impala.user=etl
 
-# Trino (source, query-execute 실행용) — datasource=trino 로 요청하면 이 접속을 쓴다.
-trino.host=trino.example.com
-trino.port=8080
-trino.user=query-executor
-trino.catalog=hive
-trino.schema=default
-trino.http_scheme=http
-
 # Greenplum (target, 이관 적재 대상 = INSERT #3)
 greenplum.dsn=postgresql://gpadmin:pw@gp-master:5432/warehouse
+
+# query-execute 의 trino 실행 = 커스텀 함수 위임 (#1). executor 는 Trino 를 직접 모른다.
+#   query.func.module   : 실행 함수 dotted path
+#   query.func.config.* : 함수에 넘길 자유 설정 dict(접두어를 뗀 키로 통째 전달, 값은 문자열)
+query.func.module=examples.query_funcs.trino_runner:run
+query.func.config.host=trino.example.com
+query.func.config.port=8080
+query.func.config.user=query-executor
+query.func.config.catalog=hive
+query.func.config.schema=default
+query.func.config.http_scheme=http
+# 임의 파라미터도 한 줄만 추가하면 그대로 함수에 전달된다(YAML/코드 수정 불필요):
+query.func.config.statement_timeout_s=60
 ```
 
 정리하면:
@@ -268,7 +280,53 @@ greenplum.dsn=postgresql://gpadmin:pw@gp-master:5432/warehouse
 |---|---|---|
 | 이관 SELECT(`/jobs`) | Impala | `source.type=impala` + `impala.*` |
 | 이관 INSERT(`/jobs`) | Greenplum | `greenplum.dsn` |
-| query-execute | Trino | 요청 `datasource:"trino"` + `trino.*` |
+| query-execute | Trino(커스텀 함수) | 요청 `datasource:"trino"` + `query.func.module` + `query.func.config.*` |
+
+---
+
+## 커스텀 실행 함수
+
+query-execute 의 `datasource:"trino"` 요청은 executor 가 **`query.func.module` 로 지정한 외부
+Python 함수**에 실행을 위임한다. 프레임워크는 Trino 드라이버를 전혀 모르며, 연결·실행·형변환은
+전부 이 함수 책임이다. 조직 표준(게이트웨이/래퍼/커넥션 풀 등)에 맞춰 이 함수만 바꾸면 된다.
+
+### 함수 계약
+
+```python
+from core.dbprobe import QueryResult      # 또는 동일 키 dict 반환 허용
+
+def run(sql: str, *, config: dict, limit: int) -> QueryResult:
+    """sql 을 config 백엔드에 실행해 상위 limit 행을 반환.
+    config : query.func.config.* 를 모은 dict(값은 모두 문자열 — 함수 안에서 형변환).
+    반환    : QueryResult(columns, rows, row_count, truncated, elapsed_ms) 또는 동일 키 dict.
+    """
+```
+
+- **로딩**: `query.func.module` 은 `module:func` 또는 `module.func` dotted path. executor 가 첫
+  호출에서 `importlib` 로 import 후 캐시한다(잘못된 경로/미호출가능 → 502).
+- **반환 shape**: `QueryResult` 또는 `{columns, rows, row_count, truncated, elapsed_ms}` dict.
+  `limit` 초과(`truncated`) 판정은 함수 책임(예제는 `fetchmany(limit+1)`).
+
+### 참조 구현
+
+`examples/query_funcs/trino_runner.py` 에 Trino 예제 구현이 있다(표준 `dbprobe._shape`
+로 정형). 그대로 쓰거나, 본문을 조직 표준 접속으로 바꿔 사용한다.
+
+```python
+# examples/query_funcs/trino_runner.py (발췌)
+from core.dbprobe import QueryResult, _shape
+import time, trino
+
+def run(sql, *, config, limit):
+    conn = trino.dbapi.connect(host=config["host"], port=int(config.get("port", 8080)),
+                               user=config.get("user", "query-executor"),
+                               catalog=config.get("catalog", "hive"),
+                               schema=config.get("schema", "default"))
+    started = time.perf_counter()
+    cur = conn.cursor(); cur.execute(sql)
+    cols = [d[0] for d in cur.description]
+    return _shape(cols, cur.fetchmany(limit + 1), limit, started)
+```
 
 ---
 

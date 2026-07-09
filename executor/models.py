@@ -208,3 +208,15 @@ class DatasourceQueryRequest(BaseModel):
 
     sql: str = "SELECT 1"
     limit: int = 100
+
+
+class QueryRunRequest(BaseModel):
+    """``POST /query-run`` 요청 본문(coordinator → executor, query-execute 위임).
+
+    coordinator 가 템플릿을 렌더·검증한 SELECT 를 그대로 넘긴다. executor 는 설정
+    (``query.func.module`` + ``query.func.config.*``)으로 지정한 커스텀 함수에 이 SQL 을
+    실행 위임한다 — executor 는 Trino 등 백엔드를 직접 알지 않는다.
+    """
+
+    sql: str
+    limit: int = 100

@@ -32,7 +32,7 @@ import random
 import uuid
 from pathlib import Path
 
-from core.config_loader import load_config
+from core.config_loader import load_config, load_properties
 
 # 설정 디렉터리는 환경변수로 우선 결정하고, 없으면 운영 기본 경로를 쓴다.
 # 모듈 로드 시점에 한 번 확정되며, init_settings() 로 재로딩해도 디렉터리는 유지된다.
@@ -42,6 +42,18 @@ _properties_path: Path = _CONFIG_DIR / "config.properties"
 # _raw 는 properties 치환까지 끝난 "원시 설정 dict"(YAML 계층 구조 그대로).
 # Settings 가 이 dict 를 _get/_get_nested 로 읽어 타입이 정해진 속성으로 변환한다.
 _raw: dict = load_config(config_dir=_CONFIG_DIR)
+# _props 는 치환 전 raw properties(key=value flat). YAML 구조에 없는 **자유 정의 설정**을
+# 프리픽스로 수집하는 데 쓴다(예: query.func.config.* → 커스텀 실행 함수에 넘길 dict).
+_props: dict = load_properties(_properties_path)
+
+
+def _collect_prefix(prefix: str) -> dict:
+    """raw properties 에서 ``prefix`` 로 시작하는 키를 모아 접두어를 뗀 dict 로 반환한다.
+
+    YAML 스키마를 손대지 않고 config.properties 한 줄만 추가해 임의 설정을 넘길 수 있게 한다.
+    값은 모두 문자열이다(형변환은 소비하는 쪽 책임).
+    """
+    return {k[len(prefix):]: v for k, v in _props.items() if k.startswith(prefix)}
 
 
 def _get(section: str, key: str, default=None):
@@ -400,6 +412,12 @@ class Settings:
         self.trino_session_properties: dict[str, str] = _kv_dict(
             _get_nested("executor", "trino", "session_properties", "")
         )
+        # 커스텀 쿼리 실행 함수(query-execute 의 trino 경로 위임용). config.properties 에서
+        # 자유 정의한다: query.func.module 은 dotted path(module:func / module.func),
+        # query.func.config.* 는 함수에 넘길 설정 dict(host/port/user/... + 임의 파라미터, 문자열).
+        # YAML 스키마가 아니라 raw properties 를 직접 읽어 키를 자유롭게 추가할 수 있게 한다.
+        self.query_func_module: str = str(_props.get("query.func.module", "")).strip()
+        self.query_func_config: dict = _collect_prefix("query.func.config.")
         # Greenplum (target) — 읽어온 데이터를 적재할 대상 DB 접속 DSN.
         self.greenplum_dsn: str = _get_nested("executor", "greenplum", "dsn", "")
         # source→target 복사 시 한 번에 처리할 행 수. 메모리 사용량과 처리량의 균형값.
@@ -500,7 +518,7 @@ def init_settings(
         다른 모듈들이 재초기화 이후에도 갱신된 값을 보게 된다(객체 교체 시 생길
         오래된 참조 문제를 피하기 위함).
     """
-    global _raw, _yaml_path, _properties_path
+    global _raw, _props, _yaml_path, _properties_path
     if yaml_path:
         _yaml_path = Path(yaml_path)
     if properties_path:
@@ -510,6 +528,8 @@ def init_settings(
         yaml_path=yaml_path,
         properties_path=properties_path,
     )
+    # 자유 정의 프리픽스 수집을 위해 raw properties 도 함께 재로딩한다.
+    _props = load_properties(_properties_path)
     settings.__init__()
 
 

@@ -60,9 +60,14 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `date_range`) + 설정 `template.func_modules` 로 확장. `template_id` 미지정 시 기존 raw-SQL
   방식 그대로(하위 호환). 예제: `packaging/config/templates/sales_migration/`. 자세히는 DESIGN §18.
   **결과 반환 실행**(`POST /query-execute`, DESIGN §18.7): 같은 템플릿을 `render_query()`(select
-  조각만 렌더)로 SELECT 만 만들어 실행하고 결과(상위 N행)를 동기 반환한다. impala/trino 소스는
-  coordinator 가 `/jobs` 와 동일 정책으로 **가장 한가한 executor 를 골라 프록시**(클라이언트는 executor
-  를 모름, `dbprobe` 경로 재사용), greenplum/history 는 직접 실행. `params` 는 이름-값 항목 배열.
+  조각만 렌더)로 SELECT 만 만들어 실행하고 결과(상위 N행)를 동기 반환한다. coordinator 가 `/jobs` 와
+  동일 정책으로 **가장 한가한 executor 를 골라 프록시**(클라이언트는 executor 를 모름), greenplum/
+  history 는 직접 실행. `params` 는 이름-값 항목 배열. 응답에 `executed_by`(실행 executor, 직접이면 null).
+  **trino 는 executor 가 직접 접속하지 않고 커스텀 함수에 위임**한다 — coordinator 가 executor `/query-run`
+  으로 프록시 → executor 가 `query.func.module`(dotted path, importlib 로딩) 함수를 `run(sql, config, limit)`
+  로 호출. `config` 는 `query.func.config.*` 를 프리픽스로 모은 자유 설정 dict(`core/config.py` 의
+  `_collect_prefix`, raw properties 기반 — YAML 스키마 무관). 참조 구현·설정은 QUERY.md / `packaging/
+  config/query_funcs/trino_runner.py`. (impala 는 built-in `/datasources/impala/query` 유지.)
 - `coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
 - `coordinator/stage.py` — **`local_stage`(file:// 세그먼트 로컬 스테이징) Phase 2 SQL 조립**(순수
   함수): `file://` 외부테이블 DDL·staging 적재·멱등 DELETE·정리 SQL, 파일 예산 배분

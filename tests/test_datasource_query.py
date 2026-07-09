@@ -187,3 +187,85 @@ def test_coordinator_proxy_propagates_error(client, monkeypatch):
     )
     assert r.status_code == 502
     assert "auth error" in r.json()["detail"]
+
+
+# ---------------------- executor /query-run (커스텀 함수 위임) ----------------------
+
+async def test_query_run_calls_custom_func(monkeypatch):
+    # 설정에 커스텀 함수가 지정되면 sql/config/limit 이 그대로 전달되고 결과가 반환된다.
+    monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
+    monkeypatch.setattr(core_config.settings, "query_func_config",
+                        {"host": "trino.example.com", "port": "8080"}, raising=False)
+    captured = {}
+
+    def fake_fn(sql, *, config, limit):
+        captured.update(sql=sql, config=config, limit=limit)
+        return QueryResult(columns=["a"], rows=[[1]], row_count=1, truncated=False, elapsed_ms=2.0)
+
+    import executor.app as ea
+    monkeypatch.setattr(ea, "_load_query_func", lambda dotted: fake_fn)
+    async with _exec_client(create_executor_app()) as c:
+        r = await c.post("/query-run", json={"sql": "SELECT 42", "limit": 50})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["columns"] == ["a"] and body["rows"] == [[1]] and body["limit"] == 50
+    # 커스텀 함수는 sql·자유 설정 dict·limit 을 그대로 넘겨받는다.
+    assert captured == {"sql": "SELECT 42", "config": {"host": "trino.example.com", "port": "8080"}, "limit": 50}
+
+
+async def test_query_run_accepts_dict_return(monkeypatch):
+    # 함수가 QueryResult 대신 동일 키 dict 를 반환해도 그대로 응답에 실린다.
+    monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
+    import executor.app as ea
+    monkeypatch.setattr(ea, "_load_query_func", lambda dotted: (
+        lambda sql, *, config, limit: {
+            "columns": ["x"], "rows": [["v"]], "row_count": 1, "truncated": False, "elapsed_ms": 1.0}))
+    async with _exec_client(create_executor_app()) as c:
+        r = await c.post("/query-run", json={"sql": "SELECT 1"})
+    assert r.status_code == 200 and r.json()["columns"] == ["x"]
+
+
+async def test_query_run_unconfigured_400(monkeypatch):
+    monkeypatch.setattr(core_config.settings, "query_func_module", "", raising=False)
+    async with _exec_client(create_executor_app()) as c:
+        r = await c.post("/query-run", json={"sql": "SELECT 1"})
+    assert r.status_code == 400
+
+
+async def test_query_run_func_error_502(monkeypatch):
+    monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
+    import executor.app as ea
+
+    def boom(sql, *, config, limit):
+        raise RuntimeError("gateway down")
+
+    monkeypatch.setattr(ea, "_load_query_func", lambda dotted: boom)
+    async with _exec_client(create_executor_app()) as c:
+        r = await c.post("/query-run", json={"sql": "SELECT 1"})
+    assert r.status_code == 502 and "gateway down" in r.json()["detail"]
+
+
+def test_load_query_func_resolves_and_validates():
+    import pytest
+    import core.dbprobe as dbp
+    from executor.app import _load_query_func
+    # module:func / module.func 두 표기 모두 동일 함수를 찾는다(캐시 재사용).
+    assert _load_query_func("core.dbprobe:clamp_limit") is dbp.clamp_limit
+    assert _load_query_func("core.dbprobe.clamp_limit") is dbp.clamp_limit
+    with pytest.raises(ValueError):
+        _load_query_func("no_such_module_zzz:foo")       # import 실패
+    with pytest.raises(ValueError):
+        _load_query_func("core.dbprobe:NOPE")            # getattr 실패
+    with pytest.raises(ValueError):
+        _load_query_func("core.dbprobe:MAX_PREVIEW_ROWS")  # 호출 불가(정수)
+
+
+def test_collect_prefix_free_config(monkeypatch):
+    # config.properties 의 query.func.config.* 프리픽스를 접두어 제거해 dict 로 수집한다.
+    import core.config as cc
+    monkeypatch.setattr(cc, "_props", {
+        "query.func.module": "pkg.mod:run",
+        "query.func.config.host": "h", "query.func.config.port": "8080",
+        "query.func.config.token": "abc", "other.key": "ignored",
+    })
+    assert cc._collect_prefix("query.func.config.") == {"host": "h", "port": "8080", "token": "abc"}

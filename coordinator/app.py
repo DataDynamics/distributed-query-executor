@@ -1028,14 +1028,26 @@ def create_app(
         start = next(_qe_rr) % len(cand)
         return cand[start:] + cand[:start]
 
+    # query-execute 의 datasource → executor 엔드포인트 경로 매핑. trino 는 executor 에 설정된
+    # 커스텀 실행 함수(/query-run)에 위임하고, impala 는 기존 built-in 미리보기 경로를 쓴다.
+    _QE_ENDPOINT = {
+        "trino": "/query-run",
+        "impala": "/datasources/impala/query",
+    }
+
     async def _run_source_query(name: str, sql: str, limit: int) -> dict:
         """렌더된 SELECT 를 소스(impala/trino) executor 에 프록시 실행해 결과 dict 를 돌려준다.
 
-        _pick_executor_order 로 정한 순서대로 시도하고, **연결(transport) 실패** 시 다음
-        executor 로 failover 한다(SELECT 는 멱등이라 재시도 안전). executor 가 도달 후 돌려준
-        4xx/5xx(SQL 오류·미구성 등)는 확정 응답이므로 failover 하지 않고 그대로 전달한다.
-        성공한 executor URL 은 관측용으로 응답 dict 의 ``executed_by`` 에 실어 돌려준다.
+        대상 엔드포인트는 ``_QE_ENDPOINT`` 로 정한다 — trino 는 executor 의 커스텀 실행 함수
+        위임 경로(``/query-run``), impala 는 built-in 미리보기 경로. _pick_executor_order 로
+        정한 순서대로 시도하고, **연결(transport) 실패** 시 다음 executor 로 failover 한다
+        (SELECT 는 멱등이라 재시도 안전). executor 가 도달 후 돌려준 4xx/5xx(SQL 오류·미구성 등)는
+        확정 응답이므로 failover 하지 않고 그대로 전달한다. 성공한 executor URL 은 관측용으로
+        응답 dict 의 ``executed_by`` 에 실어 돌려준다.
         """
+        path = _QE_ENDPOINT.get(name)
+        if path is None:
+            raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {name}")
         order = _pick_executor_order()
         if not order:
             raise HTTPException(
@@ -1046,7 +1058,7 @@ def create_app(
         last_err: Optional[Exception] = None
         async with httpx.AsyncClient(timeout=timeout) as http:
             for url in order:
-                target = url.rstrip("/") + f"/datasources/{name}/query"
+                target = url.rstrip("/") + path
                 try:
                     resp = await http.post(target, json={"sql": sql, "limit": limit})
                 except httpx.HTTPError as e:
@@ -1112,7 +1124,8 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {datasource}")
 
         # 렌더된 SQL(감사용)과 실제 실행 executor(executed_by, 직접 실행이면 null)를 함께 반환.
-        return {"template_id": req.template_id, "sql": sql, **body}
+        # datasource 는 항상 확정값으로 싣는다(trino /query-run 응답엔 datasource 가 없으므로 보정).
+        return {"template_id": req.template_id, "datasource": datasource, "sql": sql, **body}
 
     # 대시보드는 설정으로 끌 수 있다(예: 외부 노출 환경에서 비활성화).
     # 활성화된 경우에만 루트 HTML 및 설정/정보 API 라우트를 등록한다.
