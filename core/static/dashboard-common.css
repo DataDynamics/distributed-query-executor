@@ -78,6 +78,12 @@ tr:hover td { background:#f6f8fa; }
            color:var(--mut); font-size:13px; }
 .filters input, .filters select { background:var(--panel); color:var(--fg);
   border:1px solid var(--line); border-radius:6px; padding:5px 8px; font:inherit; }
+/* 쿼리 실행(query-execute) 탭: 템플릿 파라미터 입력 폼(자동 갱신에 지워지지 않는 정적 영역) */
+.qe-params { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.qe-field { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--mut); }
+.qe-field em { font-style:normal; margin-left:5px; font-size:11px; opacity:.75; }
+.qe-field input { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  border-radius:6px; padding:5px 8px; font:inherit; min-width:180px; }
 /* 데이터소스 미리보기 SQL 입력창 */
 .sqlbox { width:100%; min-height:90px; resize:vertical; background:#f6f8fa;
   border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:10px;

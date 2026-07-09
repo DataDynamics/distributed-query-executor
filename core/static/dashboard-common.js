@@ -117,7 +117,7 @@ async function postJSON(u, payload){
   const r = await fetch(u, opts);
   let body = null;
   try{ body = await r.json(); }catch(_e){ body = null; }
-  if(!r.ok) throw new Error((body&&body.detail) || (r.status+' '+r.statusText));
+  if(!r.ok) throw new Error((body&&(body.detail||body.message)) || (r.status+' '+r.statusText));
   return body;
 }
 
@@ -186,12 +186,18 @@ async function runDatasourceQuery(extra){
     renderProbeResult(d);
   }catch(e){ $("#ds-out").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
-// dbprobe 응답({columns, rows(배열의 배열), row_count, truncated, elapsed_ms})을 표로 렌더링.
-function renderProbeResult(d){
-  $("#ds-meta").textContent =
-    `${Number(d.row_count||0).toLocaleString('en-US')}행${d.truncated?' (잘림)':''} · ${d.elapsed_ms}ms`;
+// dbprobe/query-execute 응답({columns, rows(배열의 배열), row_count, truncated, elapsed_ms})을
+// 표로 렌더링한다. metaSel/outSel 로 대상 요소를 지정(기본은 데이터소스 콘솔의 #ds-meta/#ds-out).
+// 실제 실행한 executor 도 메타에 함께 보여준다 — query-execute 는 executed_by, 데이터소스
+// 프록시는 proxied_to 로 오며, coordinator 직접 실행(둘 다 없음/null)이면 executor 표기를 생략한다.
+function renderProbeResult(d, metaSel, outSel){
+  metaSel = metaSel || "#ds-meta"; outSel = outSel || "#ds-out";
+  const who = d.executed_by || d.proxied_to;
+  $(metaSel).textContent =
+    `${Number(d.row_count||0).toLocaleString('en-US')}행${d.truncated?' (잘림)':''} · ${d.elapsed_ms}ms`
+    + (who ? ` · 실행 executor: ${who}` : '');
   const cols = (d.columns||[]).map((c,i)=>({t:esc(c), f:r=>fmt(r[i])}));
-  $("#ds-out").innerHTML = cols.length ? table(cols, d.rows||[]) : '<p class="mut">결과 없음</p>';
+  $(outSel).innerHTML = cols.length ? table(cols, d.rows||[]) : '<p class="mut">결과 없음</p>';
 }
 
 // ---- 탭 전환 + 자동 갱신 ----

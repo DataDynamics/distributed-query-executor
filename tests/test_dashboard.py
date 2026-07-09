@@ -31,6 +31,14 @@ def test_dashboard_html_served(client):
     assert "Query Coordinator 모니터링" in r.text
 
 
+def test_dashboard_has_query_execute_panel(client):
+    # 쿼리 실행(query-execute) 전용 탭·패널과 배선 함수가 대시보드에 포함돼 있어야 한다.
+    html = client.get("/").text
+    assert 'data-tab="qe"' in html and 'id="p-qe"' in html
+    assert "loadQe" in html and "runQe" in html
+    assert "/query-execute" in html
+
+
 def test_config_endpoint(client):
     body = client.get("/config").json()
     assert "config" in body and isinstance(body["config"], list)

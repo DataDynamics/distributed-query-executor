@@ -11,14 +11,69 @@
 
 ---
 
+## 실행 절차
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client / 대시보드
+    participant CO as Coordinator
+    participant EX as Executor (선택됨)
+    participant SRC as Source (Trino/Impala)
+    participant GP as Greenplum/History
+
+    C->>CO: POST /query-execute {template_id, params[], datasource?, limit}
+    Note over CO: 1) params[] → {name: value} 로 접기 (중복 name → 422)
+    CO->>CO: 2) 템플릿 렌더 render_query() — select 조각만
+    CO->>CO: 3) validate_select_query() — 단일 행반환 SELECT 검증
+    Note over CO: 렌더/검증 실패 → 422 (error_code)
+
+    alt datasource = greenplum / history
+        CO->>GP: 렌더된 SELECT 직접 실행 (psycopg)
+        GP-->>CO: 상위 N행 (executed_by = null)
+    else datasource = impala / trino
+        Note over CO: executor 선택 = /jobs 와 동일 정책<br/>(least_loaded / p2c / round_robin)
+        CO->>EX: POST /datasources/{ds}/query {sql, limit}
+        Note over CO,EX: 연결 실패 시 다음 executor 로 failover
+        EX->>SRC: 렌더된 SELECT 실행
+        SRC-->>EX: 상위 N행
+        EX-->>CO: 결과 (executed_by = 실행 executor URL)
+    end
+    CO-->>C: {template_id, datasource, sql, columns, rows, row_count, truncated, limit, elapsed_ms, executed_by}
+```
+
+---
+
 ## 예제 템플릿: `order_search`
 
 `packaging/config/templates/order_search/` 에 포함된 query-execute 전용 예제다. **WHERE 절에
 지역 `IN` 목록(N개)** 과 **주문일 `BETWEEN` 날짜 구간**을 조합해 주문을 조회한다.
 
-### 파라미터 스키마 (`manifest.yml`)
+### `manifest.yml`
 
-| 이름 | 타입 | 필수 | 기본값 | 설명 |
+```yaml
+# query-execute 전용 예제 템플릿 — 주문 조회.
+id: order_search
+description: 주문 조회(query-execute 예제) — region IN 목록 + 주문일 BETWEEN 구간
+
+# query-execute 는 select 조각만 렌더하지만, manifest 규약상 exec_mode 를 둔다(copy).
+# partition_column 등 이관용 스칼라는 query-execute 경로에서 쓰이지 않는다.
+exec_mode: copy
+strict_validation: false            # 렌더 SELECT 에 ORDER BY 등이 있어 lenient 로 둔다
+
+# 파라미터 스키마 — 필수/타입/기본값을 선언한다. 렌더 전 검증에 쓰인다.
+params:
+  - {name: regions,    type: list,   required: true}            # IN 목록(N개 지역 코드)
+  - {name: start_dt,   type: date,   required: true}            # BETWEEN 시작일(YYYY-MM-DD)
+  - {name: end_dt,     type: date,   required: true}            # BETWEEN 종료일(YYYY-MM-DD)
+  - {name: min_amount, type: number, required: false, default: 0}  # 최소 주문금액(0=조건 생략)
+
+# role → 조각 파일 매핑. query-execute 는 select 만 있으면 된다.
+files:
+  select: select.sql.j2
+```
+
+| 파라미터 | 타입 | 필수 | 기본값 | 설명 |
 |---|---|---|---|---|
 | `regions` | list | ✅ | — | `region IN (...)` 에 전개될 지역 코드 목록(N개) |
 | `start_dt` | date | ✅ | — | `order_dt BETWEEN` 시작일(YYYY-MM-DD) |
@@ -140,6 +195,80 @@ curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
   "datasource": "trino"
 }'
 ```
+
+---
+
+## 대시보드에서 실행 (`쿼리 실행` 탭)
+
+coordinator 대시보드(`/`)의 **`쿼리 실행`** 탭에서 브라우저로 바로 실행할 수 있다.
+
+1. **템플릿** 을 고르면 그 템플릿의 파라미터 스키마대로 입력 필드가 생성된다(`list` 타입은
+   쉼표로 구분해 입력: `KR, US, JP`).
+2. **데이터소스** 를 고른다(생략 시 서버 `source.type`). 예: `trino`.
+3. **상위 N행** 과 함께 **실행** 을 누르면 `POST /query-execute` 가 호출되고, 결과 표와 메타가
+   표시된다 — 메타에는 행수·소요시간과 함께 **`실행 executor: <URL>`**(= `executed_by`)이 나온다.
+
+렌더/검증/실행 오류는 결과 영역에 `error_code`·메시지로 표시된다.
+
+---
+
+## 설정 (coordinator · executor)
+
+"이관은 Impala, query-execute 는 Trino, 적재는 Greenplum" 라우팅을 쓰려면 아래처럼 설정한다
+(`config.properties`).
+
+### Coordinator
+
+```properties
+# 쿼리 템플릿 엔진 — query-execute 가 템플릿을 렌더하려면 반드시 활성.
+template.enabled=true
+template.dir=packaging/config/templates      # 템플릿 루트(운영은 배포 경로)
+
+# 프록시 대상 executor 목록(쉼표 구분). query-execute 의 impala/trino 실행은 이 중에서 고른다.
+coordinator.executors=http://exec1:8001,http://exec2:8001
+
+# executor 선택 정책 — query-execute 도 /jobs 와 동일하게 이 값을 따른다.
+#   round_robin(기본) | least_loaded(가장 한가) | p2c(HA 권장)
+coordinator.executor_select=p2c
+```
+
+> `template.enabled=false` 면 `/query-execute` 는 404, `coordinator.executors` 가 비어 있으면
+> impala/trino 실행은 400 이다(greenplum/history 직접 실행은 executor 불필요).
+
+### Executor
+
+query-execute 를 **Trino** 로 실행하되 이관(`/jobs`)은 **Impala** 로 읽으려면, executor 에
+`impala.*` 와 `trino.*` 접속 정보가 **둘 다** 있어야 한다(둘은 독립적으로 붙는다).
+
+```properties
+# 이관(/jobs)의 읽기 소스 — Impala 로 둔다(#2). query-execute 는 요청의 datasource 로 오버라이드.
+source.type=impala
+
+# Impala (source, 이관 읽기용)
+impala.host=impala-coordinator.example.com
+impala.port=21050
+impala.database=default
+impala.user=etl
+
+# Trino (source, query-execute 실행용) — datasource=trino 로 요청하면 이 접속을 쓴다.
+trino.host=trino.example.com
+trino.port=8080
+trino.user=query-executor
+trino.catalog=hive
+trino.schema=default
+trino.http_scheme=http
+
+# Greenplum (target, 이관 적재 대상 = INSERT #3)
+greenplum.dsn=postgresql://gpadmin:pw@gp-master:5432/warehouse
+```
+
+정리하면:
+
+| 기능 | 붙는 곳 | 설정 |
+|---|---|---|
+| 이관 SELECT(`/jobs`) | Impala | `source.type=impala` + `impala.*` |
+| 이관 INSERT(`/jobs`) | Greenplum | `greenplum.dsn` |
+| query-execute | Trino | 요청 `datasource:"trino"` + `trino.*` |
 
 ---
 

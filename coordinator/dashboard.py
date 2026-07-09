@@ -183,6 +183,7 @@ DASHBOARD_HTML = """<!doctype html>
   <button data-tab="hist">실행 이력</button>
   <button data-tab="exec">Executor</button>
   <button data-tab="tpl">템플릿</button>
+  <button data-tab="qe">쿼리 실행</button>
   <button data-tab="ds">데이터소스</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
@@ -205,6 +206,17 @@ DASHBOARD_HTML = """<!doctype html>
   </section>
   <section class="panel" id="p-exec"></section>
   <section class="panel" id="p-tpl"></section>
+  <section class="panel" id="p-qe">
+    <div class="filters">
+      템플릿 <select id="qe-tpl" onchange="qeOnTemplate()"></select>
+      데이터소스 <select id="qe-ds"></select>
+      상위 <input id="qe-limit" type="number" value="100" min="1" max="10000" style="width:80px"> 행
+      <button class="btn" onclick="runQe()">실행</button>
+      <span class="mut" id="qe-meta"></span>
+    </div>
+    <div id="qe-params" class="qe-params"></div>
+    <div id="qe-out" class="mut">템플릿을 선택하고 파라미터를 입력한 뒤 실행하면 결과가 표시됩니다.</div>
+  </section>
   <section class="panel" id="p-ds">
     <div class="filters">
       데이터소스 <select id="ds-name"></select>
@@ -403,6 +415,73 @@ async function loadTpl(){
     '<p class="mut">클라이언트는 POST /jobs 에 SQL 전문 대신 template_id + params 를 보내 실행할 수 있습니다.</p>'
     + table(cols, d.templates||[]);
 }
+// 쿼리 실행 탭: 템플릿 선택 → 파라미터 입력 → POST /query-execute → 결과+executed_by 표시.
+// 자동 갱신(refresh)마다 폼/결과가 지워지지 않도록 초기화(select 채움)는 1회만 하고, 결과는
+// 실행 버튼을 누를 때만 갱신한다(loadDs 와 동일한 정적 영역 원칙).
+let qeInit = false, qeTemplates = [];
+async function loadQe(){
+  if(qeInit) return;
+  const d = await getJSON("/templates");
+  if(!d.enabled){
+    $("#p-qe").innerHTML = '<p class="mut">쿼리 템플릿 엔진(template.enabled)이 비활성입니다. ' +
+      '활성화하면 템플릿을 골라 파라미터를 입력하고 POST /query-execute 로 실행할 수 있습니다.</p>';
+    qeInit = true; return;
+  }
+  qeTemplates = d.templates || [];
+  $("#qe-tpl").innerHTML = qeTemplates.map(t=>
+    `<option value="${esc(t.template_id)}">${esc(t.template_id)}</option>`).join('');
+  // 데이터소스 목록: 생략 시 서버 source.type. local + via_executor 를 합쳐 선택지로 제공한다.
+  const ds = await getJSON("/datasources");
+  const names = [];
+  for(const s of (ds.local||[])) names.push(s.name);
+  for(const n of (ds.via_executor||[])) if(!names.includes(n)) names.push(n);
+  $("#qe-ds").innerHTML = '<option value="">(기본: source.type)</option>' +
+    names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  qeOnTemplate();
+  qeInit = true;
+}
+// 선택된 템플릿의 파라미터 스키마로 입력 필드를 생성한다(list 는 쉼표 구분 안내).
+function qeOnTemplate(){
+  const t = qeTemplates.find(x=>x.template_id===$("#qe-tpl").value);
+  const params = (t && t.params) || [];
+  if(!params.length){ $("#qe-params").innerHTML = '<p class="mut">이 템플릿은 파라미터가 없습니다.</p>'; return; }
+  $("#qe-params").innerHTML = params.map(p=>{
+    const req = p.required ? ' *' : '';
+    const ph = p.type==='list' ? '쉼표로 구분(예: KR, US, JP)'
+      : ((p.default!==undefined && p.default!==null) ? '기본: '+JSON.stringify(p.default) : p.type);
+    return `<label class="qe-field"><span>${esc(p.name)}<em>${esc(p.type)}${req}</em></span>`+
+           `<input data-pname="${esc(p.name)}" data-ptype="${esc(p.type)}" placeholder="${esc(ph)}"></label>`;
+  }).join('');
+}
+// 입력값을 [{name,value}] 배열로 만든다. 빈 값은 생략(서버가 기본값/필수 검증 담당).
+// list 는 쉼표로 분리한 배열, 숫자 타입은 Number 로 변환, 그 외는 문자열 그대로.
+function qeCollectParams(){
+  const out = [];
+  document.querySelectorAll('#qe-params input[data-pname]').forEach(el=>{
+    const raw = el.value.trim();
+    if(raw==='') return;
+    const type = el.dataset.ptype;
+    let value;
+    if(type==='list') value = raw.split(',').map(s=>s.trim()).filter(s=>s!=='');
+    else if(type==='int'||type==='integer'||type==='float'||type==='number') value = Number(raw);
+    else value = raw;
+    out.push({name: el.dataset.pname, value: value});
+  });
+  return out;
+}
+async function runQe(){
+  const tid = $("#qe-tpl").value;
+  if(!tid){ alert('템플릿을 선택하세요'); return; }
+  const body = { template_id: tid, params: qeCollectParams(),
+                 limit: Math.max(1, parseInt($("#qe-limit").value, 10) || 100) };
+  const ds = $("#qe-ds").value; if(ds) body.datasource = ds;
+  $("#qe-meta").textContent = '';
+  $("#qe-out").innerHTML = '<p class="mut">실행 중…</p>';
+  try{
+    const d = await postJSON("/query-execute", body);
+    renderProbeResult(d, "#qe-meta", "#qe-out");
+  }catch(e){ $("#qe-out").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
 // 데이터소스 탭 초기화(1회): 소스/실행 위치 select 를 채운다. 결과 영역은 실행 시에만 갱신
 // (자동 갱신 주기마다 입력/결과가 지워지지 않도록 이 로더는 재호출 시 아무것도 안 한다).
 let dsInit = false;
@@ -468,7 +547,7 @@ async function loadInfo(){
 }
 getJSON("/info").then(d=>{ $("#hdr").textContent =
   `id=${d.coordinator_id} · mode=${d.executor_mode} · store=${d.store_backend} · select=${d.executor_select} · v${d.version}`; });
-initDashboard({jobs:loadJobs, hist:loadHist, exec:loadExec, tpl:loadTpl, ds:loadDs,
+initDashboard({jobs:loadJobs, hist:loadHist, exec:loadExec, tpl:loadTpl, qe:loadQe, ds:loadDs,
                conf:loadConf, info:loadInfo}, "jobs");
 </script>
 </body>
