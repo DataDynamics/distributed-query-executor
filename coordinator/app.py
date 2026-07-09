@@ -52,12 +52,19 @@ from .models import (
     DatasourceQueryRequest,
     Job,
     JobStatus,
+    QueryExecuteRequest,
     Task,
     TaskStatus,
     new_job_id,
 )
 from .monitor import HealthMonitor
-from .parser import QueryValidationError, is_row_returning, validate_and_parse
+from .parser import (
+    DIALECT,
+    QueryValidationError,
+    is_row_returning,
+    validate_and_parse,
+    validate_select_query,
+)
 from .reservation import ReservationRepository, ReservingLoadView
 from .selector import ExecutorSelector, SharedLoadView
 from .splitter import split, wrap
@@ -85,6 +92,21 @@ def _assign_executors(count: int, executors: list[str]) -> list[Optional[str]]:
         return [None] * count
     cycle = itertools.cycle(executors)
     return [next(cycle) for _ in range(count)]
+
+
+def _query_params_to_dict(params: list) -> dict:
+    """``/query-execute`` 의 params 배열([{name, value}])을 렌더용 ``{name: value}`` dict 로 접는다.
+
+    같은 name 이 두 번 오면(모호함) 422 로 거부한다. 타입/필수 검증은 이후 템플릿 엔진의
+    ``ParamSpec`` 이 하므로 여기서는 형태(이름 유일성)만 본다.
+    """
+    out: dict = {}
+    for item in params:
+        name = item.name
+        if name in out:
+            raise QueryValidationError("DUPLICATE_PARAM", f"중복된 파라미터 이름: {name}")
+        out[name] = item.value
+    return out
 
 
 def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
@@ -986,6 +1008,107 @@ def create_app(
         except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
             raise HTTPException(status_code=502, detail=f"{name} 쿼리 실패: {e}")
         return {"datasource": name, "limit": limit, **result.to_dict()}
+
+    # /query-execute 의 라운드로빈 폴백용 회전 카운터(헬스 기반 선택이 꺼진 기본 정책).
+    # 앱 인스턴스별 상태 — 요청마다 시작 executor 를 한 칸씩 돌려 단일 쿼리도 분산시킨다.
+    _qe_rr = itertools.count()
+
+    def _pick_executor_order() -> list:
+        """query-execute 가 소스 쿼리를 보낼 executor 시도 순서를 만든다.
+
+        /jobs 디스패치와 **같은 선택 정책**을 쓴다 — 헬스/부하 기반 선택(least_loaded/p2c)이
+        켜져 있으면 selector+load_view 로 '가장 한가한' 순서를, 아니면 라운드로빈으로 회전한
+        순서를 반환한다. 클라이언트는 어떤 executor 가 뽑히는지 알 필요가 없다.
+        """
+        cand = [u for u in settings.executors if u]
+        if not cand:
+            return []
+        if selector is not None and load_view is not None:
+            return selector.order(list(cand), load_view.by_url())
+        start = next(_qe_rr) % len(cand)
+        return cand[start:] + cand[:start]
+
+    async def _run_source_query(name: str, sql: str, limit: int) -> dict:
+        """렌더된 SELECT 를 소스(impala/trino) executor 에 프록시 실행해 결과 dict 를 돌려준다.
+
+        _pick_executor_order 로 정한 순서대로 시도하고, **연결(transport) 실패** 시 다음
+        executor 로 failover 한다(SELECT 는 멱등이라 재시도 안전). executor 가 도달 후 돌려준
+        4xx/5xx(SQL 오류·미구성 등)는 확정 응답이므로 failover 하지 않고 그대로 전달한다.
+        어떤 executor 가 실행했는지는 로그로만 남기고 응답에는 싣지 않는다.
+        """
+        order = _pick_executor_order()
+        if not order:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{name} 실행에 필요한 executor 가 설정되지 않았습니다(coordinator.executors 비어 있음)",
+            )
+        timeout = httpx.Timeout(settings.task_timeout_s, connect=settings.task_connect_timeout_s)
+        last_err: Optional[Exception] = None
+        async with httpx.AsyncClient(timeout=timeout) as http:
+            for url in order:
+                target = url.rstrip("/") + f"/datasources/{name}/query"
+                try:
+                    resp = await http.post(target, json={"sql": sql, "limit": limit})
+                except httpx.HTTPError as e:
+                    last_err = e
+                    logger.warning("query-execute 프록시 실패, 다음 executor 로 failover: %s (%s)", url, e)
+                    continue
+                if resp.status_code >= 400:
+                    try:
+                        payload = resp.json()
+                        detail = payload.get("detail") if isinstance(payload, dict) else None
+                    except Exception:
+                        detail = None
+                    raise HTTPException(status_code=resp.status_code, detail=detail or resp.text)
+                logger.info("query-execute 실행 executor=%s datasource=%s", url, name)
+                return resp.json()
+        raise HTTPException(status_code=502, detail=f"모든 executor 프록시 실패({name}): {last_err}")
+
+    @app.post(
+        "/query-execute",
+        tags=["Query"],
+        summary="템플릿+파라미터로 SELECT 를 실행하고 결과(상위 N행)를 반환",
+    )
+    async def query_execute(req: QueryExecuteRequest):
+        """서버 템플릿을 params 로 렌더해 SELECT 를 만들고, 지정 데이터소스에 실행해 상위 N행을 반환한다.
+
+        ``/jobs``(이관)와 달리 결과를 동기로 돌려주는 미리보기성 실행이다. impala/trino 소스는
+        coordinator 에 드라이버가 없어 부하가 가장 낮은 executor 를 골라 프록시하고(클라이언트는
+        executor 를 모른다), greenplum/history 는 coordinator 가 직접 실행한다. 응답 크기는
+        ``limit``(최대 10000)으로 강제한다 — 대량 이관은 계속 ``/jobs`` 를 쓴다.
+        """
+        if template_engine is None:
+            raise HTTPException(
+                status_code=404, detail="템플릿 엔진이 비활성화돼 있습니다(template.enabled=false)"
+            )
+        limit = clamp_limit(req.limit)
+        params = _query_params_to_dict(req.params)
+
+        # 1) 템플릿에서 select 조각만 렌더(TemplateError → 422 핸들러).
+        sql = template_engine.render_query(req.template_id, params)
+        # 2) 경량 검증: 단일 행 반환 SELECT 인지(다중 문/비-SELECT 차단, QueryValidationError → 422).
+        validate_select_query(sql, dialect=req.sql_dialect or DIALECT)
+
+        # 3) 데이터소스 결정(요청 > 서버 source.type).
+        datasource = (req.datasource or getattr(settings, "source_type", "impala") or "impala").lower()
+
+        # 4) 실행: greenplum/history 는 coordinator 직접, impala/trino 는 executor 프록시.
+        if datasource in ("greenplum", "history"):
+            dsn = settings.greenplum_dsn if datasource == "greenplum" else settings.history_db_dsn
+            if not dsn:
+                raise HTTPException(status_code=400, detail=f"{datasource} 접속 정보(dsn) 미설정")
+            try:
+                result = await asyncio.to_thread(run_postgres_select, dsn, sql, limit=limit)
+            except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
+                raise HTTPException(status_code=502, detail=f"{datasource} 쿼리 실패: {e}")
+            body = {"datasource": datasource, "limit": limit, **result.to_dict()}
+        elif datasource in ("impala", "trino"):
+            body = await _run_source_query(datasource, sql, limit)
+        else:
+            raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {datasource}")
+
+        # 렌더된 SQL 은 감사용으로 함께 반환. 선택된 executor 는 노출하지 않는다.
+        return {"template_id": req.template_id, "sql": sql, **body}
 
     # 대시보드는 설정으로 끌 수 있다(예: 외부 노출 환경에서 비활성화).
     # 활성화된 경우에만 루트 HTML 및 설정/정보 API 라우트를 등록한다.

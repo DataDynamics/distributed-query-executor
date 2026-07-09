@@ -944,6 +944,19 @@ flowchart LR
 
 **테스트**: `tests/test_template.py` — 커스텀 함수/인젝션 이스케이프, 엔진 렌더(파라미터 검증·exec_mode 별 조각·단일 문 검사·경로 탈출), API 통합(예제 템플릿 `sales_migration`), 하위 호환까지 실 DB 없이 검증.
 
+### 18.7 결과 반환 실행 (`POST /query-execute`)
+
+`POST /jobs` 가 **이관**(Impala→Greenplum, 결과가 coordinator 를 거치지 않음)인 반면, `POST /query-execute` 는 같은 템플릿을 렌더한 SELECT 를 실행해 **결과(상위 N행)를 클라이언트에 동기로 돌려주는** 미리보기성 실행입니다. 사실상 §18 템플릿 엔진과 `/datasources` 미리보기(`core/dbprobe.py`)를 합친 것입니다.
+
+- **요청**: `template_id` + `params`(이름-값 항목 **배열** `[{name, value}, ...]`) + `datasource`(선택, 미지정 시 `source.type`) + `limit`(1~10000). 배열은 내부에서 `{name: value}` dict 로 접혀 기존 렌더 경로(`ParamSpec` 검증·`sql_in` 이스케이프)를 그대로 탑니다. 같은 이름이 두 번 오면 `422 DUPLICATE_PARAM`.
+- **렌더**: `TemplateEngine.render_query()` 가 **`select` 조각만** 렌더합니다(이관용 `render()` 와 달리 exec_mode 별 insert/staging 조각을 요구하지 않아 어떤 템플릿이든 동작). 렌더된 SELECT 는 `validate_select_query()` 로 **단일 행 반환 SELECT** 인지 검증합니다(다중 문·비-SELECT 차단; 값은 이미 템플릿 필터로 이스케이프되지만 구조 방어를 한 겹 더 둠).
+- **실행 위치 — 클라이언트는 executor 를 모른다**: `greenplum`/`history` 는 coordinator 가 직접(psycopg) 실행하고, `impala`/`trino` 는 coordinator 에 드라이버가 없어 **executor 로 프록시**합니다. 이때 대상 executor 는 클라이언트가 지정하지 않고, coordinator 가 **`/jobs` 디스패치와 동일한 선택 정책**(`coordinator.executor_select` — 헬스/부하 기반 `least_loaded`/`p2c` 면 '가장 한가한' executor, 기본 `round_robin` 이면 회전)으로 고릅니다. 연결(transport) 실패 시 다음 executor 로 failover 하며(SELECT 는 멱등), executor 가 도달 후 돌려준 4xx/5xx(SQL 오류·미구성)는 확정 응답이므로 failover 없이 그대로 전달합니다. 선택된 executor 는 **로그로만** 남기고 응답에는 싣지 않습니다.
+- **응답**: `{template_id, datasource, sql(감사용 렌더 SQL), columns, rows, row_count, truncated, limit, elapsed_ms}` — `columns`/`rows`/… 는 `dbprobe.QueryResult` shape 과 동일합니다.
+- **이관 소스와의 분리**: `datasource` 를 생략하면 전역 `source.type` 을 기본으로 쓰지만, 요청에 명시하면 그 소스로 라우팅됩니다. 이 덕분에 "이관(`/jobs`)은 Impala 읽기 → Greenplum 적재, query-execute 는 Trino 실행" 처럼 **읽기 소스를 기능별로 다르게** 둘 수 있습니다 — `source.type=impala` 로 두고 query-execute 요청에 `datasource:"trino"` 를 명시하면 됩니다. 단, 이 경우 executor 에 `impala.*` 와 `trino.*` 접속 정보가 **둘 다** 있어야 합니다(전역 `source.type` 하나로 두 기본값을 동시에 나눌 수는 없으므로, 실행 소스는 요청이 지정).
+- **경계**: 결과가 coordinator 메모리를 거치므로 `limit`(≤10000)으로 응답 크기를 강제하는 **미리보기 규모 전용**입니다. 대량 이관은 계속 `/jobs`. 또한 executor 의 `/datasources/{name}/query` 는 task 세마포어(`max_concurrent_tasks`)를 거치지 않으므로, 무거운 사용이 예상되면 별도 동시성 가드를 후속으로 고려합니다.
+
+**테스트**: `tests/test_query_execute.py` — `render_query`(select-only), coordinator 직접 실행(greenplum), 소스 executor 프록시·failover·오류 전파, executor 미설정 400, 중복/필수 param·템플릿 없음·엔진 비활성 등 에러 경로를 실 DB 없이 검증.
+
 ---
 
 ## 19. 향후 확장

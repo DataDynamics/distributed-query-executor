@@ -320,6 +320,33 @@ class TemplateEngine:
             defaults=dict(manifest.defaults),
         )
 
+    def render_query(self, template_id: str, params: dict) -> str:
+        """``/query-execute`` 전용 — **select 조각만** 렌더해 SELECT 문자열을 반환한다.
+
+        :meth:`render`(이관용)와 달리 exec_mode 별 insert/staging 조각을 요구하지 않는다.
+        결과를 바로 돌려주는 실행이라 SELECT 하나면 충분하므로, 어떤 exec_mode 템플릿이든
+        select 조각만 있으면 동작한다. 파라미터 검증(필수/타입/기본값)·인젝션 방지 필터·
+        StrictUndefined 는 :meth:`render` 와 완전히 같은 경로를 탄다.
+
+        manifest 의 스칼라 기본값(target_table 등)도 렌더 컨텍스트에 노출해 select 템플릿이
+        참조할 수 있게 하되, 같은 이름의 param 이 있으면 param 이 우선한다(setdefault).
+        """
+        manifest = self.load_manifest(template_id)
+        fname = manifest.files.get("select")
+        if not fname:
+            raise TemplateError(
+                "TEMPLATE_MISSING_ROLE",
+                "query-execute 는 'select' 조각이 필요하지만 manifest.files 에 없습니다.",
+            )
+        ctx = self._resolve_params(manifest, params)
+        for k, v in manifest.defaults.items():
+            ctx.setdefault(k, v)
+        ctx.setdefault("template_id", template_id)
+        select = self._render_file(template_id, fname, ctx)
+        if not select.strip():
+            raise TemplateError("TEMPLATE_RENDER_ERROR", "렌더된 select 가 비어 있습니다.")
+        return select
+
     def _render_file(self, template_id: str, filename: str, ctx: dict) -> str:
         """조각 파일 하나를 렌더링한다(경로는 template_id 하위로 결합)."""
         rel = f"{template_id}/{filename}"

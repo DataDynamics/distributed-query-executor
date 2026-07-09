@@ -1,0 +1,30 @@
+# query-execute 전용 예제 템플릿 — 주문 조회.
+#
+# 이 템플릿은 이관(/jobs)이 아니라 결과 반환 실행(POST /query-execute)을 위한 예제다.
+# 클라이언트는 template_id="order_search" 로 지정하고 params(regions/start_dt/end_dt/
+# min_amount)만 보낸다. coordinator 가 select.sql.j2 를 렌더해 SELECT 를 만들고, 지정
+# 데이터소스(운영에선 보통 Trino)에 실행해 상위 N행을 돌려준다.
+#
+# WHERE 절 구성:
+#   - region IN (...)  : regions(list) 를 sql_in 으로 N개 리터럴 목록으로 전개
+#   - order_dt BETWEEN : start_dt ~ end_dt(date) 를 sql_str 로 이스케이프한 날짜 구간
+#   - amount >= ...     : min_amount(number, 선택) 가 있으면 조건 추가
+
+id: order_search
+description: 주문 조회(query-execute 예제) — region IN 목록 + 주문일 BETWEEN 구간
+
+# query-execute 는 select 조각만 렌더하지만, manifest 규약상 exec_mode 를 둔다(copy).
+# partition_column 등 이관용 스칼라는 query-execute 경로에서 쓰이지 않는다.
+exec_mode: copy
+strict_validation: false            # 렌더 SELECT 에 ORDER BY 등이 있어 lenient 로 둔다
+
+# 파라미터 스키마 — 필수/타입/기본값을 선언한다. 렌더 전 검증에 쓰인다.
+params:
+  - {name: regions,    type: list,   required: true}            # IN 목록(N개 지역 코드)
+  - {name: start_dt,   type: date,   required: true}            # BETWEEN 시작일(YYYY-MM-DD)
+  - {name: end_dt,     type: date,   required: true}            # BETWEEN 종료일(YYYY-MM-DD)
+  - {name: min_amount, type: number, required: false, default: 0}  # 최소 주문금액(0=조건 생략)
+
+# role → 조각 파일 매핑. query-execute 는 select 만 있으면 된다.
+files:
+  select: select.sql.j2

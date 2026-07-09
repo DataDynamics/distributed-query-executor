@@ -22,7 +22,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -567,6 +567,43 @@ class CreateJobResponse(BaseModel):
     """작업 생성 API의 응답 스키마. 생성된 Job 식별자를 돌려준다."""
 
     job_id: str
+
+
+class QueryParam(BaseModel):
+    """``POST /query-execute`` params 배열의 한 항목(이름-값 쌍).
+
+    manifest 의 ``params`` 스키마와 이름으로 매칭된다. ``value`` 는 스칼라뿐 아니라
+    배열(list 타입 파라미터)도 될 수 있어 ``Any`` 로 둔다 — 타입 강제/검증은 이후
+    템플릿 엔진의 ``ParamSpec`` 이 담당한다.
+    """
+
+    name: str = Field(..., description="파라미터 이름(manifest params 의 name 과 일치)")
+    value: Any = Field(default=None, description="파라미터 값(스칼라 또는 배열)")
+
+
+class QueryExecuteRequest(BaseModel):
+    """``POST /query-execute`` 요청 — 서버 템플릿을 params 로 렌더한 SELECT 를 실행하고
+    결과(상위 N행)를 동기로 돌려받는다.
+
+    ``/jobs``(Impala→Greenplum 이관)와 달리 결과가 coordinator 를 거쳐 클라이언트로
+    반환되는 미리보기성 실행이다. 클라이언트는 어떤 executor 가 실행하는지 모른다 —
+    impala/trino 소스는 coordinator 가 부하가 가장 낮은 executor 를 골라 프록시하고,
+    greenplum/history 는 coordinator 가 직접 실행한다.
+    """
+
+    template_id: str = Field(..., description="서버 템플릿 ID(디렉터리명). params 로 SELECT 를 렌더한다.")
+    params: list[QueryParam] = Field(
+        default_factory=list,
+        description="쿼리 빌드 파라미터(이름-값 항목 배열). 내부에서 {name: value} 로 접어 렌더한다.",
+    )
+    datasource: Optional[str] = Field(
+        default=None,
+        description="실행 데이터소스(impala|trino|greenplum|history). 미지정 시 서버 source.type.",
+    )
+    limit: int = Field(default=100, ge=1, le=10_000, description="반환 최대 행수(1~10000).")
+    sql_dialect: Optional[str] = Field(
+        default=None, description="렌더된 SELECT 검증에 쓸 방언(미지정 시 서버 기본 hive)."
+    )
 
 
 class DatasourceQueryRequest(BaseModel):

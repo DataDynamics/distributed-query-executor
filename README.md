@@ -386,6 +386,7 @@ curl -s localhost:8088/jobs/$JOB
 | `GET /jobs/{job_id}/result` | 적재 결과 요약 |
 | `POST /jobs/{job_id}/cancel` | 작업 취소(각 executor에 전파). 이미 종료면 409 |
 | `POST /jobs/{job_id}/retry` | **실패 파티션만 재실행**: 종료된 작업의 FAILED/CANCELLED task 만 새 작업으로 재실행 → 새 `job_id` 반환 |
+| `POST /query-execute` | **템플릿+파라미터로 SELECT 실행 → 결과(상위 N행) 반환**. 이관이 아니라 결과를 동기로 돌려받는 미리보기성 실행(DESIGN §18.7) |
 
 ### dry-run (쿼리 미리보기)
 
@@ -409,6 +410,40 @@ dry-run 의 응답을 읽을 때 알아 둘 점이 두 가지 있습니다.
 - 각 task 의 `sub_query`(그리고 stage_insert 모드라면 `staging_ddl`/`insert_sql`)를 가공 없이
   그대로 보여 주므로, 어떤 쿼리가 만들어졌는지 눈으로 직접 검토할 수 있습니다.
 - 검증은 실제 실행 때와 똑같이 수행되므로, 잘못된 쿼리는 dry-run 에서도 422 로 거부됩니다.
+
+### 결과 반환 실행 (`POST /query-execute`)
+
+`POST /jobs` 가 데이터를 옮기는 **이관**이라면, `POST /query-execute` 는 같은 템플릿으로 만든
+SELECT 를 실행해 **결과(상위 N행)를 바로 돌려받는** 미리보기성 실행입니다. `template_id` 와
+파라미터(이름-값 항목 **배열**)만 보내면 됩니다. `datasource` 를 생략하면 서버의 `source.type`
+(impala/trino)에 실행하며, **어떤 executor 가 실행하는지는 클라이언트가 몰라도 됩니다** —
+coordinator 가 `/jobs` 와 동일한 선택 정책으로 가장 한가한 executor 를 골라 프록시합니다.
+
+```bash
+curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
+  "template_id": "sales_migration",
+  "params": [
+    {"name": "start_dt", "value": "2026-01-01"},
+    {"name": "end_dt",   "value": "2026-01-02"},
+    {"name": "regions",  "value": ["KR", "US"]}
+  ],
+  "datasource": "impala",
+  "limit": 100
+}'
+# {"template_id":"sales_migration","datasource":"impala",
+#  "sql":"SELECT ... WHERE dt IN ('2026-01-01','2026-01-02') AND region IN ('KR','US')",
+#  "columns":["user_id","amount","region","dt"],"rows":[[...],[...]],
+#  "row_count":100,"truncated":true,"limit":100,"elapsed_ms":812.4}
+```
+
+- 결과가 coordinator 메모리를 거치므로 `limit`(최대 10000)으로 응답 크기를 강제하는 **미리보기 규모
+  전용**입니다. 대량 이관은 계속 `POST /jobs` 를 씁니다.
+- `greenplum`/`history` 는 coordinator 가 직접 실행하고, `impala`/`trino` 는 executor 로 프록시합니다
+  (연결 실패 시 다음 executor 로 failover). 렌더/검증 실패는 `/jobs` 와 같은 `422 + error_code`.
+- **이관과 실행 소스를 나누고 싶을 때**: `datasource` 는 생략 시 서버 `source.type` 을 따르지만, 요청에
+  명시하면 그 소스로 갑니다. 예컨대 `source.type=impala`(이관은 Impala 읽기 → Greenplum 적재)로 두고
+  query-execute 만 Trino 로 실행하려면 요청에 `"datasource": "trino"` 를 넣으면 됩니다. 이때 executor 에
+  `impala.*` 와 `trino.*` 접속 정보가 **둘 다** 설정돼 있어야 합니다(이관은 impala, 실행은 trino 에 붙음).
 
 ### 작업 취소
 

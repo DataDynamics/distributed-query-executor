@@ -1,0 +1,13 @@
+{# query-execute 예제 — 지역 IN 목록 + 주문일 BETWEEN 구간 조회.
+   파라미터는 반드시 필터를 거쳐 안전한 리터럴로 렌더한다(SQL 인젝션 방지):
+     - regions            → sql_in  (콤마 구분 리터럴 목록, 빈 목록은 안전한 NULL)
+     - start_dt / end_dt  → sql_str (작은따옴표 이스케이프한 날짜 문자열 리터럴)
+     - min_amount         → sql_num (숫자만 허용, 비숫자는 렌더 실패) #}
+SELECT order_id, region, order_dt, amount
+FROM orders
+WHERE region IN ( {{ regions | sql_in }} )
+  AND order_dt BETWEEN {{ start_dt | sql_str }} AND {{ end_dt | sql_str }}
+{%- if min_amount %}
+  AND amount >= {{ min_amount | sql_num }}
+{%- endif %}
+ORDER BY order_dt, order_id

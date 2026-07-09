@@ -103,6 +103,36 @@ def is_row_returning(sql: str, dialect: str = DIALECT) -> bool:
     return isinstance(stmt, (exp.Select, exp.Union, exp.Subquery))
 
 
+def validate_select_query(sql: str, dialect: str = DIALECT) -> None:
+    """``/query-execute`` 용 경량 검증 — 단일 '행 반환 SELECT' 인지만 확인한다.
+
+    이 경로는 결과를 바로 돌려주는 실행이라 분할이 없으므로, ``validate_and_parse`` 처럼
+    partition_column·IN 절을 요구하지 않는다. 다만 렌더에 비신뢰 파라미터가 섞이므로
+    최소한의 방어를 한다:
+
+    - **다중 문 차단**: ``';'`` 로 이어붙인 다중 문(인젝션) 감지 시 거부.
+    - **비-SELECT 차단**: 최상위 문이 행을 반환(SELECT/UNION/서브쿼리)하는지 확인해
+      DELETE/UPDATE/DDL 등이 실행되지 않게 한다.
+
+    위반 시 :class:`QueryValidationError` 를 던져 API 계층이 422 로 변환한다(템플릿 필터가
+    이미 값을 이스케이프하지만, 구조 수준 방어를 한 겹 더 둔다).
+    """
+    if not sql or not sql.strip():
+        raise QueryValidationError("PARSE_ERROR", "빈 쿼리입니다.")
+    try:
+        statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
+    except Exception as exc:  # sqlglot 은 ParseError / TokenError 를 발생시킴
+        raise QueryValidationError("PARSE_ERROR", f"SQL 파싱 실패: {exc}") from exc
+    if not statements:
+        raise QueryValidationError("PARSE_ERROR", "유효한 SQL 문이 없습니다.")
+    if len(statements) > 1:
+        raise QueryValidationError(
+            "MULTIPLE_STATEMENTS", "단일 SELECT 문만 허용합니다(다중 문 감지)."
+        )
+    if not isinstance(statements[0], (exp.Select, exp.Union, exp.Subquery)):
+        raise QueryValidationError("NOT_A_SELECT", "SELECT(행 반환) 문만 지원합니다.")
+
+
 def validate_and_parse(
     sql: str,
     partition_column: str,
