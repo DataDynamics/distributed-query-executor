@@ -614,3 +614,38 @@ public static class Example
   실패 태스크가 없는 경우). 예외로 처리하되 치명적 오류로 다루지 마세요.
 - **`username` 을 채워 두세요.** 이력 테이블(`job_history`/`task_history`) 추적과 감사에
   쓰이므로, 호출 주체를 식별할 수 있게 해 두면 운영이 편합니다.
+
+---
+
+## 9. 참고 — 결과를 바로 돌려받는 실행 (`POST /query-execute`)
+
+지금까지의 `POST /jobs` 는 **이관**(소스 → Greenplum 적재)용이라 결과 행을 돌려주지 않고
+비동기로 진행됩니다. 반면 **쿼리 결과(상위 N행)를 그 자리에서 동기로 받아야 할 때**는 별도
+엔드포인트 `POST /query-execute` 를 씁니다. 폴링이 필요 없고 한 번의 호출로 결과가 옵니다.
+
+- 요청은 `template_id` + `params`(이름-값 항목 **배열**) + 선택적 `datasource`/`limit` 입니다.
+- 소스 실행은 coordinator 가 가장 한가한 executor 를 골라 **executor 의 커스텀 실행 함수
+  (`/query-run`)** 에 위임합니다(클라이언트는 executor 를 지정하지 않음). `greenplum`/`history` 는
+  coordinator 가 직접 실행합니다.
+- 응답은 `{columns, rows, row_count, truncated, limit, elapsed_ms, executed_by, ...}` 입니다.
+
+```csharp
+// 동기 실행: 템플릿+파라미터로 SELECT 를 실행하고 상위 N행을 그대로 받는다.
+var body = new {
+    template_id = "order_search",
+    @params = new[] {
+        new { name = "regions",  value = (object)new[] { "KR", "US" } },
+        new { name = "start_dt", value = (object)"2026-01-01" },
+        new { name = "end_dt",   value = (object)"2026-01-31" },
+    },
+    limit = 100,
+};
+using var resp = await _http.PostAsJsonAsync("/query-execute", body, ct);
+resp.EnsureSuccessStatusCode();                       // 422=렌더/검증 오류, 502=실행 오류
+var result = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+// result.GetProperty("columns") / .GetProperty("rows") 로 결과를 읽는다.
+```
+
+렌더/검증 실패는 `/jobs` 와 같은 `422 + error_code` 규약입니다. 요청/응답 스키마, 커스텀
+실행 함수 설정(`query.func.module`/`query.func.config.*`), 대시보드 실행법 등 자세한 내용은
+[QUERY.md](QUERY.md) 를 참고하세요.

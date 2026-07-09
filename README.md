@@ -29,7 +29,7 @@ flowchart TB
 
     subgraph Coordinator["Coordinator (FastAPI)"]
         direction TB
-        API["REST API<br/>POST /jobs · GET /jobs/{id}/status<br/>/executors · /health · /metrics"]
+        API["REST API<br/>POST /jobs · /query-execute · GET /jobs/{id}/status<br/>/executors · /health · /metrics"]
         Parser["Parser (sqlglot)<br/>검증 + 파티션 IN 탐지"]
         Splitter["Splitter<br/>IN 목록 N분할 + wrapper"]
         Dispatcher["Dispatcher<br/>run(job)→job_id, 비동기 디스패치/polling"]
@@ -138,7 +138,7 @@ coordinator/         # FastAPI: 검증 → 분할 → 디스패치 → 상태 �
   executor_status.py   공유 상태 테이블(executor self-report) 조회 + 신선도 liveness 판정
   dashboard.py         모니터링 대시보드 HTML(인라인 CSS/JS) + 설정 마스킹
   config.py            core 설정을 패키지-로컬로 재노출(임포트 편의)
-  app.py               REST API (POST /jobs, .../status·result·cancel, /cluster, /executors, /health, /metrics)
+  app.py               REST API (POST /jobs, /query-execute, .../status·result·cancel, /datasources, /cluster, /executors, /health, /metrics)
   __main__.py          실행 진입점 (python -m coordinator)
 executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task 상태 노출
   backend.py           ImpalaToGreenplumBackend(impyla + psycopg) + MockBackend
@@ -146,7 +146,7 @@ executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task �
   history.py           task 단위 실행 이력 기록·조회(PostgreSQL, task_id별 최신 1건)
   status.py            자기 상태(CPU/메모리/동시 task)를 공유 DB에 self-report(UPSERT)
   dashboard.py         executor self-view 대시보드 HTML(remote mode에서 /에 노출)
-  app.py               REST API (POST /tasks, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
+  app.py               REST API (POST /tasks, /query-run(커스텀 함수 위임), /datasources, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
   __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 packaging/config/    # config.properties + config.yml 기본값 + 스키마(*.sql)
 packaging/wheels/    # 에어갭 오프라인 설치용 cp39 휠 번들(coordinator/executor/dev, 유형별)
@@ -415,35 +415,38 @@ dry-run 의 응답을 읽을 때 알아 둘 점이 두 가지 있습니다.
 
 `POST /jobs` 가 데이터를 옮기는 **이관**이라면, `POST /query-execute` 는 같은 템플릿으로 만든
 SELECT 를 실행해 **결과(상위 N행)를 바로 돌려받는** 미리보기성 실행입니다. `template_id` 와
-파라미터(이름-값 항목 **배열**)만 보내면 됩니다. `datasource` 를 생략하면 서버의 `source.type`
-(impala/trino)에 실행하며, **어떤 executor 가 실행하는지는 클라이언트가 몰라도 됩니다** —
-coordinator 가 `/jobs` 와 동일한 선택 정책으로 가장 한가한 executor 를 골라 프록시합니다.
+파라미터(이름-값 항목 **배열**)만 보내면 됩니다. **어떤 executor 가 실행하는지는 클라이언트가
+몰라도 됩니다** — coordinator 가 `/jobs` 와 동일한 선택 정책으로 가장 한가한 executor 를 고릅니다.
+자세한 규약·설정은 [QUERY.md](QUERY.md) 참고.
 
 ```bash
 curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
-  "template_id": "sales_migration",
+  "template_id": "order_search",
   "params": [
+    {"name": "regions",  "value": ["KR", "US"]},
     {"name": "start_dt", "value": "2026-01-01"},
-    {"name": "end_dt",   "value": "2026-01-02"},
-    {"name": "regions",  "value": ["KR", "US"]}
+    {"name": "end_dt",   "value": "2026-01-31"}
   ],
-  "datasource": "impala",
   "limit": 100
 }'
-# {"template_id":"sales_migration","datasource":"impala",
-#  "sql":"SELECT ... WHERE dt IN ('2026-01-01','2026-01-02') AND region IN ('KR','US')",
-#  "columns":["user_id","amount","region","dt"],"rows":[[...],[...]],
-#  "row_count":100,"truncated":true,"limit":100,"elapsed_ms":812.4}
+# {"template_id":"order_search","datasource":"impala",
+#  "sql":"SELECT ... WHERE region IN ('KR','US') AND order_dt BETWEEN '2026-01-01' AND '2026-01-31' ...",
+#  "columns":["order_id","region","order_dt","amount"],"rows":[[...],[...]],
+#  "row_count":100,"truncated":true,"limit":100,"elapsed_ms":812.4,
+#  "executed_by":"http://executor-3:8001"}   # 실제 실행 executor(직접 실행이면 null)
 ```
 
 - 결과가 coordinator 메모리를 거치므로 `limit`(최대 10000)으로 응답 크기를 강제하는 **미리보기 규모
   전용**입니다. 대량 이관은 계속 `POST /jobs` 를 씁니다.
-- `greenplum`/`history` 는 coordinator 가 직접 실행하고, `impala`/`trino` 는 executor 로 프록시합니다
-  (연결 실패 시 다음 executor 로 failover). 렌더/검증 실패는 `/jobs` 와 같은 `422 + error_code`.
-- **이관과 실행 소스를 나누고 싶을 때**: `datasource` 는 생략 시 서버 `source.type` 을 따르지만, 요청에
-  명시하면 그 소스로 갑니다. 예컨대 `source.type=impala`(이관은 Impala 읽기 → Greenplum 적재)로 두고
-  query-execute 만 Trino 로 실행하려면 요청에 `"datasource": "trino"` 를 넣으면 됩니다. 이때 executor 에
-  `impala.*` 와 `trino.*` 접속 정보가 **둘 다** 설정돼 있어야 합니다(이관은 impala, 실행은 trino 에 붙음).
+- **실행 라우팅(2갈래로 통일)**: `greenplum`/`history`(메타/타깃 DB)는 coordinator 가 직접 실행하고,
+  **소스(impala/trino/source)는 datasource 종류와 무관하게 executor 의 `POST /query-run`(커스텀 함수)로
+  통일 위임**합니다(가장 한가한 executor 선택, 실패 시 failover). 렌더/검증 실패는 `/jobs` 와 같은
+  `422 + error_code`.
+- **소스 실행 = 커스텀 함수**: query-execute 의 소스 실행은 executor 가 소스(Trino 등)에 **직접 접속하지
+  않고** `query.func.module` 로 지정한 외부 함수에 위임합니다. 접속·기타 파라미터는 config.properties 의
+  `query.func.config.*`(자유 정의)로 넘어갑니다. 참조 구현 `examples/query_funcs/trino_runner.py`.
+- **이관과 실행 소스 분리**: `source.type=impala`(이관은 Impala 읽기 → Greenplum 적재)로 두고,
+  query-execute 의 소스 실행은 `query.func.module` 커스텀 함수(예: Trino)로 위임 — 둘은 독립적입니다.
 
 ### 작업 취소
 
