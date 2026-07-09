@@ -408,6 +408,56 @@ executor 마다 따로 적용되는지를 알려 줍니다.
 > `copy.pipeline=false` 로 두면 읽기·쓰기가 직렬 실행돼 `read_wait`/`write_wait` 가 순수 벽시계로
 > 나뉩니다. 파이프라인이 의심스러울 때 원인 격리를 위해 잠깐 꺼서 비교하는 용도로 유용합니다.
 
+### 3.7 최후의 수단 — PXF 세그먼트 병렬 로딩 (COPY 마스터 병목 우회)
+
+파이프라인·바이너리·`batch_size`·수평 확장을 다 해도 **`finalize_wait`(GP 서버 ingest)가 계속
+지배적**이라면, 병목은 **COPY STDIN 이 Greenplum 마스터 한 노드로 몰리는 구조** 자체입니다.
+executor 를 아무리 늘려도 각자 마스터로 COPY 하므로 마스터가 최종 천장이 됩니다. 이때의 정석은
+데이터 평면을 **"우리가 밀어넣기(push COPY)"에서 "GP 가 당겨오기(pull)"로** 바꾸는 것입니다.
+
+**PXF(Platform Extension Framework)** 는 GP 의 병렬 외부 데이터 프레임워크로, **모든 세그먼트가
+외부 소스(HDFS/Hive/오브젝트 스토어)를 직접 병렬로** 읽어 들입니다 → 마스터가 데이터 경로에서
+빠집니다. 이 프로젝트는 이미 **`exec_mode=statement`** 로 이 패턴을 **코드 변경 없이** 수용합니다.
+
+```sql
+-- 분할(splitter)은 그대로: 파티션 IN 버킷이 wrapper_query 에 채워진다.
+-- SELECT 대상을 COPY 스트림이 아니라 PXF 외부 테이블로 둔다 → 세그먼트 병렬 읽기.
+INSERT INTO gp_target (c1, c2, dt)
+SELECT c1, c2, dt FROM pxf_ext_source
+WHERE dt IN ('2026-07-01','2026-07-02');   -- ← 각 task 의 파티션 버킷
+```
+
+- **exec_mode**: `statement`, **wrapper_query**: 위 INSERT…SELECT(placeholder 로 파티션 IN 치환).
+- COPY 도, 우리 executor 를 통한 스트리밍도 **전혀 없다**. executor 는 SQL 제출+폴링만 한다.
+- 멱등성(overwrite): `DELETE FROM target WHERE dt IN(...)` 를 앞에 붙이거나 stage 후 스왑.
+
+두 가지 변형:
+
+| 변형 | 방식 | 특징 |
+|---|---|---|
+| **A. 원본 직접** | PXF `Hive`/`hdfs:parquet` 프로파일로 Impala 원본 파일을 바로 읽기 | export 단계 없음(가장 단순). 파티션 커밋 상태가 파일로 안정적이어야 함 |
+| **B. export 후 로딩** | ① Impala `INSERT OVERWRITE staging_hive_tbl SELECT …`(Parquet 병렬 쓰기) → ② PXF 로 그 경로 로딩 → ③ 정리 | 읽기·쓰기 양쪽 병렬(단일 스트림 0). 스냅샷·포맷 통제 확실하나 이동 부품 많음 |
+
+**도입 전 반드시 확인(코드보다 운영이 관건)**
+
+- **PXF 설치·구성**: `pxf cluster init/start`. GP 운영 의존성 추가.
+- **네트워크**: 지금은 executor 만 Impala 와 통신하지만, PXF 는 **모든 GP 세그먼트가 HDFS
+  (NameNode/DataNode)·오브젝트 스토어에 직접 도달**해야 한다. 망분리/에어갭에선 방화벽·라우팅이
+  실제 관문(가장 큰 선행 과제).
+- **Kerberos**: PXF→HDFS 커버로스면 GP 용 keytab/PXF 커버로스 설정 필요.
+- **타입 매핑**: Hive/Parquet→GP 는 PXF 프로파일이 대부분 처리(엣지 타입만 확인).
+- **가시성**: 행 단위 진행률은 사라진다(적재를 GP 가 함). 단계는 여전히 SUBMIT/INSERT/COMMIT 로 추적.
+
+**권장 도입 순서**
+
+1. **파일럿(코드 0줄)**: GP 에 PXF 를 올리고 외부 테이블 하나를 만든 뒤, **지금의 `statement`
+   모드로** `INSERT…SELECT FROM pxf_ext` 를 돌려 처리량을 기존 COPY 경로와 비교한다.
+2. 효과가 확인되면 **1급 지원**으로 검토: 외부 테이블(및 선택적 Impala export) 생성→INSERT→정리
+   라이프사이클을 캡슐화한 `exec_mode=pxf` 를 추가하고, PXF 프로파일/서버/경로를 설정화한다.
+
+> 언제 쓰나: **`finalize_wait` 가 벽이고 executor 수평 확장으로도 안 풀릴 때**가 명확한 신호다.
+> 반대로 `read_starve`(Impala) 가 지배적이면 변형 B(Impala 병렬 export)가, 데이터량이 크지 않거나
+> PXF 설치·망 개방이 어려우면 기존 경로의 `parallelism`↑ 가 비용 대비 낫다.
 > **구조적 한계(`finalize_wait` 이 계속 지배)라면 적재 방식 자체를 바꾼다.** `parallelism` 을 더
 > 올려도 결국 각 executor 의 **단일 COPY 스트림이 GP 마스터로 몰리는 것**이 천장일 수 있습니다.
 > 이때는 `exec_mode=local_stage`(DESIGN §17)가 적재 병렬성을 **GP 세그먼트로 이동**시켜 이 병목을
@@ -543,6 +593,9 @@ heartbeat_interval_s  ＜  reservation_ttl_s
 |---|---|
 | 단일 노드 처리량 ↑ | `executor.max_concurrent_tasks` ↑, executor 인스턴스 추가 |
 | 전체 처리량 ↑ | executor 노드 분산 + `max_dispatch_concurrency` 동반 ↑ |
+| SELECT→COPY 병목 진단 | 타임라인 STREAM_COPY 지표(`read_starve`/`write_wait`/`finalize_wait`) → §3.6 처방 |
+| COPY 인코딩(write_wait) 절감 | `copy.format=binary`(타입 해석 실패 시 text 폴백) |
+| GP 마스터 COPY 병목(finalize_wait) 우회 | PXF 세그먼트 병렬 로딩(`exec_mode=statement` + PXF 외부 테이블) → §3.7 |
 | 가용성(SPOF 제거) | 멀티 coordinator + `store.backend=postgres` + `self_report=true` + `executor_select=p2c` + `orphan_reconcile_interval_s>0` |
 | 멀티 coordinator 부하 균형 강화 | `executor_reservation=true`(+ `reservation_ttl_s` 적정) |
 | 다운스트림 보호(과부하 차단) | `max_concurrent_jobs`/`max_pending_jobs` 를 다운스트림 한도에 맞춰 하향 |
