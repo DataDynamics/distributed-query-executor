@@ -96,14 +96,18 @@ ORDER BY order_dt, order_id
   "row_count": 2,
   "truncated": false,   // limit 초과로 잘렸는지
   "limit": 100,
-  "elapsed_ms": 42.7
+  "elapsed_ms": 42.7,
+  "executed_by": "http://executor-3:8001"   // 실제 실행 executor(직접 실행이면 null)
 }
 ```
 
 - `columns`/`rows`/`row_count`/`truncated`/`elapsed_ms` 는 데이터소스 미리보기(`/datasources`)와
   동일한 shape 이다.
-- `sql` 은 감사·재현용으로 렌더된 SELECT 를 그대로 싣는다. **어떤 executor 가 실행했는지는
-  응답에 노출하지 않는다**(서버 로그에만 기록).
+- `sql` 은 감사·재현용으로 렌더된 SELECT 를 그대로 싣는다.
+- `executed_by` 는 **실제 쿼리를 실행한 executor URL**(관측용)이다. impala/trino 는 coordinator 가
+  고른 executor URL 이고(연결 실패로 failover 됐다면 최종 성공한 executor), greenplum/history 는
+  coordinator 가 직접 실행하므로 `null` 이다. 클라이언트는 executor 를 **지정하지 않지만**, 어느
+  노드가 실행했는지는 이 필드로 확인할 수 있다.
 
 ---
 

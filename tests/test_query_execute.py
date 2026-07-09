@@ -112,7 +112,8 @@ def test_query_execute_greenplum_direct(qe_client, monkeypatch):
     assert body["columns"] == ["user_id", "dt"]
     assert body["rows"] == [[1, "2026-01-01"], [2, "2026-01-01"]]
     assert body["row_count"] == 2 and body["truncated"] is False
-    # executor 는 노출하지 않는다.
+    # coordinator 직접 실행이므로 executed_by 는 null(그 외 예전 필드명은 쓰지 않는다).
+    assert body["executed_by"] is None
     assert "executor_url" not in body and "proxied_to" not in body
 
 
@@ -233,9 +234,11 @@ def test_query_execute_impala_proxies_to_executor(qe_client, monkeypatch):
     assert body["datasource"] == "impala"
     assert body["template_id"] == "sales_migration"
     assert body["columns"] == ["a"] and body["rows"] == [[1]]
-    # 정확히 한 executor 로만 프록시됐고(failover 없음), 어떤 executor 인지는 노출 안 함.
+    # 정확히 한 executor 로만 프록시됐고(failover 없음), 실행 executor 를 executed_by 로 노출.
     assert len(calls) == 1
     assert calls[0].endswith("/datasources/impala/query")
+    assert body["executed_by"] in ("http://exec1:8001", "http://exec2:8001")
+    assert calls[0].startswith(body["executed_by"])
     assert "proxied_to" not in body and "executor_url" not in body
 
 
@@ -278,6 +281,8 @@ def test_query_execute_impala_failover_on_transport_error(qe_client, monkeypatch
     assert resp.status_code == 200, resp.text
     # exec1 시작이었다면 2번 호출(1 실패 + 1 성공), exec2 시작이었다면 1번. 성공한 마지막은 exec2.
     assert calls[-1].startswith("http://exec2:8001")
+    # failover 후 실제 실행 executor 는 exec2 로 보고된다.
+    assert resp.json()["executed_by"] == "http://exec2:8001"
 
 
 def test_query_execute_executor_error_propagated_no_failover(qe_client, monkeypatch):

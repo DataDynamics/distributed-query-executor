@@ -1034,7 +1034,7 @@ def create_app(
         _pick_executor_order 로 정한 순서대로 시도하고, **연결(transport) 실패** 시 다음
         executor 로 failover 한다(SELECT 는 멱등이라 재시도 안전). executor 가 도달 후 돌려준
         4xx/5xx(SQL 오류·미구성 등)는 확정 응답이므로 failover 하지 않고 그대로 전달한다.
-        어떤 executor 가 실행했는지는 로그로만 남기고 응답에는 싣지 않는다.
+        성공한 executor URL 은 관측용으로 응답 dict 의 ``executed_by`` 에 실어 돌려준다.
         """
         order = _pick_executor_order()
         if not order:
@@ -1061,7 +1061,10 @@ def create_app(
                         detail = None
                     raise HTTPException(status_code=resp.status_code, detail=detail or resp.text)
                 logger.info("query-execute 실행 executor=%s datasource=%s", url, name)
-                return resp.json()
+                body = resp.json()
+                # 실제 실행 executor 를 관측용으로 응답에 싣는다(failover 후면 성공한 executor).
+                body["executed_by"] = url
+                return body
         raise HTTPException(status_code=502, detail=f"모든 executor 프록시 실패({name}): {last_err}")
 
     @app.post(
@@ -1101,13 +1104,14 @@ def create_app(
                 result = await asyncio.to_thread(run_postgres_select, dsn, sql, limit=limit)
             except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
                 raise HTTPException(status_code=502, detail=f"{datasource} 쿼리 실패: {e}")
-            body = {"datasource": datasource, "limit": limit, **result.to_dict()}
+            # coordinator 가 직접 실행했으므로 executor 는 없다(executed_by=null).
+            body = {"datasource": datasource, "limit": limit, "executed_by": None, **result.to_dict()}
         elif datasource in ("impala", "trino"):
             body = await _run_source_query(datasource, sql, limit)
         else:
             raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {datasource}")
 
-        # 렌더된 SQL 은 감사용으로 함께 반환. 선택된 executor 는 노출하지 않는다.
+        # 렌더된 SQL(감사용)과 실제 실행 executor(executed_by, 직접 실행이면 null)를 함께 반환.
         return {"template_id": req.template_id, "sql": sql, **body}
 
     # 대시보드는 설정으로 끌 수 있다(예: 외부 노출 환경에서 비활성화).
