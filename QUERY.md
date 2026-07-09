@@ -5,9 +5,27 @@
 달리 결과가 coordinator 를 거쳐 클라이언트로 반환되는 **미리보기성 실행**이다.
 
 - 클라이언트는 SQL 전문이 아니라 **`template_id` + `params`(이름-값 항목 배열)** 만 보낸다.
-- 클라이언트는 **어떤 executor 가 실행하는지 몰라도 된다** — impala/trino 소스는 coordinator 가
-  `/jobs` 와 동일한 정책으로 가장 한가한 executor 를 골라 프록시한다(연결 실패 시 failover).
+- 클라이언트는 **어떤 executor 가 실행하는지 몰라도 된다** — 소스 실행은 coordinator 가 `/jobs` 와
+  동일 정책으로 가장 한가한 executor 를 골라 **`/query-run`(커스텀 함수)** 하나로 위임한다(실패 시 failover).
 - 자세한 설계는 [DESIGN.md §18.7](DESIGN.md), 엔진 규약은 [DESIGN.md §18](DESIGN.md) 참고.
+
+---
+
+## "쿼리 실행" 엔드포인트 지도
+
+이 시스템에는 목적이 다른 세 가지 쿼리 실행 표면이 있다. 혼동하지 않도록 정리한다.
+
+| 개념 | 진입 엔드포인트 | 무엇 | 결과 |
+|---|---|---|---|
+| **A. 이관**(migration) | `POST /jobs` → (executor) `POST /tasks` | 소스 SELECT → **Greenplum 적재**(대량 데이터 이동) | job_id·상태·row count (**행 반환 ✕**) |
+| **B. 미리보기/연결 테스트** | `POST /datasources/{name}/query` | **임의 SQL** 을 built-in 드라이버로 실행(운영 점검용) | 상위 N행 |
+| **C. 결과 반환 실행**(이 문서) | `POST /query-execute` → (executor) `POST /query-run` | **템플릿** 렌더 SELECT 를 실행 | 상위 N행 |
+
+- **C(query-execute)의 소스 실행은 `/query-run` 하나로 통일**돼 있다 — impala/trino 구분 없이 모든
+  소스는 executor 의 커스텀 함수(`query.func.module`)에 위임한다. `greenplum`/`history` 만
+  coordinator 가 직접(psycopg) 실행한다(메타/타깃 DB, 커스텀 함수 불필요).
+- **B(미리보기)** 는 C 와 별개다 — 임의 SQL 을 built-in 드라이버(impala/trino/greenplum/history)로
+  실행하는 **운영 점검 도구**이며, 대시보드 `데이터소스` 탭이 이를 쓴다. 앱 로직의 쿼리 실행은 C 를 쓴다.
 
 ---
 
@@ -29,21 +47,18 @@ sequenceDiagram
     CO->>CO: 3) validate_select_query() — 단일 행반환 SELECT 검증
     Note over CO: 렌더/검증 실패 → 422 (error_code)
 
-    alt datasource = greenplum / history
+    alt datasource = greenplum / history (메타/타깃 DB)
         CO->>GP: 렌더된 SELECT 직접 실행 (psycopg)
         GP-->>CO: 상위 N행 (executed_by = null)
-    else datasource = trino
+    else datasource = 소스(impala / trino / source) — /query-run 하나로 통일
         Note over CO: executor 선택 = /jobs 와 동일 정책<br/>(least_loaded / p2c / round_robin)
         CO->>EX: POST /query-run {sql, limit}
         Note over CO,EX: 연결 실패 시 다음 executor 로 failover
         EX->>FN: run(sql, config=query.func.config.*, limit)
-        Note over EX,FN: executor 는 Trino 를 직접 모른다 — 커스텀 함수에 위임
+        Note over EX,FN: executor 는 소스를 직접 모른다 — 커스텀 함수에 위임
         FN->>SRC: (함수 내부에서) SELECT 실행
         SRC-->>FN: 상위 N행
         FN-->>EX: QueryResult
-        EX-->>CO: 결과 (executed_by = 실행 executor URL)
-    else datasource = impala
-        CO->>EX: POST /datasources/impala/query {sql, limit}  (built-in)
         EX-->>CO: 결과 (executed_by = 실행 executor URL)
     end
     CO-->>C: {template_id, datasource, sql, columns, rows, row_count, truncated, limit, elapsed_ms, executed_by}

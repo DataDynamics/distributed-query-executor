@@ -218,38 +218,12 @@ def _fake_client_factory(recorder, *, fail_urls=(), status_map=None):
     return _FakeClient
 
 
-def test_query_execute_impala_proxies_to_executor(qe_client, monkeypatch):
-    import coordinator.app as ca
-    calls: list = []
-    monkeypatch.setattr(ca.httpx, "AsyncClient", _fake_client_factory(calls))
-    client = qe_client(executors=["http://exec1:8001", "http://exec2:8001"])
-    resp = client.post("/query-execute", json={
-        "template_id": "sales_migration",
-        "params": [
-            {"name": "start_dt", "value": "2026-01-01"},
-            {"name": "end_dt", "value": "2026-01-01"},
-        ],
-        "datasource": "impala",
-    })
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["datasource"] == "impala"
-    assert body["template_id"] == "sales_migration"
-    assert body["columns"] == ["a"] and body["rows"] == [[1]]
-    # 정확히 한 executor 로만 프록시됐고(failover 없음), 실행 executor 를 executed_by 로 노출.
-    assert len(calls) == 1
-    assert calls[0].endswith("/datasources/impala/query")
-    assert body["executed_by"] in ("http://exec1:8001", "http://exec2:8001")
-    assert calls[0].startswith(body["executed_by"])
-    assert "proxied_to" not in body and "executor_url" not in body
+@pytest.mark.parametrize("ds", ["trino", "impala", "source"])
+def test_query_execute_source_proxies_to_query_run(ds, qe_client, monkeypatch):
+    """모든 소스 datasource(trino/impala/source)는 executor 의 /query-run(커스텀 함수)으로 통일 위임된다.
 
-
-def test_query_execute_trino_proxies_to_query_run(qe_client, monkeypatch):
-    """datasource='trino' 는 executor 의 /query-run(커스텀 함수 위임)으로 프록시된다.
-
-    운영 라우팅: 이관(/jobs)은 Impala 로 읽지만(source.type=impala), query-execute 의 trino 는
-    executor 에 설정된 커스텀 실행 함수(/query-run)에 위임한다 — Trino 직접 접속은 하지 않는다.
-    datasource 는 /query-run 응답에 없으므로 coordinator 가 확정값으로 보정한다.
+    coordinator 는 소스 드라이버를 갖지 않고, datasource 종류와 무관하게 /query-run 하나로 보낸다.
+    /query-run 응답엔 datasource 가 없으므로 coordinator 가 확정값으로 보정한다.
     """
     import coordinator.app as ca
     monkeypatch.setattr(core_config.settings, "source_type", "impala", raising=False)
@@ -259,11 +233,29 @@ def test_query_execute_trino_proxies_to_query_run(qe_client, monkeypatch):
     resp = client.post("/query-execute", json={
         "template_id": "sales_migration",
         "params": [{"name": "start_dt", "value": "2026-01-01"}, {"name": "end_dt", "value": "2026-01-01"}],
-        "datasource": "trino",
+        "datasource": ds,
     })
     assert resp.status_code == 200, resp.text
-    assert resp.json()["datasource"] == "trino"
-    assert resp.json()["executed_by"] == "http://exec1:8001"
+    body = resp.json()
+    assert body["datasource"] == ds and body["template_id"] == "sales_migration"
+    assert body["columns"] == ["a"] and body["rows"] == [[1]]
+    assert body["executed_by"] == "http://exec1:8001"
+    assert len(calls) == 1 and calls[0].endswith("/query-run")
+    assert "proxied_to" not in body and "executor_url" not in body
+
+
+def test_query_execute_default_datasource_uses_query_run(qe_client, monkeypatch):
+    """datasource 미지정 시 source.type 을 따르며, 소스는 /query-run 으로 간다(built-in 경로 없음)."""
+    import coordinator.app as ca
+    monkeypatch.setattr(core_config.settings, "source_type", "impala", raising=False)
+    calls: list = []
+    monkeypatch.setattr(ca.httpx, "AsyncClient", _fake_client_factory(calls))
+    client = qe_client(executors=["http://exec1:8001"])
+    resp = client.post("/query-execute", json={
+        "template_id": "sales_migration",
+        "params": [{"name": "start_dt", "value": "2026-01-01"}, {"name": "end_dt", "value": "2026-01-01"}],
+    })
+    assert resp.status_code == 200, resp.text
     assert len(calls) == 1 and calls[0].endswith("/query-run")
 
 

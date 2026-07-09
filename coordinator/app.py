@@ -1028,26 +1028,17 @@ def create_app(
         start = next(_qe_rr) % len(cand)
         return cand[start:] + cand[:start]
 
-    # query-execute 의 datasource → executor 엔드포인트 경로 매핑. trino 는 executor 에 설정된
-    # 커스텀 실행 함수(/query-run)에 위임하고, impala 는 기존 built-in 미리보기 경로를 쓴다.
-    _QE_ENDPOINT = {
-        "trino": "/query-run",
-        "impala": "/datasources/impala/query",
-    }
-
     async def _run_source_query(name: str, sql: str, limit: int) -> dict:
-        """렌더된 SELECT 를 소스(impala/trino) executor 에 프록시 실행해 결과 dict 를 돌려준다.
+        """렌더된 SELECT 를 **executor 의 커스텀 실행 함수(``POST /query-run``)** 에 위임한다.
 
-        대상 엔드포인트는 ``_QE_ENDPOINT`` 로 정한다 — trino 는 executor 의 커스텀 실행 함수
-        위임 경로(``/query-run``), impala 는 built-in 미리보기 경로. _pick_executor_order 로
-        정한 순서대로 시도하고, **연결(transport) 실패** 시 다음 executor 로 failover 한다
-        (SELECT 는 멱등이라 재시도 안전). executor 가 도달 후 돌려준 4xx/5xx(SQL 오류·미구성 등)는
-        확정 응답이므로 failover 하지 않고 그대로 전달한다. 성공한 executor URL 은 관측용으로
-        응답 dict 의 ``executed_by`` 에 실어 돌려준다.
+        query-execute 의 소스 실행(impala/trino 등)은 datasource 종류와 무관하게 이 한 경로로
+        통일된다 — executor 가 ``query.func.module`` 함수에 SQL 을 넘겨 실행한다. coordinator 는
+        소스 드라이버를 직접 갖지 않는다. _pick_executor_order 로 정한 순서대로 시도하고,
+        **연결(transport) 실패** 시 다음 executor 로 failover 한다(SELECT 는 멱등이라 재시도 안전).
+        executor 가 도달 후 돌려준 4xx/5xx(SQL 오류·함수 미설정 등)는 확정 응답이므로 failover
+        하지 않고 그대로 전달한다. 성공한 executor URL 은 관측용으로 응답 dict 의 ``executed_by``
+        에 실어 돌려준다.
         """
-        path = _QE_ENDPOINT.get(name)
-        if path is None:
-            raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {name}")
         order = _pick_executor_order()
         if not order:
             raise HTTPException(
@@ -1058,7 +1049,7 @@ def create_app(
         last_err: Optional[Exception] = None
         async with httpx.AsyncClient(timeout=timeout) as http:
             for url in order:
-                target = url.rstrip("/") + path
+                target = url.rstrip("/") + "/query-run"
                 try:
                     resp = await http.post(target, json={"sql": sql, "limit": limit})
                 except httpx.HTTPError as e:
@@ -1107,7 +1098,9 @@ def create_app(
         # 3) 데이터소스 결정(요청 > 서버 source.type).
         datasource = (req.datasource or getattr(settings, "source_type", "impala") or "impala").lower()
 
-        # 4) 실행: greenplum/history 는 coordinator 직접, impala/trino 는 executor 프록시.
+        # 4) 실행 라우팅(2갈래로 통일):
+        #    - greenplum/history: 메타/타깃 DB → coordinator 가 직접 실행(psycopg).
+        #    - 그 외 소스(impala/trino/source 등): executor 의 커스텀 함수(/query-run)에 통일 위임.
         if datasource in ("greenplum", "history"):
             dsn = settings.greenplum_dsn if datasource == "greenplum" else settings.history_db_dsn
             if not dsn:
@@ -1118,7 +1111,7 @@ def create_app(
                 raise HTTPException(status_code=502, detail=f"{datasource} 쿼리 실패: {e}")
             # coordinator 가 직접 실행했으므로 executor 는 없다(executed_by=null).
             body = {"datasource": datasource, "limit": limit, "executed_by": None, **result.to_dict()}
-        elif datasource in ("impala", "trino"):
+        elif datasource in ("impala", "trino", "source"):
             body = await _run_source_query(datasource, sql, limit)
         else:
             raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {datasource}")
