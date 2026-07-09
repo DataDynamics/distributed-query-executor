@@ -430,13 +430,13 @@ async function loadQe(){
   qeTemplates = d.templates || [];
   $("#qe-tpl").innerHTML = qeTemplates.map(t=>
     `<option value="${esc(t.template_id)}">${esc(t.template_id)}</option>`).join('');
-  // 데이터소스 목록: 생략 시 서버 source.type. local + via_executor 를 합쳐 선택지로 제공한다.
-  const ds = await getJSON("/datasources");
-  const names = [];
-  for(const s of (ds.local||[])) names.push(s.name);
-  for(const n of (ds.via_executor||[])) if(!names.includes(n)) names.push(n);
-  $("#qe-ds").innerHTML = '<option value="">(기본: source.type)</option>' +
-    names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  // 데이터소스 선택지는 query-execute 의 실행 라우팅에 맞춘 고정 목록이다(미리보기의 built-in
+  // 소스 목록과 다르다). 소스 실행은 datasource 종류와 무관하게 /query-run(커스텀 함수)로 통일되므로
+  // impala/trino 를 따로 나열하지 않고 '소스' 하나로 두고, greenplum/history 만 coordinator 직접 실행.
+  $("#qe-ds").innerHTML =
+    '<option value="">소스 (커스텀 함수 · 기본 source.type)</option>' +
+    '<option value="greenplum">greenplum (coordinator 직접)</option>' +
+    '<option value="history">history (coordinator 직접)</option>';
   qeOnTemplate();
   qeInit = true;
 }
