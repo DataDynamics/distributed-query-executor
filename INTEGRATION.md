@@ -40,6 +40,11 @@ Coordinator 의 **기본 주소(base URL)** 는 `http://<coordinator-host>:8088`
 | 결과 요약 | `GET {base}/jobs/{job_id}/result` |
 | 작업 취소 | `POST {base}/jobs/{job_id}/cancel` |
 | 실패 파티션 재실행 | `POST {base}/jobs/{job_id}/retry` |
+| 사용 가능한 템플릿 조회 | `GET {base}/templates` |
+| 결과 반환 실행(동기) | `POST {base}/query-execute` |
+
+이관(`/jobs`)은 SQL 전문 또는 **서버 템플릿**(2.2·7.1)으로 제출할 수 있고, 결과 행이 필요한
+동기 조회는 `POST /query-execute`(9장, 내부적으로 executor `POST /query-run` 에 위임)로 처리합니다.
 
 아래 그림은 C# 애플리케이션과 Coordinator 사이에 오가는 호출의 전체 흐름입니다.
 
@@ -399,14 +404,26 @@ using System.Text.Json.Serialization;
 
 // ── 요청/응답 모델 ─────────────────────────────────────────────
 public record CreateJobRequest(
-    [property: JsonPropertyName("sql")] string Sql,
-    [property: JsonPropertyName("partition_column")] string PartitionColumn,
-    [property: JsonPropertyName("target_table")] string TargetTable,
+    // ── 기본(raw-SQL) 필드 ── template_id 를 쓰지 않을 때 필수. 템플릿 모드에서는
+    // 렌더 결과가 이 값들을 채우므로 생략 가능(서버가 검증).
+    [property: JsonPropertyName("sql")] string? Sql = null,
+    [property: JsonPropertyName("partition_column")] string? PartitionColumn = null,
+    [property: JsonPropertyName("target_table")] string? TargetTable = null,
+    // ── 템플릿 모드(선택) ── template_id 를 주면 SQL 전문 대신 서버 템플릿을 params 로 렌더한다.
+    // ‼ 여기서 params 는 "이름→값 map" 이다(/query-execute 의 "배열" 과 다름 — 9장 참고).
+    // partition_column·target_table·exec_mode 등은 요청이 명시하면 우선, 없으면 manifest 기본값.
+    [property: JsonPropertyName("template_id")] string? TemplateId = null,
+    [property: JsonPropertyName("params")] Dictionary<string, object?>? Params = null,
+    // ── 날짜 fan-out(선택, stage_insert 템플릿 전용) ── task_column+task_range 를 주면 IN 분할
+    // 대신 "날짜 하나 = task 하나" 로 펼친다. task_range 는 오늘 기준 상대 일수 [start, end](양끝 포함).
+    [property: JsonPropertyName("task_column")] string? TaskColumn = null,
+    [property: JsonPropertyName("task_range")] int[]? TaskRange = null,
     [property: JsonPropertyName("username")] string? Username = null,
     [property: JsonPropertyName("parallelism")] int Parallelism = 4,
     [property: JsonPropertyName("exec_mode")] string ExecMode = "stage_insert",
     // stage_insert 모드: staging_table·wrapper_query 는 필수, staging_ddl 은 선택
-    // (생략 시 executor 가 테이블 생성을 건너뛰고 기존 staging_table 사용)
+    // (생략 시 executor 가 테이블 생성을 건너뛰고 기존 staging_table 사용).
+    // 템플릿 모드에서는 이 세 값도 렌더 결과가 채우므로 요청에서 생략할 수 있다.
     [property: JsonPropertyName("staging_table")] string? StagingTable = null,
     [property: JsonPropertyName("staging_ddl")] string? StagingDdl = null,
     [property: JsonPropertyName("wrapper_query")] string? WrapperQuery = null)
@@ -591,6 +608,50 @@ public static class Example
 }
 ```
 
+### 7.1 템플릿 모드로 제출하기 (stage_insert)
+
+SQL 전문 대신 **서버 템플릿 + 파라미터**로 같은 작업을 제출할 수 있습니다(2.2 참고). 요청 본문만
+다르고 이후 흐름(제출 → 폴링 → 결과)은 위와 완전히 동일하므로, 앞의 `SubmitAsync`/
+`WaitForCompletionAsync` 를 그대로 재사용합니다. 여기서 **`Params` 는 이름→값 map** 이라는 점만
+`/query-execute`(9장, 배열)와 다릅니다.
+
+```csharp
+// 템플릿 stage_insert — sql/staging_ddl/wrapper_query 는 서버가 렌더하므로 넘기지 않는다.
+var req = new CreateJobRequest(
+    TemplateId: "sales_migration",
+    Params: new Dictionary<string, object?>
+    {
+        ["start_dt"] = "2026-01-01",
+        ["end_dt"]   = "2026-06-25",
+        ["regions"]  = new[] { "KR", "US" },   // list 타입 파라미터는 배열로
+    },
+    Username: "etl-bot",
+    Parallelism: 4);
+    // exec_mode·partition_column·target_table 은 manifest 기본값을 쓰거나 여기서 명시해 덮어쓴다.
+
+var jobId = await client.SubmitAsync(req);
+var result = await client.WaitForCompletionAsync(jobId);
+```
+
+**날짜별 fan-out**(하루 = task 하나)이 필요하면 `TaskColumn` 과 `TaskRange` 만 더합니다. IN 분할
+대신 날짜 목록으로 펼쳐지고, 적재는 stage_insert **append** 입니다(2.2의 날짜별 분할 참고).
+
+```csharp
+var req = new CreateJobRequest(
+    TemplateId: "daily_sales",
+    Params: new Dictionary<string, object?> { ["region"] = "KR" },
+    TaskColumn: "dt",
+    TaskRange: new[] { -7, 0 },   // 오늘 포함 8일 → 8 task
+    Username: "etl-bot");
+
+var jobId = await client.SubmitAsync(req);
+```
+
+> 실행 전에 렌더된 계획만 보고 싶으면 raw 모드와 똑같이 `"dry_run": true` 를 넣으면 됩니다
+> (별도 필드가 필요하면 `CreateJobRequest` 에 `[property: JsonPropertyName("dry_run")] bool DryRun = false`
+> 를 추가). 필수 파라미터 누락·없는 템플릿은 **422**(`TEMPLATE_PARAM_ERROR`/`TEMPLATE_NOT_FOUND`)로
+> 거부되며, `SubmitAsync` 가 본문을 실어 예외로 던집니다(5.2 참고).
+
 ---
 
 ## 8. 주의사항
@@ -635,35 +696,93 @@ public static class Example
 
 ---
 
-## 9. 참고 — 결과를 바로 돌려받는 실행 (`POST /query-execute`)
+## 9. 결과를 바로 돌려받는 실행 (`POST /query-execute` → executor `POST /query-run`)
 
 지금까지의 `POST /jobs` 는 **이관**(소스 → Greenplum 적재)용이라 결과 행을 돌려주지 않고
 비동기로 진행됩니다. 반면 **쿼리 결과(상위 N행)를 그 자리에서 동기로 받아야 할 때**는 별도
 엔드포인트 `POST /query-execute` 를 씁니다. 폴링이 필요 없고 한 번의 호출로 결과가 옵니다.
 
-- 요청은 `template_id` + `params`(이름-값 항목 **배열**) + 선택적 `datasource`/`limit` 입니다.
-- 소스 실행은 coordinator 가 가장 한가한 executor 를 골라 **executor 의 커스텀 실행 함수
-  (`/query-run`)** 에 위임합니다(클라이언트는 executor 를 지정하지 않음). `greenplum`/`history` 는
-  coordinator 가 직접 실행합니다.
-- 응답은 `{columns, rows, row_count, truncated, limit, elapsed_ms, executed_by, ...}` 입니다.
+- 이 역시 **서버 템플릿 방식** 입니다 — 요청은 `template_id` + `params` + 선택적
+  `datasource`/`limit`. 다만 **`params` 는 이름-값 항목 `배열`**(`[{name, value}, …]`)로,
+  `/jobs` 템플릿 모드의 map(2.2·7.1)과 **형태가 다릅니다**. 그리고 이 경로는 SELECT 만 실행하는
+  **미리보기성 조회**라 `/jobs` 처럼 stage_insert 적재를 하지 않습니다(결과 행만 반환).
+- 소스(impala/trino) 실행은 클라이언트가 executor 를 지정하지 않고, coordinator 가 `/jobs` 와 동일
+  정책으로 **가장 한가한 executor 를 골라 그 executor 의 커스텀 실행 함수 `POST /query-run` 에
+  위임**합니다(연결 실패 시 다음 executor 로 failover). `greenplum`/`history` 는 coordinator 가
+  직접 실행합니다. 어느 노드가 실행했는지는 응답 `executed_by` 로 확인합니다(직접 실행이면 `null`).
+- 응답은 `{template_id, datasource, sql, columns, rows, row_count, truncated, limit, elapsed_ms,
+  executed_by}` 입니다.
+
+앞의 `QueryExecutorClient` 에 이어 붙일 요청/응답 모델과 메서드는 다음과 같습니다.
 
 ```csharp
-// 동기 실행: 템플릿+파라미터로 SELECT 를 실행하고 상위 N행을 그대로 받는다.
-var body = new {
-    template_id = "order_search",
-    @params = new[] {
-        new { name = "regions",  value = (object)new[] { "KR", "US" } },
-        new { name = "start_dt", value = (object)"2026-01-01" },
-        new { name = "end_dt",   value = (object)"2026-01-31" },
-    },
-    limit = 100,
-};
-using var resp = await _http.PostAsJsonAsync("/query-execute", body, ct);
-resp.EnsureSuccessStatusCode();                       // 422=렌더/검증 오류, 502=실행 오류
-var result = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
-// result.GetProperty("columns") / .GetProperty("rows") 로 결과를 읽는다.
+// ── /query-execute 요청/응답 모델 ────────────────────────────────
+// ‼ params 는 이름-값 항목 "배열"이다(/jobs 템플릿 모드의 map 과 다름).
+public record QueryParam(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("value")] object? Value);
+
+public record QueryExecuteRequest(
+    [property: JsonPropertyName("template_id")] string TemplateId,
+    [property: JsonPropertyName("params")] IReadOnlyList<QueryParam> Params,
+    [property: JsonPropertyName("datasource")] string? Datasource = null,  // impala|trino|greenplum|history
+    [property: JsonPropertyName("limit")] int Limit = 100)                 // 1~10000
+{
+    public static readonly JsonSerializerOptions Json =
+        new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+}
+
+public record QueryExecuteResult(
+    [property: JsonPropertyName("template_id")] string TemplateId,
+    [property: JsonPropertyName("datasource")] string? Datasource,
+    [property: JsonPropertyName("sql")] string Sql,                        // 렌더된 SELECT(감사·재현용)
+    [property: JsonPropertyName("columns")] List<string> Columns,
+    [property: JsonPropertyName("rows")] List<List<JsonElement>> Rows,     // 셀 타입이 섞이므로 JsonElement
+    [property: JsonPropertyName("row_count")] int RowCount,
+    [property: JsonPropertyName("truncated")] bool Truncated,              // limit 초과로 잘렸는지
+    [property: JsonPropertyName("limit")] int Limit,
+    [property: JsonPropertyName("elapsed_ms")] double ElapsedMs,
+    [property: JsonPropertyName("executed_by")] string? ExecutedBy);       // 실행 executor(직접이면 null)
+
+// ── QueryExecutorClient 에 추가하는 메서드 ───────────────────────
+// 결과 반환 실행: 템플릿+파라미터로 SELECT 를 렌더·실행하고 상위 N행을 동기로 받는다.
+public async Task<QueryExecuteResult> QueryExecuteAsync(
+    QueryExecuteRequest req, CancellationToken ct = default)
+{
+    using var resp = await _http.PostAsJsonAsync(
+        "/query-execute", req, QueryExecuteRequest.Json, ct);
+    if (!resp.IsSuccessStatusCode)
+    {
+        // 422=렌더/검증 오류(error_code/message), 502=데이터소스 접속·SQL 오류
+        var err = await resp.Content.ReadAsStringAsync(ct);
+        throw new HttpRequestException($"query-execute 실패 ({(int)resp.StatusCode}): {err}");
+    }
+    return (await resp.Content.ReadFromJsonAsync<QueryExecuteResult>(cancellationToken: ct))!;
+}
 ```
 
-렌더/검증 실패는 `/jobs` 와 같은 `422 + error_code` 규약입니다. 요청/응답 스키마, 커스텀
-실행 함수 설정(`query.func.module`/`query.func.config.*`), 대시보드 실행법 등 자세한 내용은
-[QUERY.md](QUERY.md) 를 참고하세요.
+사용 예입니다. 이관 소스(Impala)와 조회 소스(Trino)를 나눠 쓰려면 `Datasource` 를 명시합니다.
+
+```csharp
+var res = await client.QueryExecuteAsync(new QueryExecuteRequest(
+    TemplateId: "order_search",
+    Params: new[]
+    {
+        new QueryParam("regions",    new[] { "KR", "US" }),  // list 파라미터는 배열
+        new QueryParam("start_dt",   "2026-01-01"),
+        new QueryParam("end_dt",     "2026-01-31"),
+        new QueryParam("min_amount", 1000),                  // 선택 — 빼면 금액 조건 생략
+    },
+    Datasource: "trino",   // 생략 시 서버 source.type
+    Limit: 100));
+
+Console.WriteLine($"{res.RowCount}행, {res.ElapsedMs:F1}ms, 실행: {res.ExecutedBy ?? "coordinator 직접"}");
+foreach (var row in res.Rows)
+    // row 는 셀(JsonElement) 목록 — columns 순서와 1:1. 필요한 타입으로 꺼내 쓴다.
+    Console.WriteLine(string.Join(" | ", res.Columns.Zip(row, (c, v) => $"{c}={v}")));
+```
+
+렌더/검증 실패는 `/jobs` 와 같은 `422 + error_code` 규약입니다(예: 필수 파라미터 누락은
+`TEMPLATE_PARAM_ERROR`, 같은 `name` 중복은 `DUPLICATE_PARAM`, 없는 템플릿은 `TEMPLATE_NOT_FOUND`).
+요청/응답 스키마, executor 커스텀 실행 함수 설정(`query.func.module`/`query.func.config.*`),
+대시보드 실행법 등 자세한 내용은 [QUERY.md](QUERY.md) 를 참고하세요.
