@@ -393,75 +393,93 @@ curl http://<coordinator-host>:8088/templates
 
 ## 7. C# 전체 예제
 
-아래는 `HttpClient` 와 `System.Text.Json` 만으로 위 흐름을 모두 구현한 예제입니다. 제출 →
-완료 대기(폴링) → 결과 확인 → 에러 처리까지 포함합니다. .NET 6 이상을 기준으로 합니다.
+아래는 `HttpClient` 와 `Newtonsoft.Json`(Json.NET) 으로 위 흐름을 모두 구현한 예제입니다. 제출 →
+완료 대기(폴링) → 결과 확인 → 에러 처리까지 포함합니다. **.NET Framework 4.7** 을 기준으로 하며,
+JSON 직렬화는 NuGet 패키지 `Newtonsoft.Json`(`Install-Package Newtonsoft.Json`)을 사용합니다.
 
 ```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
-using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 // ── 요청/응답 모델 ─────────────────────────────────────────────
-public record CreateJobRequest(
+// .NET Framework 4.7 은 C# 7.3 이므로 record 를 쓰지 않고 일반 클래스 + get/set 프로퍼티로 둔다.
+public class CreateJobRequest
+{
+    // null 필드는 직렬화에서 제외(서버 기본값을 그대로 쓰도록).
+    public static readonly JsonSerializerSettings Json =
+        new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
     // ── 기본(raw-SQL) 필드 ── template_id 를 쓰지 않을 때 필수. 템플릿 모드에서는
     // 렌더 결과가 이 값들을 채우므로 생략 가능(서버가 검증).
-    [property: JsonPropertyName("sql")] string? Sql = null,
-    [property: JsonPropertyName("partition_column")] string? PartitionColumn = null,
-    [property: JsonPropertyName("target_table")] string? TargetTable = null,
+    [JsonProperty("sql")] public string Sql { get; set; }
+    [JsonProperty("partition_column")] public string PartitionColumn { get; set; }
+    [JsonProperty("target_table")] public string TargetTable { get; set; }
     // ── 템플릿 모드(선택) ── template_id 를 주면 SQL 전문 대신 서버 템플릿을 params 로 렌더한다.
     // ‼ 여기서 params 는 "이름→값 map" 이다(/query-execute 의 "배열" 과 다름 — 9장 참고).
     // partition_column·target_table·exec_mode 등은 요청이 명시하면 우선, 없으면 manifest 기본값.
-    [property: JsonPropertyName("template_id")] string? TemplateId = null,
-    [property: JsonPropertyName("params")] Dictionary<string, object?>? Params = null,
+    [JsonProperty("template_id")] public string TemplateId { get; set; }
+    [JsonProperty("params")] public Dictionary<string, object> Params { get; set; }
     // ── 날짜 fan-out(선택, stage_insert 템플릿 전용) ── task_column+task_range 를 주면 IN 분할
     // 대신 "날짜 하나 = task 하나" 로 펼친다. task_range 는 오늘 기준 상대 일수 [start, end](양끝 포함).
-    [property: JsonPropertyName("task_column")] string? TaskColumn = null,
-    [property: JsonPropertyName("task_range")] int[]? TaskRange = null,
-    [property: JsonPropertyName("username")] string? Username = null,
-    [property: JsonPropertyName("parallelism")] int Parallelism = 4,
-    [property: JsonPropertyName("exec_mode")] string ExecMode = "stage_insert",
+    [JsonProperty("task_column")] public string TaskColumn { get; set; }
+    [JsonProperty("task_range")] public int[] TaskRange { get; set; }
+    [JsonProperty("username")] public string Username { get; set; }
+    // 값 타입은 null 이 없어 항상 직렬화되므로 서버 기본값과 같은 값을 기본으로 둔다.
+    [JsonProperty("parallelism")] public int Parallelism { get; set; } = 4;
+    [JsonProperty("exec_mode")] public string ExecMode { get; set; } = "stage_insert";
     // stage_insert 모드: staging_table·wrapper_query 는 필수, staging_ddl 은 선택
     // (생략 시 executor 가 테이블 생성을 건너뛰고 기존 staging_table 사용).
     // 템플릿 모드에서는 이 세 값도 렌더 결과가 채우므로 요청에서 생략할 수 있다.
-    [property: JsonPropertyName("staging_table")] string? StagingTable = null,
-    [property: JsonPropertyName("staging_ddl")] string? StagingDdl = null,
-    [property: JsonPropertyName("wrapper_query")] string? WrapperQuery = null)
-{
-    // null 필드는 직렬화에서 제외(서버 기본값을 그대로 쓰도록).
-    public static readonly JsonSerializerOptions Json =
-        new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+    [JsonProperty("staging_table")] public string StagingTable { get; set; }
+    [JsonProperty("staging_ddl")] public string StagingDdl { get; set; }
+    [JsonProperty("wrapper_query")] public string WrapperQuery { get; set; }
 }
 
-public record CreateJobResponse(
-    [property: JsonPropertyName("job_id")] string JobId);
+public class CreateJobResponse
+{
+    [JsonProperty("job_id")] public string JobId { get; set; }
+}
 
 // /status 경량 응답(폴링용)
-public record JobProgress(
-    [property: JsonPropertyName("job_id")] string JobId,
-    [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("progress_percent")] double ProgressPercent,
-    [property: JsonPropertyName("completed")] int Completed,
-    [property: JsonPropertyName("total")] int Total,
-    [property: JsonPropertyName("total_rows_written")] long TotalRowsWritten,
-    [property: JsonPropertyName("error")] string? Error);
+public class JobProgress
+{
+    [JsonProperty("job_id")] public string JobId { get; set; }
+    [JsonProperty("status")] public string Status { get; set; }
+    [JsonProperty("progress_percent")] public double ProgressPercent { get; set; }
+    [JsonProperty("completed")] public int Completed { get; set; }
+    [JsonProperty("total")] public int Total { get; set; }
+    [JsonProperty("total_rows_written")] public long TotalRowsWritten { get; set; }
+    [JsonProperty("error")] public string Error { get; set; }
+}
 
 // 태스크 요약(전체 뷰의 tasks[] 항목) — 에러 진단용
-public record TaskSummary(
-    [property: JsonPropertyName("task_id")] string TaskId,
-    [property: JsonPropertyName("executor_url")] string? ExecutorUrl,
-    [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("rows_written")] long RowsWritten,
-    [property: JsonPropertyName("attempt")] int Attempt,
-    [property: JsonPropertyName("partition_values")] List<string> PartitionValues,
-    [property: JsonPropertyName("error")] string? Error);
+public class TaskSummary
+{
+    [JsonProperty("task_id")] public string TaskId { get; set; }
+    [JsonProperty("executor_url")] public string ExecutorUrl { get; set; }
+    [JsonProperty("status")] public string Status { get; set; }
+    [JsonProperty("rows_written")] public long RowsWritten { get; set; }
+    [JsonProperty("attempt")] public int Attempt { get; set; }
+    [JsonProperty("partition_values")] public List<string> PartitionValues { get; set; }
+    [JsonProperty("error")] public string Error { get; set; }
+}
 
-public record JobView(
-    [property: JsonPropertyName("job_id")] string JobId,
-    [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("error")] string? Error,
-    [property: JsonPropertyName("total_rows_written")] long TotalRowsWritten,
-    [property: JsonPropertyName("tasks")] List<TaskSummary> Tasks);
+public class JobView
+{
+    [JsonProperty("job_id")] public string JobId { get; set; }
+    [JsonProperty("status")] public string Status { get; set; }
+    [JsonProperty("error")] public string Error { get; set; }
+    [JsonProperty("total_rows_written")] public long TotalRowsWritten { get; set; }
+    [JsonProperty("tasks")] public List<TaskSummary> Tasks { get; set; }
+}
 
 // 작업 실행 실패를 알리는 예외(호출 측에서 잡아 처리)
 public class JobFailedException : Exception
@@ -480,46 +498,64 @@ public class JobFailedException : Exception
 public class QueryExecutorClient
 {
     private static readonly HashSet<string> Terminal =
-        new() { "DONE", "PARTIAL", "FAILED", "CANCELLED" };
+        new HashSet<string> { "DONE", "PARTIAL", "FAILED", "CANCELLED" };
 
     private readonly HttpClient _http;
 
-    public QueryExecutorClient(HttpClient http) => _http = http;
+    public QueryExecutorClient(HttpClient http) { _http = http; }
+
+    // JSON 본문(Content-Type: application/json)을 만든다.
+    private static StringContent JsonBody(object value, JsonSerializerSettings settings)
+        => new StringContent(JsonConvert.SerializeObject(value, settings), Encoding.UTF8, "application/json");
+
+    // GET 후 본문 JSON 을 역직렬화한다.
+    private async Task<T> GetJsonAsync<T>(string url, CancellationToken ct)
+    {
+        using (var resp = await _http.GetAsync(url, ct))
+        {
+            resp.EnsureSuccessStatusCode();
+            var json = await resp.Content.ReadAsStringAsync();
+            return JsonConvert.DeserializeObject<T>(json);
+        }
+    }
 
     // 1단계: 작업 제출 → job_id 반환. 429(용량 초과)는 Retry-After 만큼 대기 후 재시도.
-    public async Task<string> SubmitAsync(CreateJobRequest req, CancellationToken ct = default)
+    public async Task<string> SubmitAsync(CreateJobRequest req, CancellationToken ct = default(CancellationToken))
     {
         while (true)
         {
-            using var resp = await _http.PostAsJsonAsync("/jobs", req, CreateJobRequest.Json, ct);
-            if (resp.StatusCode == HttpStatusCode.Accepted) // 202
+            using (var content = JsonBody(req, CreateJobRequest.Json))
+            using (var resp = await _http.PostAsync("/jobs", content, ct))
             {
-                var body = await resp.Content.ReadFromJsonAsync<CreateJobResponse>(cancellationToken: ct);
-                return body!.JobId;
+                if (resp.StatusCode == HttpStatusCode.Accepted) // 202
+                {
+                    var json = await resp.Content.ReadAsStringAsync();
+                    return JsonConvert.DeserializeObject<CreateJobResponse>(json).JobId;
+                }
+                if ((int)resp.StatusCode == 429) // TooManyRequests(.NET 4.7 열거형에 없어 정수로 비교)
+                {
+                    var wait = resp.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5);
+                    await Task.Delay(wait, ct);
+                    continue;
+                }
+                // 422 등 그 외는 본문을 그대로 실어 예외로 던진다(error_code/message 또는 detail).
+                var err = await resp.Content.ReadAsStringAsync();
+                throw new HttpRequestException($"작업 제출 실패 ({(int)resp.StatusCode}): {err}");
             }
-            if (resp.StatusCode == HttpStatusCode.TooManyRequests) // 429
-            {
-                var wait = resp.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5);
-                await Task.Delay(wait, ct);
-                continue;
-            }
-            // 422 등 그 외는 본문을 그대로 실어 예외로 던진다(error_code/message 또는 detail).
-            var err = await resp.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException($"작업 제출 실패 ({(int)resp.StatusCode}): {err}");
         }
     }
 
     // 경량 상태 조회(폴링용)
-    public async Task<JobProgress> GetStatusAsync(string jobId, CancellationToken ct = default)
-        => (await _http.GetFromJsonAsync<JobProgress>($"/jobs/{jobId}/status", ct))!;
+    public Task<JobProgress> GetStatusAsync(string jobId, CancellationToken ct = default(CancellationToken))
+        => GetJsonAsync<JobProgress>($"/jobs/{jobId}/status", ct);
 
     // 태스크별 에러까지 담은 전체 뷰
-    public async Task<JobView> GetJobAsync(string jobId, CancellationToken ct = default)
-        => (await _http.GetFromJsonAsync<JobView>($"/jobs/{jobId}", ct))!;
+    public Task<JobView> GetJobAsync(string jobId, CancellationToken ct = default(CancellationToken))
+        => GetJsonAsync<JobView>($"/jobs/{jobId}", ct);
 
     // 2단계: 종료 상태가 될 때까지 폴링. DONE 이면 전체 뷰를 반환, 그 외 종료는 예외.
     public async Task<JobView> WaitForCompletionAsync(
-        string jobId, TimeSpan? pollInterval = null, CancellationToken ct = default)
+        string jobId, TimeSpan? pollInterval = null, CancellationToken ct = default(CancellationToken))
     {
         var interval = pollInterval ?? TimeSpan.FromSeconds(2);
         while (true)
@@ -536,19 +572,21 @@ public class QueryExecutorClient
     }
 
     // 실패 파티션만 재실행 → 새 job_id
-    public async Task<string> RetryAsync(string jobId, CancellationToken ct = default)
+    public async Task<string> RetryAsync(string jobId, CancellationToken ct = default(CancellationToken))
     {
-        using var resp = await _http.PostAsync($"/jobs/{jobId}/retry", null, ct);
-        resp.EnsureSuccessStatusCode();
-        var body = await resp.Content.ReadFromJsonAsync<CreateJobResponse>(cancellationToken: ct);
-        return body!.JobId;
+        using (var resp = await _http.PostAsync($"/jobs/{jobId}/retry", null, ct))
+        {
+            resp.EnsureSuccessStatusCode();
+            var json = await resp.Content.ReadAsStringAsync();
+            return JsonConvert.DeserializeObject<CreateJobResponse>(json).JobId;
+        }
     }
 
     // 작업 취소
-    public async Task CancelAsync(string jobId, CancellationToken ct = default)
+    public async Task CancelAsync(string jobId, CancellationToken ct = default(CancellationToken))
     {
-        using var resp = await _http.PostAsync($"/jobs/{jobId}/cancel", null, ct);
-        resp.EnsureSuccessStatusCode();
+        using (var resp = await _http.PostAsync($"/jobs/{jobId}/cancel", null, ct))
+            resp.EnsureSuccessStatusCode();
     }
 }
 
@@ -565,43 +603,46 @@ public static class Example
         };
         var client = new QueryExecutorClient(http);
 
-        var req = new CreateJobRequest(
-            Sql: "SELECT id, region, amount, ts FROM sales WHERE region IN ('A','B','C','D')",
-            PartitionColumn: "region",
-            TargetTable: "warehouse.sales",
-            Username: "etl-bot",
-            Parallelism: 4,
-            ExecMode: "stage_insert",
-            StagingTable: "stg_sales",
-            StagingDdl: "CREATE TEMP TABLE stg_sales (LIKE warehouse.sales)",
-            WrapperQuery: "INSERT INTO warehouse.sales (id, region, amount, ts) " +
-                          "SELECT id, region, amount, ts FROM stg_sales");
+        var req = new CreateJobRequest
+        {
+            Sql = "SELECT id, region, amount, ts FROM sales WHERE region IN ('A','B','C','D')",
+            PartitionColumn = "region",
+            TargetTable = "warehouse.sales",
+            Username = "etl-bot",
+            Parallelism = 4,
+            ExecMode = "stage_insert",
+            StagingTable = "stg_sales",
+            StagingDdl = "CREATE TEMP TABLE stg_sales (LIKE warehouse.sales)",
+            WrapperQuery = "INSERT INTO warehouse.sales (id, region, amount, ts) " +
+                           "SELECT id, region, amount, ts FROM stg_sales",
+        };
 
         // 작업 전체에 대한 상한 시간은 CancellationToken 으로 건다(예: 30분).
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
-
-        try
+        using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30)))
         {
-            var jobId = await client.SubmitAsync(req, cts.Token);
-            Console.WriteLine($"제출됨: {jobId}");
-
-            var result = await client.WaitForCompletionAsync(
-                jobId, TimeSpan.FromSeconds(2), cts.Token);
-
-            Console.WriteLine($"완료(DONE): {result.TotalRowsWritten} 행 적재");
-        }
-        catch (JobFailedException ex)
-        {
-            // PARTIAL/FAILED/CANCELLED — 어떤 파티션이 왜 실패했는지 태스크별로 출력
-            Console.WriteLine($"작업 실패: {ex.Status} ({ex.View.Error})");
-            foreach (var t in ex.View.Tasks.Where(t => t.Status == "FAILED"))
-                Console.WriteLine($"  - {string.Join(",", t.PartitionValues)}: {t.Error}");
-
-            // 부분 실패라면 실패 파티션만 재실행할 수 있다
-            if (ex.Status is "PARTIAL" or "FAILED")
+            try
             {
-                var retryId = await client.RetryAsync(ex.View.JobId);
-                Console.WriteLine($"재실행 작업: {retryId}");
+                var jobId = await client.SubmitAsync(req, cts.Token);
+                Console.WriteLine($"제출됨: {jobId}");
+
+                var result = await client.WaitForCompletionAsync(
+                    jobId, TimeSpan.FromSeconds(2), cts.Token);
+
+                Console.WriteLine($"완료(DONE): {result.TotalRowsWritten} 행 적재");
+            }
+            catch (JobFailedException ex)
+            {
+                // PARTIAL/FAILED/CANCELLED — 어떤 파티션이 왜 실패했는지 태스크별로 출력
+                Console.WriteLine($"작업 실패: {ex.Status} ({ex.View.Error})");
+                foreach (var t in ex.View.Tasks.Where(t => t.Status == "FAILED"))
+                    Console.WriteLine($"  - {string.Join(",", t.PartitionValues)}: {t.Error}");
+
+                // 부분 실패라면 실패 파티션만 재실행할 수 있다
+                if (ex.Status == "PARTIAL" || ex.Status == "FAILED")
+                {
+                    var retryId = await client.RetryAsync(ex.View.JobId);
+                    Console.WriteLine($"재실행 작업: {retryId}");
+                }
             }
         }
     }
@@ -617,17 +658,19 @@ SQL 전문 대신 **서버 템플릿 + 파라미터**로 같은 작업을 제출
 
 ```csharp
 // 템플릿 stage_insert — sql/staging_ddl/wrapper_query 는 서버가 렌더하므로 넘기지 않는다.
-var req = new CreateJobRequest(
-    TemplateId: "sales_migration",
-    Params: new Dictionary<string, object?>
+var req = new CreateJobRequest
+{
+    TemplateId = "sales_migration",
+    Params = new Dictionary<string, object>
     {
         ["start_dt"] = "2026-01-01",
         ["end_dt"]   = "2026-06-25",
         ["regions"]  = new[] { "KR", "US" },   // list 타입 파라미터는 배열로
     },
-    Username: "etl-bot",
-    Parallelism: 4);
+    Username = "etl-bot",
+    Parallelism = 4,
     // exec_mode·partition_column·target_table 은 manifest 기본값을 쓰거나 여기서 명시해 덮어쓴다.
+};
 
 var jobId = await client.SubmitAsync(req);
 var result = await client.WaitForCompletionAsync(jobId);
@@ -637,18 +680,20 @@ var result = await client.WaitForCompletionAsync(jobId);
 대신 날짜 목록으로 펼쳐지고, 적재는 stage_insert **append** 입니다(2.2의 날짜별 분할 참고).
 
 ```csharp
-var req = new CreateJobRequest(
-    TemplateId: "daily_sales",
-    Params: new Dictionary<string, object?> { ["region"] = "KR" },
-    TaskColumn: "dt",
-    TaskRange: new[] { -7, 0 },   // 오늘 포함 8일 → 8 task
-    Username: "etl-bot");
+var req = new CreateJobRequest
+{
+    TemplateId = "daily_sales",
+    Params = new Dictionary<string, object> { ["region"] = "KR" },
+    TaskColumn = "dt",
+    TaskRange = new[] { -7, 0 },   // 오늘 포함 8일 → 8 task
+    Username = "etl-bot",
+};
 
 var jobId = await client.SubmitAsync(req);
 ```
 
 > 실행 전에 렌더된 계획만 보고 싶으면 raw 모드와 똑같이 `"dry_run": true` 를 넣으면 됩니다
-> (별도 필드가 필요하면 `CreateJobRequest` 에 `[property: JsonPropertyName("dry_run")] bool DryRun = false`
+> (별도 필드가 필요하면 `CreateJobRequest` 에 `[JsonProperty("dry_run")] public bool DryRun { get; set; }`
 > 를 추가). 필수 파라미터 누락·없는 템플릿은 **422**(`TEMPLATE_PARAM_ERROR`/`TEMPLATE_NOT_FOUND`)로
 > 거부되며, `SubmitAsync` 가 본문을 실어 예외로 던집니다(5.2 참고).
 
@@ -718,67 +763,80 @@ var jobId = await client.SubmitAsync(req);
 ```csharp
 // ── /query-execute 요청/응답 모델 ────────────────────────────────
 // ‼ params 는 이름-값 항목 "배열"이다(/jobs 템플릿 모드의 map 과 다름).
-public record QueryParam(
-    [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("value")] object? Value);
-
-public record QueryExecuteRequest(
-    [property: JsonPropertyName("template_id")] string TemplateId,
-    [property: JsonPropertyName("params")] IReadOnlyList<QueryParam> Params,
-    [property: JsonPropertyName("datasource")] string? Datasource = null,  // impala|trino|greenplum|history
-    [property: JsonPropertyName("limit")] int Limit = 100)                 // 1~10000
+public class QueryParam
 {
-    public static readonly JsonSerializerOptions Json =
-        new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+    [JsonProperty("name")] public string Name { get; set; }
+    [JsonProperty("value")] public object Value { get; set; }
+
+    public QueryParam() { }
+    public QueryParam(string name, object value) { Name = name; Value = value; }
 }
 
-public record QueryExecuteResult(
-    [property: JsonPropertyName("template_id")] string TemplateId,
-    [property: JsonPropertyName("datasource")] string? Datasource,
-    [property: JsonPropertyName("sql")] string Sql,                        // 렌더된 SELECT(감사·재현용)
-    [property: JsonPropertyName("columns")] List<string> Columns,
-    [property: JsonPropertyName("rows")] List<List<JsonElement>> Rows,     // 셀 타입이 섞이므로 JsonElement
-    [property: JsonPropertyName("row_count")] int RowCount,
-    [property: JsonPropertyName("truncated")] bool Truncated,              // limit 초과로 잘렸는지
-    [property: JsonPropertyName("limit")] int Limit,
-    [property: JsonPropertyName("elapsed_ms")] double ElapsedMs,
-    [property: JsonPropertyName("executed_by")] string? ExecutedBy);       // 실행 executor(직접이면 null)
+public class QueryExecuteRequest
+{
+    public static readonly JsonSerializerSettings Json =
+        new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+    [JsonProperty("template_id")] public string TemplateId { get; set; }
+    [JsonProperty("params")] public IReadOnlyList<QueryParam> Params { get; set; }
+    [JsonProperty("datasource")] public string Datasource { get; set; }  // impala|trino|greenplum|history
+    [JsonProperty("limit")] public int Limit { get; set; } = 100;        // 1~10000
+}
+
+public class QueryExecuteResult
+{
+    [JsonProperty("template_id")] public string TemplateId { get; set; }
+    [JsonProperty("datasource")] public string Datasource { get; set; }
+    [JsonProperty("sql")] public string Sql { get; set; }                // 렌더된 SELECT(감사·재현용)
+    [JsonProperty("columns")] public List<string> Columns { get; set; }
+    [JsonProperty("rows")] public List<List<JToken>> Rows { get; set; }  // 셀 타입이 섞이므로 JToken
+    [JsonProperty("row_count")] public int RowCount { get; set; }
+    [JsonProperty("truncated")] public bool Truncated { get; set; }      // limit 초과로 잘렸는지
+    [JsonProperty("limit")] public int Limit { get; set; }
+    [JsonProperty("elapsed_ms")] public double ElapsedMs { get; set; }
+    [JsonProperty("executed_by")] public string ExecutedBy { get; set; } // 실행 executor(직접이면 null)
+}
 
 // ── QueryExecutorClient 에 추가하는 메서드 ───────────────────────
 // 결과 반환 실행: 템플릿+파라미터로 SELECT 를 렌더·실행하고 상위 N행을 동기로 받는다.
 public async Task<QueryExecuteResult> QueryExecuteAsync(
-    QueryExecuteRequest req, CancellationToken ct = default)
+    QueryExecuteRequest req, CancellationToken ct = default(CancellationToken))
 {
-    using var resp = await _http.PostAsJsonAsync(
-        "/query-execute", req, QueryExecuteRequest.Json, ct);
-    if (!resp.IsSuccessStatusCode)
+    using (var content = JsonBody(req, QueryExecuteRequest.Json))
+    using (var resp = await _http.PostAsync("/query-execute", content, ct))
     {
-        // 422=렌더/검증 오류(error_code/message), 502=데이터소스 접속·SQL 오류
-        var err = await resp.Content.ReadAsStringAsync(ct);
-        throw new HttpRequestException($"query-execute 실패 ({(int)resp.StatusCode}): {err}");
+        if (!resp.IsSuccessStatusCode)
+        {
+            // 422=렌더/검증 오류(error_code/message), 502=데이터소스 접속·SQL 오류
+            var err = await resp.Content.ReadAsStringAsync();
+            throw new HttpRequestException($"query-execute 실패 ({(int)resp.StatusCode}): {err}");
+        }
+        var json = await resp.Content.ReadAsStringAsync();
+        return JsonConvert.DeserializeObject<QueryExecuteResult>(json);
     }
-    return (await resp.Content.ReadFromJsonAsync<QueryExecuteResult>(cancellationToken: ct))!;
 }
 ```
 
 사용 예입니다. 이관 소스(Impala)와 조회 소스(Trino)를 나눠 쓰려면 `Datasource` 를 명시합니다.
 
 ```csharp
-var res = await client.QueryExecuteAsync(new QueryExecuteRequest(
-    TemplateId: "order_search",
-    Params: new[]
+var res = await client.QueryExecuteAsync(new QueryExecuteRequest
+{
+    TemplateId = "order_search",
+    Params = new[]
     {
         new QueryParam("regions",    new[] { "KR", "US" }),  // list 파라미터는 배열
         new QueryParam("start_dt",   "2026-01-01"),
         new QueryParam("end_dt",     "2026-01-31"),
         new QueryParam("min_amount", 1000),                  // 선택 — 빼면 금액 조건 생략
     },
-    Datasource: "trino",   // 생략 시 서버 source.type
-    Limit: 100));
+    Datasource = "trino",   // 생략 시 서버 source.type
+    Limit = 100,
+});
 
 Console.WriteLine($"{res.RowCount}행, {res.ElapsedMs:F1}ms, 실행: {res.ExecutedBy ?? "coordinator 직접"}");
 foreach (var row in res.Rows)
-    // row 는 셀(JsonElement) 목록 — columns 순서와 1:1. 필요한 타입으로 꺼내 쓴다.
+    // row 는 셀(JToken) 목록 — columns 순서와 1:1. 필요한 타입으로 꺼내 쓴다.
     Console.WriteLine(string.Join(" | ", res.Columns.Zip(row, (c, v) => $"{c}={v}")));
 ```
 
