@@ -12,6 +12,11 @@ query-execute 의 trino 경로가 이 함수에 실행을 위임한다(프레임
     query.func.config.user=query-executor
     query.func.config.catalog=hive
     query.func.config.schema=default
+    # 비밀번호(BasicAuth)를 쓰면 http_scheme=https 가 필수다. 자체서명 인증서면 verify=false
+    # 로 TLS 검증을 끄거나 CA 번들 경로를 준다.
+    query.func.config.password=secret
+    query.func.config.http_scheme=https
+    query.func.config.verify=false
     # 임의 파라미터도 자유롭게 추가할 수 있다(아래 run 에서 꺼내 쓴다):
     query.func.config.statement_timeout_s=60
 
@@ -51,6 +56,18 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
     if password:
         # BasicAuthentication 은 trino 클라이언트 제약상 https 에서만 허용된다.
         kwargs["auth"] = trino.auth.BasicAuthentication(kwargs["user"], password)
+
+    # TLS 인증서 검증. 자체서명 인증서를 쓰는 사내 배포에서는 "false" 로 끄거나 CA 번들
+    # 경로를 준다(값 문자열: false/true/no/0/1 또는 파일 경로). 기본은 검증 켜짐.
+    verify = config.get("verify")
+    if verify is not None:
+        low = verify.strip().lower()
+        if low in ("false", "0", "no", "off"):
+            kwargs["verify"] = False
+        elif low in ("true", "1", "yes", "on"):
+            kwargs["verify"] = True
+        elif low:
+            kwargs["verify"] = verify  # CA 번들 파일 경로로 해석
 
     conn = trino.dbapi.connect(**kwargs)
     try:
