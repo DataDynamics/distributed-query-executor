@@ -4,8 +4,7 @@
 #
 # 점검 대상
 #   1) OS 패키지 — README 의 빌드/런타임 의존성(rpm -q 로 확인):
-#        gcc gcc-c++ make python3-devel python3 python3-pip
-#        krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi
+#        gcc gcc-c++ make python3-devel python3 python3-pip cyrus-sasl-devel
 #   2) 파이썬 휠 — packaging/wheels/<그룹>/ 의 .whl/.tar.gz 파일이 .venv 에
 #      (이름+버전 일치로) 설치되어 있는지 확인.
 #
@@ -27,10 +26,9 @@ ROOT="$(cd "$DIR/../.." && pwd)"
 VENV_PY="${VENV_PY:-$ROOT/.venv/bin/python}"
 WHEELS_ROOT="${WHEELS_ROOT:-$ROOT/packaging/wheels}"
 
-# README 가 명시한 OS 패키지 목록(빌드 툴체인 + 파이썬 + Kerberos/SASL).
+# README 가 명시한 OS 패키지 목록(빌드 툴체인 + 파이썬 + SASL).
 OS_PACKAGES=(
-    gcc gcc-c++ make python3-devel python3 python3-pip
-    krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi
+    gcc gcc-c++ make python3-devel python3 python3-pip cyrus-sasl-devel
 )
 
 # 점검할 휠 그룹(인자로 주면 그 그룹만, 없으면 런타임 기본값).
@@ -80,9 +78,9 @@ load_installed() {
     return 0
 }
 
-# 휠/슬랫지 파일명에서 (이름, 버전) 추출.
+# 휠/sdist 파일명에서 (이름, 버전) 추출.
 #   foo_bar-1.2.3-cp39-...whl   → foo_bar 1.2.3
-#   gssapi-1.11.1.tar.gz        → gssapi 1.11.1
+#   foo-1.2.3.tar.gz            → foo 1.2.3
 parse_filename() {
     local base="$1" stem
     if [[ "$base" == *.whl ]]; then

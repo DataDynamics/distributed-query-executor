@@ -363,21 +363,18 @@ class Settings:
         self.executor_shutdown_drain_timeout_s: float = float(
             _get("executor", "shutdown_drain_timeout_s", 25)
         )
-        # Impala (source) — 데이터를 읽어오는 원본. TLS + LDAP 인증 기준 기본값(GSSAPI 도 지원).
+        # Impala (source) — 데이터를 읽어오는 원본. TLS + LDAP 인증 기준 기본값.
         self.impala_host: str = _get_nested("executor", "impala", "host", "")
         self.impala_port: int = int(_get_nested("executor", "impala", "port", 21050))
         self.impala_database: str = _get_nested("executor", "impala", "database", "default")
         self.impala_auth_mechanism: str = _get_nested(
             "executor", "impala", "auth_mechanism", "LDAP"
         )
-        self.impala_kerberos_service_name: str = _get_nested(
-            "executor", "impala", "kerberos_service_name", "impala"
-        )
         self.impala_use_ssl: bool = _to_bool(
             _get_nested("executor", "impala", "use_ssl", True)
         )
         self.impala_ca_cert: str = _get_nested("executor", "impala", "ca_cert", "")
-        # GSSAPI 에서는 사용하지 않음(LDAP/PLAIN 인증일 때만)
+        # LDAP/PLAIN 인증일 때 사용하는 사용자/비밀번호
         self.impala_user: str = _get_nested("executor", "impala", "user", "")
         self.impala_password: str = _get_nested("executor", "impala", "password", "")
         # Impala 쿼리 옵션(전역 기본값). "MEM_LIMIT=2g,REQUEST_POOL=etl" 형태 → dict.

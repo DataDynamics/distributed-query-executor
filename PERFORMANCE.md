@@ -444,7 +444,6 @@ WHERE dt IN ('2026-07-01','2026-07-02');   -- ← 각 task 의 파티션 버킷
 - **네트워크**: 지금은 executor 만 Impala 와 통신하지만, PXF 는 **모든 GP 세그먼트가 HDFS
   (NameNode/DataNode)·오브젝트 스토어에 직접 도달**해야 한다. 망분리/에어갭에선 방화벽·라우팅이
   실제 관문(가장 큰 선행 과제).
-- **Kerberos**: PXF→HDFS 커버로스면 GP 용 keytab/PXF 커버로스 설정 필요.
 - **타입 매핑**: Hive/Parquet→GP 는 PXF 프로파일이 대부분 처리(엣지 타입만 확인).
 - **가시성**: 행 단위 진행률은 사라진다(적재를 GP 가 함). 단계는 여전히 SUBMIT/INSERT/COMMIT 로 추적.
 

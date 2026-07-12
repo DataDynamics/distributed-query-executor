@@ -9,9 +9,9 @@ set -euo pipefail
 APP_USER="${APP_USER:-gpadmin}"            # 서비스 계정(없으면 생성, 홈=/data1)
 APP_BASE="/data1"
 APP_HOME="$APP_BASE/query-executor"
-CONF_DIR="$APP_HOME/config"                # config.{properties,yml}, krb5.conf, 인증서/키탭
+CONF_DIR="$APP_HOME/config"                # config.{properties,yml}, 인증서
 LOG_DIR="$APP_HOME/logs"
-RUN_DIR="$APP_HOME/run"                     # PID, Kerberos ccache
+RUN_DIR="$APP_HOME/run"                     # PID
 BIN_DIR="$APP_HOME/bin"                     # 런처 스크립트
 VENV="$APP_HOME/.venv"
 
@@ -20,7 +20,7 @@ PYTHON="${PYTHON:-python3.9}"
 # 에어갭(인터넷 차단) 설치: WHEELHOUSE 에 미리 받아 둔 wheel 디렉터리를 지정하면
 # PyPI 대신 그 디렉터리에서만(--no-index) 설치한다. 비우면 pip 기본 인덱스(Nexus 등) 사용.
 WHEELHOUSE="${WHEELHOUSE:-}"
-# executor 런타임 드라이버(impyla/gssapi 등)까지 설치하려면 INSTALL_EXECUTOR=1.
+# executor 런타임 드라이버(impyla 등)까지 설치하려면 INSTALL_EXECUTOR=1.
 INSTALL_EXECUTOR="${INSTALL_EXECUTOR:-0}"
 
 # 저장소 루트(이 스크립트의 상위 디렉터리)
@@ -82,65 +82,23 @@ if [[ ! -f "$CONF_DIR/config.properties" ]]; then
 fi
 [[ -f "$CONF_DIR/config.yml" ]] || cp "$APP_HOME/packaging/config/config.yml" "$CONF_DIR/config.yml"
 
-# Impala Kerberos+TLS 자리표시 파일(실제 파일로 교체할 것). Greenplum 은 TLS/Kerberos 미적용.
-if [[ ! -f "$CONF_DIR/krb5.conf" ]]; then
-    cat > "$CONF_DIR/krb5.conf" <<'KRB'
-# Impala Kerberos 용 krb5 설정(KRB5_CONFIG 로 사용). 실제 realm/KDC 로 교체할 것.
-[libdefaults]
-    default_realm = EXAMPLE.LOCAL
-    dns_lookup_realm = false
-    dns_lookup_kdc = false
-    rdns = false
-
-[realms]
-    EXAMPLE.LOCAL = {
-        kdc = kdc.example.local
-        admin_server = kdc.example.local
-    }
-
-[domain_realm]
-    .example.local = EXAMPLE.LOCAL
-    example.local = EXAMPLE.LOCAL
-KRB
-fi
+# Impala TLS 자리표시 파일(실제 파일로 교체할 것). Greenplum 은 TLS 미적용.
 [[ -f "$CONF_DIR/impala-ca.pem" ]] || printf '# TLS CA 인증서(PEM) 자리표시 — 실제 Impala CA 로 교체할 것\n' > "$CONF_DIR/impala-ca.pem"
-[[ -f "$CONF_DIR/impala.keytab" ]] || printf '' > "$CONF_DIR/impala.keytab"
 
 echo "==> 런처 스크립트 배치 -> $BIN_DIR"
 cp "$APP_HOME"/deploy/bin/*.sh "$BIN_DIR"/
 chmod +x "$BIN_DIR"/*.sh
 
-echo "==> Kerberos 티켓 자동 갱신 cron 등록($APP_USER, @reboot + 4시간마다)"
-if command -v crontab >/dev/null 2>&1; then
-    CRON_REBOOT="@reboot $BIN_DIR/kinit-renew.sh >> $LOG_DIR/kinit.log 2>&1"
-    CRON_EVERY4H="0 */4 * * * $BIN_DIR/kinit-renew.sh >> $LOG_DIR/kinit.log 2>&1"
-    # 기존 kinit-renew 항목을 제거하고 새로 등록(멱등). keytab 이 비어 있으면 스크립트가
-    # 스스로 건너뛰므로, 실제 keytab 배치 전까지는 무해하다.
-    { crontab -u "$APP_USER" -l 2>/dev/null | grep -v 'kinit-renew.sh'; \
-      echo "$CRON_REBOOT"; echo "$CRON_EVERY4H"; } | crontab -u "$APP_USER" -
-    echo "    등록됨 (crontab -u $APP_USER -l 로 확인)"
-else
-    echo "    crontab 미설치 → 수동 등록 필요: 'sudo dnf install -y cronie' 후"
-    echo "    (echo '0 */4 * * * $BIN_DIR/kinit-renew.sh') | crontab -u $APP_USER -"
-fi
-
 echo "==> 소유권/권한"
 chown -R "$APP_USER:$APP_USER" "$APP_BASE"
 chmod 750 "$CONF_DIR"
-chmod 640 "$CONF_DIR"/config.properties "$CONF_DIR"/config.yml "$CONF_DIR"/krb5.conf "$CONF_DIR"/impala-ca.pem
-chmod 600 "$CONF_DIR"/impala.keytab
+chmod 640 "$CONF_DIR"/config.properties "$CONF_DIR"/config.yml "$CONF_DIR"/impala-ca.pem
 
 cat <<EOF
 
 설치 완료(/data1 트리). 다음을 확인/수정하세요:
   - 설정:        $CONF_DIR/config.properties , $CONF_DIR/config.yml
   - Impala TLS:  $CONF_DIR/impala-ca.pem        (실제 CA 인증서로 교체)
-  - Kerberos:    $CONF_DIR/impala.keytab        (실제 keytab 으로 교체, 권한 600)
-                 $CONF_DIR/krb5.conf            (realm/KDC 수정)
-                 config.properties 의 impala.host / krb5.principal / keytab 경로 확인
-
-Kerberos 티켓 발급(이후 cron 등으로 주기 갱신):
-  sudo -u $APP_USER $BIN_DIR/kinit-renew.sh
 
 기동/중지/상태(전체):
   sudo -u $APP_USER $BIN_DIR/start.sh

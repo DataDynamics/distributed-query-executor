@@ -77,7 +77,7 @@ flowchart TB
     Dispatcher -- "② POST /tasks (sub-query 전문)" --> E1 & E2 & E3
     Monitor -- "주기 폴링" --> E1 & E2 & E3
 
-    E1 & E2 & E3 -- "③ read (TLS+Kerberos)" --> Impala
+    E1 & E2 & E3 -- "③ read (TLS+LDAP)" --> Impala
     E1 & E2 & E3 -- "④ COPY/INSERT 적재" --> GP
 
     Dispatcher -- "job_history + 공유 jobs store" --> PG
@@ -691,7 +691,7 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 |---|---|
 | 언어/프레임워크 | Python 3.9+(RHEL 9.2 기본), **FastAPI**(coordinator·executor 공통) |
 | SQL 파싱 | **sqlglot**(기본 `read="hive"`, 요청별 방언 재정의) |
-| Impala 읽기 | **impyla**(HiveServer2, TLS+Kerberos) + 배치 fetch |
+| Impala 읽기 | **impyla**(HiveServer2, TLS+LDAP) + 배치 fetch |
 | Greenplum 쓰기 | **psycopg** `COPY FROM STDIN` / INSERT |
 | Coordinator↔Executor | **httpx**(AsyncClient) |
 | 동시성 | asyncio + Semaphore(admission/디스패치) + thread pool(동기 DB 호출 래핑) |

@@ -1,16 +1,12 @@
 # Executor 런타임 의존성 (Impala 읽기 + Greenplum 적재용 드라이버 포함)
 #
 # RHEL 9.2 시스템 패키지(먼저 설치). RHEL 9.2 기본 Python 3.9 를 그대로 사용한다:
-#   sudo dnf install -y gcc gcc-c++ make python3-devel \
-#       krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi
-#   - krb5-workstation: kinit (Kerberos 티켓 발급)
-#   - cyrus-sasl-gssapi / krb5-devel: impyla GSSAPI(Kerberos) 인증
+#   sudo dnf install -y gcc gcc-c++ make python3-devel cyrus-sasl-devel
 -r requirements.txt
 impyla>=0.19
 # Trino 소스(source.type=trino) 클라이언트. 에어갭 환경에선 오프라인 wheel 로 설치한다.
 trino>=0.320
 psycopg[binary]>=3.2
-# Impala SASL/Kerberos(GSSAPI) 인증
+# Impala SASL(LDAP/PLAIN) 인증
 thrift-sasl>=0.4.3
 pure-sasl>=0.6
-gssapi>=1.8

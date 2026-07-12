@@ -314,9 +314,8 @@ class ImpalaToGreenplumBackend:
 
     impala_dsn 은 소스 접속 dict 로, source_type 에 따라 impyla ``connect()`` 또는
     trino ``dbapi.connect()`` 에 그대로 전달된다.
-      - impala(TLS+Kerberos): auth_mechanism='GSSAPI', kerberos_service_name='impala',
-        use_ssl=True, ca_cert='/path/to/ca.pem'. Kerberos 티켓은 OS 자격증명 캐시
-        (KRB5CCNAME)를 사용하므로 서비스 실행 전에 keytab 으로 kinit 되어 있어야 한다.
+      - impala(TLS+LDAP): auth_mechanism='LDAP', user/password,
+        use_ssl=True, ca_cert='/path/to/ca.pem'.
       - trino: host/port/user/catalog/schema/http_scheme(+auth/verify/session_properties).
         password 는 dict 의 password 키로 받아 연결 시 BasicAuthentication 으로 변환한다.
     """
@@ -945,8 +944,8 @@ def build_impala_dsn(settings) -> dict:
     """settings 로부터 ``impala.dbapi.connect(**dsn)`` 에 넘길 접속 dict 를 만든다.
 
     impala.host 가 비어 있으면 빈 dict 를 반환한다(Impala 미사용 — statement 모드 전용).
-    인증: GSSAPI 면 ``kerberos_service_name``, 그 외(LDAP/PLAIN)면 ``user``/``password`` 를
-    채운다. ``build_backend`` 와 ``/datasources`` 연결 테스트 엔드포인트가 공유한다.
+    인증: LDAP/PLAIN 이면 ``user``/``password`` 를 채운다.
+    ``build_backend`` 와 ``/datasources`` 연결 테스트 엔드포인트가 공유한다.
     """
     if not settings.impala_host:
         return {}
@@ -959,13 +958,10 @@ def build_impala_dsn(settings) -> dict:
     }
     if settings.impala_ca_cert:
         dsn["ca_cert"] = settings.impala_ca_cert
-    if settings.impala_auth_mechanism.upper() == "GSSAPI":
-        dsn["kerberos_service_name"] = settings.impala_kerberos_service_name
-    else:
-        if settings.impala_user:
-            dsn["user"] = settings.impala_user
-        if settings.impala_password:
-            dsn["password"] = settings.impala_password
+    if settings.impala_user:
+        dsn["user"] = settings.impala_user
+    if settings.impala_password:
+        dsn["password"] = settings.impala_password
     return dsn
 
 

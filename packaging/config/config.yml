@@ -112,8 +112,7 @@ executor:
     host: ${impala.host:}                         # Impala 호스트(미설정 시 Mock 백엔드)
     port: ${impala.port:21050}
     database: ${impala.database:default}
-    auth_mechanism: ${impala.auth_mechanism:LDAP}   # LDAP(기본) | GSSAPI(Kerberos) | PLAIN | NOSASL
-    kerberos_service_name: ${impala.kerberos_service_name:impala}
+    auth_mechanism: ${impala.auth_mechanism:LDAP}   # LDAP(기본) | PLAIN | NOSASL
     use_ssl: ${impala.use_ssl:true}
     ca_cert: ${impala.ca_cert:}
     user: ${impala.user:}

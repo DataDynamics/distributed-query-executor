@@ -8,9 +8,6 @@ RUN_DIR="$APP_HOME/run"
 
 # 설정 디렉터리(코드 기본값과 동일하지만 명시적으로 고정)
 export QUERY_EXECUTOR_CONFIG_DIR="$APP_HOME/config"
-# Impala Kerberos: 시스템 /etc/krb5.conf 대신 /data1 아래 설정과 공유 ccache 사용
-export KRB5_CONFIG="$APP_HOME/config/krb5.conf"
-export KRB5CCNAME="FILE:$RUN_DIR/krb5cc"
 # 소스 트리에서 직접 실행하므로(패키지 미설치) coordinator/executor 모듈을 찾도록 경로 지정
 export PYTHONPATH="$APP_HOME${PYTHONPATH:+:$PYTHONPATH}"
 

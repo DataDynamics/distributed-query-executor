@@ -50,7 +50,7 @@ flowchart TB
     Dispatcher -- "② POST /tasks (sub-query)" --> E1 & E2 & E3
     Monitor -- "주기 폴링" --> E1 & E2 & E3
 
-    E1 & E2 & E3 -- "③ read (TLS+Kerberos)" --> Impala
+    E1 & E2 & E3 -- "③ read (TLS+LDAP)" --> Impala
     E1 & E2 & E3 -- "④ COPY 적재" --> GP
 
     Dispatcher -- "job_history (job 단위)" --> PG
@@ -150,7 +150,7 @@ executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task �
   __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 packaging/config/    # config.properties + config.yml 기본값 + 스키마(*.sql)
 packaging/wheels/    # 에어갭 오프라인 설치용 cp39 휠 번들(coordinator/executor/dev, 유형별)
-deploy/              # install.sh + 런처 bin/(start/stop/status[-coordinator|-executor]·kinit-renew·env) — /data1 트리 배포
+deploy/              # install.sh + 런처 bin/(start/stop/status[-coordinator|-executor]·env) — /data1 트리 배포
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
 
@@ -178,7 +178,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 
 조금 더 깊은 설정 주제들도 미리 짚어 두면 운영할 때 당황하지 않습니다.
 
-- **인증 범위**: TLS + Impala 인증(기본 **LDAP**, 선택적으로 Kerberos/GSSAPI)은 **Impala
+- **인증 범위**: TLS + Impala 인증(기본 **LDAP**)은 **Impala
   접속에만** 적용된다. Greenplum 은 TLS/인증 없는 **일반 `postgresql://` DSN** 으로 접속한다.
   즉 보안 인증은 원본인 Impala 쪽에만 필요하고, 적재 대상인 Greenplum 은 평범한 접속 문자열을 씁니다.
 - **Job 저장소(`store.backend`)**: 작업 정보를 어디에 보관할지 고릅니다. `memory` 는 메모리에만
@@ -215,10 +215,8 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
   `executor.max_concurrent_tasks` 인데, 이는 아래 "수평 확장" 에서 다룹니다.
 - Impala 접속은 기본으로 **TLS + LDAP(사용자/비밀번호)** 인증을 씁니다. 관련 설정은
   `impala.use_ssl`/`impala.ca_cert` 와 `impala.auth_mechanism=LDAP`, 그리고 LDAP 바인드용
-  `impala.user`/`impala.password` 입니다(비밀번호 보호를 위해 TLS 권장). Kerberos 환경이면
-  `impala.auth_mechanism=GSSAPI` + `impala.kerberos_service_name` 으로 바꿀 수 있는데, 이때는
-  인증 티켓을 OS 자격증명 캐시(KRB5CCNAME)에서 가져오므로 `bin/kinit-renew.sh`(keytab) 를
-  cron 으로 주기 실행해 갱신합니다([deploy/README.md](deploy/README.md) 참고).
+  `impala.user`/`impala.password` 입니다(비밀번호 보호를 위해 TLS 권장,
+  [deploy/README.md](deploy/README.md) 참고).
 - 로깅은 `/data1/Distributed Query Executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
   들어오면 **job_id 를 먼저 만들고**, 그 이후의 모든 로그 줄 앞에 `[job_id][task_id]` 가
   자동으로 붙습니다(coordinator·executor 공통). 예를 들면 다음과 같습니다.
@@ -281,16 +279,15 @@ curl -s 'localhost:8088/cluster?refresh=false'   # 캐시 사용
 이 시스템은 RHEL 9.2 에 기본으로 들어 있는 Python 3.9 를 그대로 사용하도록 맞춰져
 있습니다. 따로 다른 버전의 Python 을 깔 필요가 없습니다. 먼저 Python 과 빌드 도구를
 준비하고(이미 있다면 건너뜁니다), executor 를 실제 Impala/Greenplum 에 붙일 때만 추가로
-Kerberos·TLS 관련 드라이버 의존성을 설치합니다.
+TLS 관련 드라이버 의존성을 설치합니다.
 
 ```bash
 # 1) Python 3.9 및 빌드 도구 설치(이미 있으면 생략)
 sudo dnf install -y python3 python3-pip python3-devel
 
 # 2) (executor를 실제 Impala/Greenplum에 연결할 때만) impyla + SASL/TLS 의존성
-#    Impala 는 기본 TLS + LDAP 인증(선택적으로 Kerberos/GSSAPI)이다.
-sudo dnf install -y gcc gcc-c++ make python3-devel \
-    krb5-workstation krb5-devel cyrus-sasl-devel cyrus-sasl-gssapi
+#    Impala 는 기본 TLS + LDAP 인증이다.
+sudo dnf install -y gcc gcc-c++ make python3-devel cyrus-sasl-devel
 ```
 
 ## 설치 및 테스트
@@ -749,8 +746,7 @@ sudo -u gpadmin $B/stop.sh       # 전체 중지
 | `start.sh` / `stop.sh` / `status.sh` | 전체(coordinator + executor 전부) 기동/중지/상태 |
 | `start-coordinator.sh` / `stop-coordinator.sh` / `status-coordinator.sh` | **coordinator만** 제어 |
 | `start-executor.sh [PORT...]` / `stop-executor.sh [PORT...]` / `status-executor.sh` | **executor만** 제어(포트 인자 생략 시 `EXECUTOR_PORTS` 전체, 특정 포트만도 가능) |
-| `kinit-renew.sh` | Impala Kerberos 티켓 발급/갱신(keytab) |
-| `env.sh` | 런처 공통 환경(경로·`KRB5_CONFIG`·`KRB5CCNAME`·포트)을 source |
+| `env.sh` | 런처 공통 환경(경로·포트)을 source |
 
 예를 들어 coordinator 만 따로 켜거나, 특정 포트의 executor 만 켜고 끄는 일은 아래처럼
 합니다.
@@ -763,10 +759,8 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 ```
 
 설치 스크립트가 무엇을 해 주는지도 알아 두면 좋습니다. `install.sh` 는 `gpadmin` 계정과
-`/data1/Distributed Query Executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, Kerberos·TLS
-용 자리표시 파일(`config/krb5.conf`·`impala-ca.pem`·`impala.keytab`)을 생성합니다. Impala
-티켓은 `bin/kinit-renew.sh`(keytab) 로 발급하며 cron 으로 주기 갱신합니다(`KRB5_CONFIG`/
-`KRB5CCNAME` 은 `bin/env.sh` 가 `/data1` 아래 경로로 export 해 줍니다).
+`/data1/Distributed Query Executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, TLS
+용 자리표시 파일(`config/impala-ca.pem`)을 생성합니다.
 
 ### 에어갭(인터넷 차단) 설치
 
@@ -781,16 +775,13 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
    ```bash
    # coordinator 만
    sudo WHEELHOUSE=packaging/wheels/coordinator ./deploy/install.sh
-   # executor 포함(impyla·SASL·gssapi). gssapi 는 sdist 라 타깃에서 빌드된다.
+   # executor 포함(impyla·SASL)
    sudo WHEELHOUSE=packaging/wheels/coordinator:packaging/wheels/executor \
         INSTALL_EXECUTOR=1 ./deploy/install.sh
    ```
 
-여기서 한 가지 주의할 패키지가 `gssapi`(Kerberos)입니다. 이 패키지는 미리 빌드된 manylinux
-휠이 없어서 설치 대상 서버에서 직접 빌드해야 하고, 그래서 RHEL 9.2 빌드 도구
-(`gcc gcc-c++ make python3-devel krb5-devel cyrus-sasl-devel`)가 필요합니다. 인터넷이 아예
-없으면 **RHEL 9.2 DVD ISO 를 루프백 마운트**해 yum 리포지토리로 쓰는 방법이 있습니다(자세한
-절차는 [`deploy/README.md`](deploy/README.md)). 휠 번들의 구성과 사용법은
+인터넷이 아예 없으면 **RHEL 9.2 DVD ISO 를 루프백 마운트**해 yum 리포지토리로 쓰는 방법이
+있습니다(자세한 절차는 [`deploy/README.md`](deploy/README.md)). 휠 번들의 구성과 사용법은
 [`packaging/wheels/README.md`](packaging/wheels/README.md) 를 참고하세요.
 
 ## 쿼리 분할 모드

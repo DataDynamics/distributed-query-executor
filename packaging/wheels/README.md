@@ -22,7 +22,7 @@
 | 디렉터리 | 내용 | 용도 |
 |---|---|---|
 | `coordinator/` | coordinator 런타임 의존성(`requirements.txt`, Jinja2 템플릿 엔진 포함) + pip/setuptools/wheel 부트스트랩 | 기본 설치(모든 구성의 베이스) |
-| `executor/` | executor 추가 드라이버(impyla·thrift·SASL·**trino**) + `gssapi` **sdist** + Cython | 실 Impala/Trino/Greenplum 연동 |
+| `executor/` | executor 추가 드라이버(impyla·thrift·SASL·**trino**) + Cython | 실 Impala/Trino/Greenplum 연동 |
 | `dev/` | pytest·pytest-asyncio 등 테스트 의존성 | 타깃에서 테스트 실행 시 |
 
 이렇게 나눈 데에는 이유가 있습니다. 세 디렉터리는 서로 독립적인 묶음이 아니라, `coordinator/`
@@ -35,12 +35,6 @@
   설치할 때는 해당 디렉터리뿐 아니라 `coordinator/` 도 함께 `--find-links` 로 지정해서,
   pip 이 두 폴더를 모두 뒤져 가며 필요한 휠을 찾도록 해야 합니다. 여기서 `--find-links`
   란 "이 폴더(또는 위치)에서 설치 파일을 찾아라"라고 pip 에게 일러 주는 옵션입니다.
-- `gssapi` 패키지만은 예외적으로 휠이 아니라 **sdist** 형태로 넣어 두었습니다. sdist 는
-  "소스 배포본(source distribution)"의 줄임말로, 미리 빌드된 휠과 달리 소스 코드 그대로
-  들어 있어 설치하는 시점에 타깃 서버에서 직접 컴파일됩니다. `gssapi` 는 적당한 manylinux
-  휠이 제공되지 않아 이 방법을 택했습니다. 따라서 타깃에서 빌드가 일어나며, 그 빌드를
-  위해 `gcc`, `krb5-devel`, `cyrus-sasl-devel`, `python3-devel` 이 미리 깔려 있어야
-  합니다(이들은 RHEL 설치 DVD 의 repo 에서 받을 수 있습니다).
 
 ## 오프라인 설치
 
