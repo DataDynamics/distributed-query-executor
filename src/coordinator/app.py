@@ -402,17 +402,21 @@ def create_app(
     app.state.template_engine = template_engine
 
     @app.exception_handler(QueryValidationError)
-    async def _validation_handler(_: Request, exc: QueryValidationError):
+    async def _validation_handler(request: Request, exc: QueryValidationError):
         # 검증/분할 단계에서 던지는 도메인 예외를 일관된 422 JSON 으로 변환한다.
         # (error_code 를 본문에 실어 클라이언트가 실패 원인을 분기할 수 있게 한다.)
+        # 왜 거부됐는지 서버 로그에도 남긴다 — 이게 없으면 422 사유가 클라이언트에만 있어
+        # 서버 측 진단이 불가능하다(어느 경로에서 어떤 코드로 걸렸는지 파악).
+        logger.warning("요청 검증 실패 [%s] %s (%s)", exc.code, exc.message, request.url.path)
         return JSONResponse(
             status_code=422,
             content={"error_code": exc.code, "message": exc.message},
         )
 
     @app.exception_handler(TemplateError)
-    async def _template_handler(_: Request, exc: TemplateError):
+    async def _template_handler(request: Request, exc: TemplateError):
         # 템플릿 로드/검증/렌더 실패도 검증 오류와 동일하게 422 + error_code 로 변환한다.
+        logger.warning("템플릿 오류 [%s] %s (%s)", exc.code, exc.message, request.url.path)
         return JSONResponse(
             status_code=422,
             content={"error_code": exc.code, "message": exc.message},
@@ -730,6 +734,8 @@ def create_app(
                 status_code=409,
                 detail=f"이미 종료된 작업입니다(status={job.status.value}).",
             )
+        # 취소는 주요 이벤트이므로 API 수신 시점을 남긴다(누가 언제 어떤 상태에서 눌렀는지).
+        logger.info("작업 취소 요청 수신 job=%s (현재 status=%s)", job_id, job.status.value)
         # 멀티 coordinator 환경 대비: 공유 store 에 취소 플래그를 남겨,
         # 이 작업을 실제로 실행 중인(=소유한) 다른 coordinator의 runner도 폴링 중에
         # 취소를 감지하도록 한다. 로컬 플래그도 함께 세운다.
@@ -773,6 +779,10 @@ def create_app(
 
         admission = getattr(runner, "admission", None)
         if admission is not None and not admission.try_admit():
+            logger.warning(
+                "재실행 거부: 동시 실행/대기 한도 초과 job=%s (capacity=%s, inflight=%s)",
+                job_id, admission.capacity, admission.inflight,
+            )
             raise HTTPException(
                 status_code=429,
                 detail=f"동시 실행/대기 job 한도 초과(capacity={admission.capacity}).",

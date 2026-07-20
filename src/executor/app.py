@@ -356,6 +356,8 @@ def create_app(
         # 종료(드레이닝) 중에는 신규 task 를 받지 않는다 → coordinator 가 다른 executor 로
         # failover 하거나 재시도하도록 503 으로 거부한다.
         if drain["on"]:
+            # coordinator 쪽 failover 의 원인이 되므로, 거부 사실을 남긴다(job 추적용).
+            logger.info("드레이닝 중 신규 task 거부 job=%s task=%s", req.job_id, req.task_id)
             raise HTTPException(
                 status_code=503,
                 detail="executor 종료 중(draining) — 신규 task 를 받지 않습니다.",
@@ -473,6 +475,7 @@ def create_app(
         terminal = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
         if task.status in terminal:
             return format_at_fields(task.view())  # 이미 종료 — 변경 없음
+        logger.info("task %s 취소 요청 수신 (현재 status=%s)", task_id, task.status.value)
         task.cancel_requested = True
         # 아직 시작 전이면 즉시 취소 확정, 실행 중이면 _run 이 완료 후 CANCELLED 처리
         if task.status == TaskStatus.QUEUED:
@@ -599,6 +602,7 @@ def create_app(
         except HTTPException:
             raise
         except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
+            logger.warning("데이터소스 %s 쿼리 실패: %s", name, e)
             raise HTTPException(status_code=502, detail=f"{name} 쿼리 실패: {e}")
         return {"datasource": name, "limit": limit, **result.to_dict()}
 
@@ -630,6 +634,7 @@ def create_app(
                 fn, req.sql, config=dict(settings.query_func_config), limit=limit
             )
         except Exception as e:  # 커스텀 함수 내부 오류(연결/인증/SQL 등) → 502 + 원인
+            logger.warning("커스텀 실행 함수(%s) 실패: %s", settings.query_func_module, e)
             raise HTTPException(status_code=502, detail=f"커스텀 실행 함수 실패: {e}")
         # 반환은 QueryResult 또는 {columns, rows, row_count, truncated, elapsed_ms} dict 를 허용한다.
         body = result.to_dict() if isinstance(result, QueryResult) else dict(result)

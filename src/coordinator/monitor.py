@@ -165,6 +165,10 @@ class HealthMonitor:
         다른 executor 폴링에 영향을 주지 않는다.
         """
         rec = self.executors[url]
+        # 상태 전이(up↔down)에만 로그를 남기기 위해 직전 상태를 캡처한다. 매 주기 실패를
+        # 반복 WARNING 으로 남기면 잡음이 커지므로, "다운 감지"·"복구됨" 순간만 눈에 띄게 한다.
+        was_healthy = rec.healthy
+        first_check = rec.last_checked is None
         # 시도 시각을 먼저 기록해 둔다(성공/실패와 무관하게 "마지막으로 본 시각"을 남김).
         rec.last_checked = now_iso()
         try:
@@ -188,10 +192,17 @@ class HealthMonitor:
             rec.active_tasks = tasks.get("active")
             rec.max_concurrent_tasks = tasks.get("max")
             rec.error = None
+            # down → up 복구만 알린다(첫 성공은 정상이라 조용히 둔다).
+            if not was_healthy and not first_check:
+                logger.info("executor %s 복구됨(healthy)", url)
         except Exception as exc:
             rec.healthy = False
             rec.error = str(exc)
-            logger.warning("executor %s 헬스 체크 실패: %s", url, exc)
+            # up → down 전이(또는 첫 관측)만 WARNING. 이미 down 이면 DEBUG 로 잡음을 줄인다.
+            if was_healthy or first_check:
+                logger.warning("executor %s 다운 감지: %s", url, exc)
+            else:
+                logger.debug("executor %s 여전히 다운: %s", url, exc)
 
     # ───────── DB 기록 루프 ─────────
 

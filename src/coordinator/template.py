@@ -392,7 +392,10 @@ class TemplateEngine:
                 continue
             try:
                 m = self.load_manifest(child.name)
-            except TemplateError:
+            except TemplateError as exc:
+                # 깨진 manifest 를 조용히 빼면 템플릿이 소리 없이 사라져 원인 파악이 어렵다.
+                # 목록에서 제외하되 이유를 남긴다(대시보드에 안 보이는 템플릿 진단).
+                logger.warning("template '%s' manifest 로드 실패 — 목록 제외: %s", child.name, exc)
                 continue
             out.append({
                 "template_id": m.template_id,

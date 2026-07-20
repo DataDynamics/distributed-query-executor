@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional, Protocol
@@ -490,9 +491,17 @@ class _DispatcherBase:
                 # 슬롯이 빌 때까지 대기. 그동안 job 은 PENDING 으로 노출된다.
                 job.status = JobStatus.PENDING
                 self._save(job)
+                # 슬롯이 가득 차 대기하게 되면 그 사실을 남긴다(admission/큐 병목 진단용).
+                if self.admission.inflight > self.admission.max_running > 0:
+                    logger.info(
+                        "job PENDING — 실행 슬롯 대기(inflight=%d, 슬롯=%d, 큐=%d)",
+                        self.admission.inflight, self.admission.max_running,
+                        self.admission.max_pending,
+                    )
                 async with self.admission.slot():
                     # 대기 중 취소되었으면 실행하지 않고 즉시 종료 처리.
                     if self._cancel_observed(job):
+                        logger.info("대기 중 취소 감지 → 실행 건너뜀(CANCELLED)")
                         finalize_job(job)
                         job.finished_at = _now_iso()
                         self._save(job)
@@ -502,6 +511,12 @@ class _DispatcherBase:
                     job.started_at = _now_iso()
                     self._save(job)
                     await self.history.record(job)  # 시작 이력
+                    # 실행 시작을 INFO 로 남긴다(로그 파일만 봐도 언제 어떤 형태로 떴는지 파악).
+                    t0 = time.monotonic()
+                    logger.info(
+                        "job 실행 시작 — exec_mode=%s tasks=%d target=%s write_mode=%s",
+                        job.exec_mode, len(job.tasks), job.target_table, job.write_mode,
+                    )
                     try:
                         # local_stage: Phase 1 전에 파일을 호스트별 예산(S_h)에 맞춰 배분한다.
                         # 예산 초과면 배치 불가 → 실행을 건너뛰고 FAILED 로 마감한다.
@@ -516,6 +531,22 @@ class _DispatcherBase:
                         job.finished_at = _now_iso()
                         self._save(job)
                         await self.history.record(job)  # 종료 이력
+                        # 종료 요약(status·완료수·적재행수·소요시간)을 한 줄로. FAILED/PARTIAL 은
+                        # 사유 파악이 급하므로 WARNING 으로, 정상 종료는 INFO 로 남긴다.
+                        done = sum(1 for t in job.tasks if t.status == TaskStatus.DONE)
+                        rows = sum(t.rows_written or 0 for t in job.tasks)
+                        level = (
+                            logging.WARNING
+                            if job.status in (JobStatus.FAILED, JobStatus.PARTIAL)
+                            else logging.INFO
+                        )
+                        logger.log(
+                            level,
+                            "job 실행 종료 — status=%s 완료=%d/%d 적재=%d행 소요=%.1fs%s",
+                            job.status.value, done, len(job.tasks), rows,
+                            time.monotonic() - t0,
+                            f" error={job.error}" if job.error else "",
+                        )
             finally:
                 # PENDING 대기 중 취소든 정상 종료든 예외든, 모든 경로에서 슬롯을 반납한다.
                 self.admission.release()
@@ -589,6 +620,11 @@ class HttpDispatcher(_DispatcherBase):
                 # _RETRYABLE 외 예기치 못한 오류(JSON 파싱 실패 등)는 이 task 만 실패로
                 # 격리한다(asyncio.gather 의 다른 task 에 영향 주지 않도록). job 최종 상태는
                 # finalize_job 이 failure_policy 로 결정한다.
+                # 조용한 실패를 막기 위해 스택트레이스와 함께 남긴다(디버깅의 유일한 단서일 수 있음).
+                logger.exception(
+                    "task %s 예기치 못한 오류 → FAILED (executor=%s): %s",
+                    task.task_id, task.executor_url, exc,
+                )
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
                 self._save(job)
@@ -678,6 +714,10 @@ class HttpDispatcher(_DispatcherBase):
         # 모든 후보/재시도 소진 → 최종 실패
         task.status = TaskStatus.FAILED
         task.error = str(last_err) if last_err else (task.error or "executor 연결 실패")
+        logger.warning(
+            "task %s 모든 executor 후보(%d개) 소진 — 최종 실패: %s",
+            task.task_id, len(order), task.error,
+        )
         self._save(job)
 
     async def _start_task(
@@ -767,6 +807,7 @@ class HttpDispatcher(_DispatcherBase):
             targets = [
                 t for t in job.tasks if t.executor_url and t.status not in _TERMINAL
             ]
+            logger.info("job 취소 요청 — 진행 중 task %d개에 전파", len(targets))
             if targets:
                 # 취소 전파는 짧은 타임아웃의 별도 클라이언트로(메인 실행 클라이언트와 분리).
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -939,6 +980,11 @@ class LocalDispatcher(_DispatcherBase):
                 if task.status == TaskStatus.CANCELLED:
                     close_open_phases(task.phases)  # 취소 — 열린 단계 마감
             except Exception as exc:
+                # local 백엔드 실행 실패 — 스택트레이스와 함께 남긴다(조용한 실패 방지).
+                logger.exception(
+                    "task %s 백엔드 실행 실패 → FAILED (exec_mode=%s): %s",
+                    task.task_id, job.exec_mode, exc,
+                )
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
                 # 실패한 단계를 지금으로 마감 → 대시보드 소요시간이 계속 증가하지 않게.

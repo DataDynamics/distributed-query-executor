@@ -18,10 +18,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
 from .parser import ParsedQuery, find_partition_in
+
+
+logger = logging.getLogger(__name__)
 
 
 # wrapper_query 안에서 분할된 sub-query가 치환될 기본 자리표시자.
@@ -154,6 +158,17 @@ def split(
 
     # 원문 치환 구간은 버킷마다 동일하므로 루프 밖에서 한 번만 계산한다.
     span = _value_span(parsed.sql, parsed.partition_column)
+    # 요청 parallelism 보다 적은 task 가 왜 생겼는지(값 개수로 클램프) 추적할 수 있게 남긴다.
+    logger.debug(
+        "분할: 요청 parallelism=%d → %d버킷 (파티션 값 %d개, 전략=%s, 컬럼=%s)",
+        parallelism, len(buckets), len(value_exprs), strategy, parsed.partition_column,
+    )
+    if span is None:
+        # 원문 포맷이 바뀔 수 있는 결정 — 정규식으로 값 구간을 못 찾아 AST 재직렬화로 폴백.
+        logger.debug(
+            "포맷 보존 실패(값 span 미발견) → AST 재직렬화 폴백 (컬럼=%s)",
+            parsed.partition_column,
+        )
 
     sub_queries: list[SubQuery] = []
     for bucket in buckets:

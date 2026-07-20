@@ -355,6 +355,12 @@ class ImpalaToGreenplumBackend:
         오류를 피하기 위함). trino 의 password 는 dict 그대로 넘길 수 없어(클라이언트가
         password kwarg 를 받지 않음) 여기서 ``BasicAuthentication`` 으로 변환한다.
         """
+        # 연결 실패 시 상위엔 드라이버 예외만 올라가므로, 어느 소스/호스트로 붙었는지
+        # backend 레벨에서 남긴다(연결/인증 문제 진단의 첫 단서).
+        logger.debug(
+            "소스 연결 시도: source=%s host=%s port=%s",
+            self.source_type, self.impala_dsn.get("host"), self.impala_dsn.get("port"),
+        )
         if self.source_type == "trino":
             import trino  # 지연 임포트(trino 소스 전용 드라이버)
 
@@ -608,6 +614,7 @@ class ImpalaToGreenplumBackend:
         with self._gp_pool.connection() as conn:
             with conn.cursor() as cur:
                 _emit(on_stage, "INSERT", "start")
+                logger.debug("statement 실행: %s", sql)
                 cur.execute(sql)
                 affected = cur.rowcount
                 _emit(on_stage, "INSERT", "end",
@@ -615,7 +622,9 @@ class ImpalaToGreenplumBackend:
             _emit(on_stage, "COMMIT", "start")
             conn.commit()
             _emit(on_stage, "COMMIT", "end")
-        return affected if affected and affected > 0 else 0
+        rows = affected if affected and affected > 0 else 0
+        logger.debug("statement 완료: %s행 반영", rows)
+        return rows
 
     def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
         """Impala SELECT → Greenplum staging(TEMP) COPY 적재 → staging→target INSERT.
@@ -851,6 +860,12 @@ class ImpalaToGreenplumBackend:
                     _emit(on_stage, "STREAM_COPY", "end",
                           self._copy_stats(rows_written, read_wait, write_wait,
                                            finalize_wait, read_starve))
+                    # 완료 요약(행수 + 성능 지표)을 로그로도 남긴다 — 대시보드 없이 로그만으로도
+                    # 병목(read_starve=리더 대기, write_wait=GP 쓰기 대기)을 짚을 수 있게 한다.
+                    logger.debug(
+                        "copy 완료: %s행 (read_starve=%dms, write_wait=%dms)",
+                        rows_written, int(read_starve * 1000), int(write_wait * 1000),
+                    )
                 _emit(on_stage, "COMMIT", "start")
                 gp.commit()
                 _emit(on_stage, "COMMIT", "end")
