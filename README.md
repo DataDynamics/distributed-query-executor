@@ -378,7 +378,7 @@ coordinator·executor 는 뜰 때 Spring Boot 처럼 콘솔에 ASCII 배너와 *
 ██║  ██║██║▄▄ ██║██╔══╝
 ██████╔╝╚██████╔╝███████╗
 ╚═════╝  ╚══▀▀═╝ ╚══════╝
- Distributed Query Executor  (v0.1.0+g860f3cd)
+ Distributed Query Executor  (v0.2.0+g860f3cd)
  :: executor:8087 ::   Python 3.9.25
 ```
 
@@ -391,7 +391,7 @@ coordinator·executor 는 뜰 때 Spring Boot 처럼 콘솔에 ASCII 배너와 *
 ```bash
 # 버전만 확인(기동하지 않음)
 QUERY_EXECUTOR_CONFIG_DIR=conf .venv/bin/python -m coordinator --version
-# query-executor 0.1.0+g860f3cd
+# query-executor 0.2.0+g860f3cd
 ```
 
 배너를 바꾸고 싶으면 설정 디렉터리에 `banner.txt` 를 두면 됩니다(Spring Boot 방식). 파일

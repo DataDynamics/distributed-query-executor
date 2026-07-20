@@ -6,6 +6,7 @@ import asyncio
 
 import httpx
 
+from core.version import __version__
 from executor.app import create_app as create_executor_app
 
 
@@ -64,7 +65,7 @@ async def test_info_and_config_endpoints():
     async with _client(app) as c:
         info = (await c.get("/info")).json()
         assert "executor_id" in info
-        assert info["version"] == "0.1.0"
+        assert info["version"] == __version__
         assert "tasks_by_status" in info
 
         conf = (await c.get("/config")).json()

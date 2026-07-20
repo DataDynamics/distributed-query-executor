@@ -35,6 +35,7 @@ from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
 from core.timeutil import format_at_fields, now_dt, now_iso
+from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
 from .backend import Backend, build_backend, build_impala_dsn, build_trino_dsn
 from .dashboard import DASHBOARD_HTML, masked_config
@@ -177,7 +178,7 @@ def create_app(
     app = FastAPI(
         lifespan=lifespan,
         title="Distributed Query Executor",
-        version="0.1.0",
+        version=__version__,
         description=(
             "coordinator가 분할한 Impala sub-query를 받아 실행하고, 결과를 Greenplum에 "
             "적재한다. 자신의 task 상태와 시스템 메트릭을 노출한다.\n\n"
@@ -511,7 +512,7 @@ def create_app(
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
         """liveness 체크: 프로세스가 떠 있으면 서비스명/버전과 함께 ok 반환."""
-        return {"status": "ok", "service": "executor", "version": "0.1.0"}
+        return {"status": "ok", "service": "executor", "version": __version__}
 
     @app.get("/healthz", tags=["Monitoring"], summary="헬스 체크 별칭(하위 호환)")
     def healthz():
@@ -680,7 +681,7 @@ def create_app(
                 by_status[t.status.value] = by_status.get(t.status.value, 0) + 1
             active, queued, mx = _task_counts()
             return format_at_fields({
-                "version": "0.1.0",
+                "version": __version__,
                 "executor_id": _executor_id(),
                 "source_type": settings.source_type,
                 "self_report": settings.executor_self_report,

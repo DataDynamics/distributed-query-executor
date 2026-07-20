@@ -38,6 +38,7 @@ from core.dbprobe import clamp_limit, run_postgres_select
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.timeutil import format_at_fields, now_dt
+from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
 from .dashboard import DASHBOARD_HTML, masked_config
 from .config import Settings, settings as default_settings
@@ -367,7 +368,7 @@ def create_app(
 
     app = FastAPI(
         title="Distributed Query Coordinator",
-        version="0.1.0",
+        version=__version__,
         description=(
             "Impala `SELECT` 쿼리를 파티션 컬럼의 `IN` 목록 기준으로 N분할하여 여러 "
             "executor에 분배하고, 각 executor가 Greenplum에 병렬 적재하도록 조율한다.\n\n"
@@ -925,7 +926,7 @@ def create_app(
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
         # 프로세스가 살아 있는지 확인하는 liveness 프로브용 가벼운 응답.
-        return {"status": "ok", "service": "coordinator", "version": "0.1.0"}
+        return {"status": "ok", "service": "coordinator", "version": __version__}
 
     @app.get("/healthz", tags=["Monitoring"], summary="헬스 체크 별칭(하위 호환)")
     def healthz():
@@ -1237,7 +1238,7 @@ def create_app(
             for j in all_jobs:
                 by_status[j.status.value] = by_status.get(j.status.value, 0) + 1
             return format_at_fields({
-                "version": "0.1.0",
+                "version": __version__,
                 "coordinator_id": settings.coordinator_id,
                 "executor_mode": settings.executor_mode,
                 "store_backend": settings.store_backend,

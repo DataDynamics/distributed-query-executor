@@ -18,7 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 
 # 버전을 올릴 때 고치는 유일한 줄. (SemVer 권장: MAJOR.MINOR.PATCH)
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 @lru_cache(maxsize=1)
