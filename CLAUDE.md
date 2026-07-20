@@ -17,7 +17,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 399개.
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 405개.
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 

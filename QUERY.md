@@ -328,6 +328,15 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
 `examples/query_funcs/trino_runner.py` 에 Trino 예제 구현이 있다(표준 `dbprobe._shape`
 로 정형). 그대로 쓰거나, 본문을 조직 표준 접속으로 바꿔 사용한다.
 
+**대화형 login() 처리**: 사내 인증 모듈의 `login()` 이 `input()`/`getpass()` 로 자격증명을
+묻는 대화형 함수라면 `query.func.config.login_module=mycorp.auth:login` 으로 지정한다.
+executor 는 터미널 없는 데몬이라 프롬프트를 그대로 두면 EOFError/블록이 나므로, 예제의
+`_login_noninteractive()` 가 호출 동안만 `builtins.input`/`getpass.getpass`/`sys.stdin` 을
+config 의 `user`/`password` 값으로 바꿔치기해 입력을 공급한다(입력 순서: input 1회차=user,
+2회차=password, getpass=password — 사내 모듈의 질문 순서가 다르면 answers 목록만 수정).
+로그인 결과는 프로세스당 1회만 만들어 캐시하고(실패 시 미캐시 → 다음 요청에서 재시도),
+전역 패치는 락으로 직렬화 후 finally 로 원복한다.
+
 ```python
 # examples/query_funcs/trino_runner.py (발췌)
 from core.dbprobe import QueryResult, _shape
