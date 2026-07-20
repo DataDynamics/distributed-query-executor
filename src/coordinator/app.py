@@ -855,6 +855,52 @@ def create_app(
                 return task.detail()
         raise HTTPException(status_code=404, detail="task not found")
 
+    def _annotate_executor_index(executors: list) -> list:
+        """각 executor 엔트리에 설정 목록(settings.executors) 기준 ``index`` 를 붙인다.
+
+        이 index 가 executor 상세 프록시(``GET /executors/{idx}/...``)의 키다. 클라이언트
+        (대시보드/TUI)는 이 값으로 특정 executor 로 드릴인한다. 설정 목록에 없는 URL
+        (self-report 로만 올라온 예외 노드)은 index=None 이라 드릴인 대상이 아니다.
+        """
+        urls = settings.executors
+        for e in executors:
+            if isinstance(e, dict):
+                u = e.get("executor_url")
+                e["index"] = urls.index(u) if u in urls else None
+        return executors
+
+    async def _proxy_executor_get(idx: int, path: str, params: Optional[dict] = None):
+        """설정된 executor(``settings.executors[idx]``)의 읽기 엔드포인트로 GET 프록시한다.
+
+        executor 를 **설정 목록 인덱스(allowlist)** 로만 지정받아 임의 URL 프록시(SSRF)를
+        막는다. 모니터링 용도라 짧은 타임아웃을 쓰고, executor 의 상태코드·에러 본문을
+        그대로 중계한다(``/datasources`` 프록시와 동일한 관례).
+        """
+        urls = settings.executors
+        if idx < 0 or idx >= len(urls):
+            raise HTTPException(
+                status_code=404,
+                detail=f"executor 인덱스 범위 밖: {idx} (설정된 executor {len(urls)}개)",
+            )
+        target = urls[idx].rstrip("/") + path
+        timeout = httpx.Timeout(10.0, connect=settings.task_connect_timeout_s)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(target, params=params or {})
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"executor 프록시 실패({urls[idx]}): {e}")
+        if resp.status_code >= 400:
+            try:
+                payload = resp.json()
+                detail = payload.get("detail") if isinstance(payload, dict) else None
+            except Exception:
+                detail = None
+            raise HTTPException(status_code=resp.status_code, detail=detail or resp.text)
+        body = resp.json()
+        if isinstance(body, dict):
+            body["proxied_to"] = urls[idx]
+        return body
+
     @app.get(
         "/executors",
         tags=["Monitoring"],
@@ -864,9 +910,8 @@ def create_app(
     def list_executor_health():
         # self-report 모드면 공유 테이블에서 읽고(coordinator는 폴링하지 않음),
         # 아니면 모니터가 주기 폴링으로 캐시해 둔 스냅샷을 돌려준다.
-        if status_repo is not None:
-            return {"executors": status_repo.read_all()}
-        return {"executors": monitor.snapshot()}
+        executors = status_repo.read_all() if status_repo is not None else monitor.snapshot()
+        return {"executors": _annotate_executor_index(executors)}
 
     @app.get(
         "/cluster",
@@ -883,6 +928,8 @@ def create_app(
             executors = status_repo.read_all()
         else:
             executors = await monitor.poll_now() if refresh else monitor.snapshot()
+        # 각 executor 에 드릴인 프록시 키(index)를 붙인다(대시보드/TUI 가 상세로 진입할 때 사용).
+        _annotate_executor_index(executors)
         # coordinator 자신의 시스템 메트릭 수집은 blocking I/O 라 스레드로 오프로드한다.
         coord_metrics = await asyncio.to_thread(
             collect_system_metrics, settings.monitor_disk_path
@@ -922,6 +969,47 @@ def create_app(
             "assignment_counts": dict(assign_counts),
             "executor_select": _select_policy,
         })
+
+    @app.get(
+        "/executors/{idx}/info",
+        tags=["Monitoring"],
+        summary="executor 인스턴스 메타(프록시)",
+        description="설정 목록 index 로 지정한 executor 의 /info 를 프록시한다.",
+    )
+    async def executor_info(idx: int):
+        return await _proxy_executor_get(idx, "/info")
+
+    @app.get(
+        "/executors/{idx}/metrics",
+        tags=["Monitoring"],
+        summary="executor 시스템 메트릭+동시처리(프록시)",
+        description="설정 목록 index 로 지정한 executor 의 /metrics 를 프록시한다.",
+    )
+    async def executor_metrics(idx: int):
+        return await _proxy_executor_get(idx, "/metrics")
+
+    @app.get(
+        "/executors/{idx}/tasks",
+        tags=["Monitoring"],
+        summary="executor 보유 task 목록(프록시)",
+        description="설정 목록 index 로 지정한 executor 의 /tasks 를 프록시한다(status/limit 전달).",
+    )
+    async def executor_tasks(idx: int, status: Optional[str] = None, limit: int = 0):
+        params: dict = {}
+        if status:
+            params["status"] = status
+        if limit:
+            params["limit"] = limit
+        return await _proxy_executor_get(idx, "/tasks", params)
+
+    @app.get(
+        "/executors/{idx}/tasks/{task_id}/detail",
+        tags=["Monitoring"],
+        summary="executor task 상세(프록시)",
+        description="설정 목록 index 로 지정한 executor 의 task 상세(실행 SQL 포함)를 프록시한다.",
+    )
+    async def executor_task_detail(idx: int, task_id: str):
+        return await _proxy_executor_get(idx, f"/tasks/{task_id}/detail")
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
