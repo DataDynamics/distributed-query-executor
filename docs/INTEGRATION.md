@@ -3,7 +3,7 @@
 이 문서는 C# 애플리케이션이 Coordinator 의 HTTP API 를 호출해 쿼리 작업(Job)을 실행하고,
 그 작업이 끝날 때까지 기다리며 완료를 확인하고, 도중에 에러가 났을 때 원인을 알아내는 방법을
 처음부터 끝까지 설명합니다. 모든 요청·응답은 JSON 이며, 실제 응답 형태를 그대로 실어 두었으니
-그대로 따라 하면 됩니다. API 의 전체 목록과 의미는 [README.md](README.md)·[DESIGN.md](DESIGN.md)
+그대로 따라 하면 됩니다. API 의 전체 목록과 의미는 [README.md](../README.md)·[DESIGN.md](DESIGN.md)
 를 함께 참고하세요.
 
 ---
@@ -220,7 +220,7 @@ curl http://<coordinator-host>:8088/templates
 ```
 
 적재는 stage_insert append 입니다. 응답·폴링·재시도는 일반 `/jobs` 와 동일합니다. 자세한 규약은
-[README.md](README.md)·DESIGN §18.8 참고.
+[README.md](../README.md)·DESIGN §18.8 참고.
 
 ---
 
@@ -720,7 +720,7 @@ var jobId = await client.SubmitAsync(req);
   `store.backend=memory` 에서는 작업을 접수한 그 Coordinator 만 상태를 압니다. 제출과 폴링이
   서로 다른 인스턴스로 라우팅되면 폴링이 **404** 를 받을 수 있습니다. 이런 구성에서는
   `store.backend=postgres` 와 공유 `history.db_dsn` 을 설정해 어느 인스턴스로 가도 조회되게
-  하세요(자세한 내용은 [README.md](README.md)·[PERFORMANCE.md](PERFORMANCE.md) 참고).
+  하세요(자세한 내용은 [README.md](../README.md)·[PERFORMANCE.md](PERFORMANCE.md) 참고).
 - **stage_insert 의 필수 필드는 `staging_table` 과 `wrapper_query` 두 개**입니다. 둘 중 하나라도
   빠지면 제출이 422(`STAGE_INSERT_REQUIRES_FIELDS`)로 거부됩니다. `staging_ddl` 은 선택으로,
   생략하면 executor 가 테이블 생성을 건너뛰고 **이미 존재하는** `staging_table` 을 사용합니다.

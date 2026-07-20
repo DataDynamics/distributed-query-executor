@@ -699,7 +699,7 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 | 대시보드 | 인라인 HTML + vanilla JS(빌드 도구 없음) |
 | 배포 | /data1 트리 + 런처 스크립트로 coordinator 1 + executor N(`packaging/README.md`) |
 
-요약하면, coordinator와 executor 모두 Python 3.9 이상에서 FastAPI로 만들어졌고, SQL 분석에는 sqlglot, Impala 읽기에는 impyla, Greenplum 쓰기에는 psycopg, 둘 사이의 통신에는 httpx를 씁니다. 동시성은 asyncio와 세마포어, 그리고 동기 DB 호출을 감싸는 스레드 풀로 다루며, 상태와 이력은 앞서 본 대로 인메모리·파일·PostgreSQL 중에서 고를 수 있습니다. 대시보드는 빌드 도구 없는 인라인 HTML과 순수 자바스크립트로 되어 있고, 배포는 런처 스크립트로 coordinator 한 대와 executor 여러 대를 띄우는 방식입니다(자세한 내용은 [packaging/README.md](packaging/README.md)).
+요약하면, coordinator와 executor 모두 Python 3.9 이상에서 FastAPI로 만들어졌고, SQL 분석에는 sqlglot, Impala 읽기에는 impyla, Greenplum 쓰기에는 psycopg, 둘 사이의 통신에는 httpx를 씁니다. 동시성은 asyncio와 세마포어, 그리고 동기 DB 호출을 감싸는 스레드 풀로 다루며, 상태와 이력은 앞서 본 대로 인메모리·파일·PostgreSQL 중에서 고를 수 있습니다. 대시보드는 빌드 도구 없는 인라인 HTML과 순수 자바스크립트로 되어 있고, 배포는 런처 스크립트로 coordinator 한 대와 executor 여러 대를 띄우는 방식입니다(자세한 내용은 [packaging/README.md](../packaging/README.md)).
 
 ---
 
@@ -851,7 +851,7 @@ executor가 쓰는 CSV의 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 �
 - **파일 권한**: 외부테이블 read는 세그먼트 postgres 프로세스 사용자(보통 gpadmin)로 로컬 파일을 연다 → executor가 쓴 파일이 그 사용자에게 읽기 가능해야 한다(공유 umask/소유권 합의).
 - **호스트당 파일 수 ≤ 세그먼트 수** — coordinator가 `S_h`로 상한을 강제한다.
 - **mirror failover**: primary 세그먼트가 다른 호스트의 mirror로 넘어가면 그 로컬 파일이 없으므로 load가 실패한다 → 재시도 정책 대상.
-- **배포 변경**: 이 모드는 executor가 세그먼트 호스트에 co-locate되어야 하므로, `remote` 배치(독립 executor 풀)와 배포 형태가 다르다([packaging/README.md](packaging/README.md)에 별도 배치로 기술).
+- **배포 변경**: 이 모드는 executor가 세그먼트 호스트에 co-locate되어야 하므로, `remote` 배치(독립 executor 풀)와 배포 형태가 다르다([packaging/README.md](../packaging/README.md)에 별도 배치로 기술).
 
 ### 17.8 설정 키
 

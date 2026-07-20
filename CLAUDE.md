@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 이 저장소에서 작업하는 Claude Code(및 기타 에이전트)를 위한 안내. 자세한 사용법은
-[README.md](README.md), 설계는 [DESIGN.md](DESIGN.md), 배포는 [packaging/README.md](packaging/README.md) 참고.
+[README.md](README.md), 설계는 [DESIGN.md](docs/DESIGN.md), 배포는 [packaging/README.md](packaging/README.md) 참고.
 
 ## 프로젝트 개요
 

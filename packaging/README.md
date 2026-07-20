@@ -29,7 +29,7 @@
 
 executor 는 한 대만 띄우는 것이 아니라 **포트별로 여러 인스턴스**를 띄울 수 있습니다. 예를 들어 `EXECUTOR_PORTS="8087 8086"` 처럼 지정하면 두 개의 executor 가 각각의 포트에서 동시에 일합니다. 그런데 여기서 한 가지 중요한 원칙이 있습니다. coordinator 와 executor 는 둘 다 자신의 상태를 **프로세스 메모리**에 담아 두기 때문에, 인스턴스 하나는 반드시 **단일 워커**로 실행해야 합니다. 그래서 더 많은 일을 처리하고 싶다면 한 프로세스 안의 워커 수를 늘리는 것이 아니라, **executor 인스턴스 수**를 늘리는 방식으로 확장합니다.
 
-> **`local_stage`(file:// 세그먼트 로컬 스테이징) 배치는 다르다.** 기본 `copy`/`stage_insert` 모드는 executor 를 어디에 두든 상관없지만, `local_stage`(DESIGN §17)는 executor 가 읽은 데이터를 **자기 호스트 로컬 디스크의 CSV** 로 떨어뜨리고 GP 세그먼트가 그 로컬 파일을 `file://` 로 직접 읽습니다. 그래서 이 모드를 쓰려면 executor 를 **각 Greenplum 세그먼트 호스트에 co-locate**(한 호스트당 하나 이상) 해야 하며, 추가로 (1) `stage.local_dir` 을 모든 세그먼트 호스트에 **동일 경로**로 두고 GP 세그먼트 프로세스(보통 `gpadmin`)가 read 가능하도록 권한을 맞추고, (2) `executor.gp_hostname` 을 그 호스트의 `gp_segment_configuration.hostname` 과 일치시키며(미설정 시 OS hostname), (3) coordinator 의 `greenplum.dsn` 은 GP master 를 가리켜야 합니다(Phase 2 적재·검증·토폴로지 조회). 운영 시나리오는 [SCENARIO.md](../SCENARIO.md) 참고.
+> **`local_stage`(file:// 세그먼트 로컬 스테이징) 배치는 다르다.** 기본 `copy`/`stage_insert` 모드는 executor 를 어디에 두든 상관없지만, `local_stage`(DESIGN §17)는 executor 가 읽은 데이터를 **자기 호스트 로컬 디스크의 CSV** 로 떨어뜨리고 GP 세그먼트가 그 로컬 파일을 `file://` 로 직접 읽습니다. 그래서 이 모드를 쓰려면 executor 를 **각 Greenplum 세그먼트 호스트에 co-locate**(한 호스트당 하나 이상) 해야 하며, 추가로 (1) `stage.local_dir` 을 모든 세그먼트 호스트에 **동일 경로**로 두고 GP 세그먼트 프로세스(보통 `gpadmin`)가 read 가능하도록 권한을 맞추고, (2) `executor.gp_hostname` 을 그 호스트의 `gp_segment_configuration.hostname` 과 일치시키며(미설정 시 OS hostname), (3) coordinator 의 `greenplum.dsn` 은 GP master 를 가리켜야 합니다(Phase 2 적재·검증·토폴로지 조회). 운영 시나리오는 [SCENARIO.md](../docs/SCENARIO.md) 참고.
 
 ## 빠른 설치 (스크립트 사용)
 

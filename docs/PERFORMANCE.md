@@ -5,7 +5,7 @@
 합니다), 그 과정에서 어떤 파라미터를 어떤 기준으로 잡아야 하는지를 운영하는 사람의 눈높이에서
 차근차근 풀어 설명합니다. 시스템의 구조나 상태머신 같은 설계 배경이 궁금하다면
 [DESIGN.md](DESIGN.md) 를, 설정을 실제로 적용하는 방법이 궁금하다면
-[README.md](README.md) 와 [packaging/README.md](packaging/README.md) 를 함께 보면 좋습니다.
+[README.md](../README.md) 와 [packaging/README.md](../packaging/README.md) 를 함께 보면 좋습니다.
 
 처음 시작하기 전에 한 가지 약속만 기억해 두면 됩니다. 이 시스템의 모든 파라미터는
 `conf/config.properties` 라는 파일에 자바 스타일의 `key=value` 형태로 적습니다.

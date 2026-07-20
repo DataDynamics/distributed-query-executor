@@ -1,6 +1,6 @@
 """local_stage mock 통합 테스트 — GP·Impala 없이 "파일 루프 닫힘"까지 검증.
 
-SCENARIO.md B-3 설계의 실증: `MockLocalStageBackend` 로 Phase 1(실 CSV write)이 쓴 파일을
+docs/SCENARIO.md B-3 설계의 실증: `MockLocalStageBackend` 로 Phase 1(실 CSV write)이 쓴 파일을
 Phase 2(file:// 경로 파싱 → read)가 그대로 읽어 target 에 넣는 루프를 닫아, 실제 코드 경로
 (POST /jobs → split → 파일 예산 배분 → export → 배리어 → file:// 적재 → finalize)를 통과시킨다.
 """

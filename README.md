@@ -8,9 +8,9 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 도�
 `IN` 목록을 기준으로 쿼리를 여러 조각으로 쪼갭니다. 그리고 각 조각을 여러 executor 가
 동시에 읽어서 Greenplum 에 적재합니다. 이렇게 하면 한 번에 처리하기 버거운 양도 여러
 Executor이 나눠 맡아 병렬로 처리할 수 있습니다. 설계 배경과 더 깊은 내용이 궁금하다면
-[DESIGN.md](DESIGN.md) 를, 성능·확장·고가용성 운영은 [PERFORMANCE.md](PERFORMANCE.md) 를,
+[DESIGN.md](docs/DESIGN.md) 를, 성능·확장·고가용성 운영은 [PERFORMANCE.md](docs/PERFORMANCE.md) 를,
 애플리케이션(예: C#)에서 HTTP API 로 작업을 실행·확인하는 방법은
-[INTEGRATION.md](INTEGRATION.md) 를 참고하세요.
+[INTEGRATION.md](docs/INTEGRATION.md) 를 참고하세요.
 
 ## 아키텍처
 
@@ -441,7 +441,7 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 SELECT 를 실행해 **결과(상위 N행)를 바로 돌려받는** 미리보기성 실행입니다. `template_id` 와
 파라미터(이름-값 항목 **배열**)만 보내면 됩니다. **어떤 executor 가 실행하는지는 클라이언트가
 몰라도 됩니다** — coordinator 가 `/jobs` 와 동일한 선택 정책으로 가장 한가한 executor 를 고릅니다.
-자세한 규약·설정은 [QUERY.md](QUERY.md) 참고.
+자세한 규약·설정은 [QUERY.md](docs/QUERY.md) 참고.
 
 ```bash
 curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
@@ -861,7 +861,7 @@ INSERT INTO staging.sales_part SELECT * FROM (SELECT a, dt FROM sales WHERE dt I
 | `copy` (기본) | Impala 에서 sub-query 를 **읽어** Greenplum 에 `COPY` 적재 | 소스(Impala)와 타깃(Greenplum)이 다른 엔진. 단, COPY는 SQL이 아니라 STDIN 벌크 로드라 **대상 테이블 컬럼과 정확히 일치**해야 한다. 래퍼는 **행을 반환하는 SELECT** 여야 하며(적재는 COPY가 수행), INSERT 래퍼를 주면 422(`COPY_WRAPPER_NOT_SELECT`) |
 | `statement` | wrapper 로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB(`greenplum.dsn`)에서 **그대로 실행** | `INSERT INTO ... SELECT (분할쿼리)` 처럼 한 DB 안에서 INSERT 로 적재. 컬럼 매핑은 INSERT 컬럼 목록/SELECT 가 담당하므로 COPY 의 엄격한 컬럼 일치 제약이 없다 |
 | `stage_insert` | Impala SELECT 결과를 Greenplum **staging(TEMP) 테이블에 COPY** 적재 → staging 을 `FROM` 으로 하는 **INSERT 실행** | **SELECT은 Impala, INSERT은 Greenplum** 처럼 서로 다른 엔진. Greenplum INSERT 가 읽을 `FROM` 소스가 없으므로 임시 테이블을 경유한다 |
-| `local_stage` | executor 가 세그먼트 호스트 **로컬 CSV** 로 export → Greenplum 이 `file://` 외부테이블로 **세그먼트별 로컬 파일을 병렬 read** 해 staging 적재 → target INSERT (2-phase) | executor 를 **GP 세그먼트 호스트에 co-locate** 한 대량 이관. `copy` 의 단일 COPY 소켓 병목을 세그먼트 병렬 read 로 대체한다(자세히는 [DESIGN.md](DESIGN.md) §17) |
+| `local_stage` | executor 가 세그먼트 호스트 **로컬 CSV** 로 export → Greenplum 이 `file://` 외부테이블로 **세그먼트별 로컬 파일을 병렬 read** 해 staging 적재 → target INSERT (2-phase) | executor 를 **GP 세그먼트 호스트에 co-locate** 한 대량 이관. `copy` 의 단일 COPY 소켓 병목을 세그먼트 병렬 read 로 대체한다(자세히는 [DESIGN.md](docs/DESIGN.md) §17) |
 
 ### stage_insert 모드 (서로 다른 엔진)
 
@@ -938,7 +938,7 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 > 필수 필드(`staging_table`/`external_columns`/`insert_sql`)가 빠지면 422(`LOCAL_STAGE_REQUIRES_FIELDS`).
 > coordinator 는 파일을 호스트당 세그먼트 수(`file://` 규칙) 이하로 배분하고, executor 가 보고한
 > GP hostname 으로 `file://` URI 를 조립하며, 적재 전에 `gp_segment_configuration` 과 호스트를
-> 대조 검증합니다. 설계·운영 시나리오는 [DESIGN.md](DESIGN.md) §17 과 [SCENARIO.md](SCENARIO.md) 참고.
+> 대조 검증합니다. 설계·운영 시나리오는 [DESIGN.md](docs/DESIGN.md) §17 과 [SCENARIO.md](docs/SCENARIO.md) 참고.
 
 `statement` 모드는 COPY 를 거치지 않고 INSERT 래퍼를 대상 DB 에서 직접 실행합니다. 아래가 그
 예시입니다.
