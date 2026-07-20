@@ -180,7 +180,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 
 설정과 관련해 처음에 알아 두면 좋은 점들을 하나씩 풀어 보겠습니다.
 
-- 설정 파일들은 기본적으로 `/data1/Distributed Query Executor/config` 디렉터리에서 읽습니다. 다른
+- 설정 파일들은 기본적으로 `/data1/distributed-query-executor/config` 디렉터리에서 읽습니다. 다른
   위치를 쓰고 싶으면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 바꿀 수 있습니다.
 - 내 컴퓨터에서 개발하며 돌려볼 때는 `QUERY_EXECUTOR_CONFIG_DIR=conf` 로
   지정해 저장소에 들어 있는 기본값을 그대로 쓰면 편합니다.
@@ -233,7 +233,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
   `impala.use_ssl`/`impala.ca_cert` 와 `impala.auth_mechanism=LDAP`, 그리고 LDAP 바인드용
   `impala.user`/`impala.password` 입니다(비밀번호 보호를 위해 TLS 권장,
   [packaging/README.md](packaging/README.md) 참고).
-- 로깅은 `/data1/Distributed Query Executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
+- 로깅은 `/data1/distributed-query-executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
   들어오면 **job_id 를 먼저 만들고**, 그 이후의 모든 로그 줄 앞에 `[job_id][task_id]` 가
   자동으로 붙습니다(coordinator·executor 공통). 예를 들면 다음과 같습니다.
   - coordinator(job 단위): `... [job_531ab6f734ca][-] - 쿼리 실행 요청 수신 ...`
@@ -269,6 +269,9 @@ curl -s 'localhost:8088/cluster?refresh=false'   # 캐시 사용
 배열에는 Executor별 상태가 들어 있고, `executors_summary` 와 `jobs` 는 그것들을 요약한 숫자입니다.
 `assignment_counts` 는 어느 executor 에 task 가 몇 개 배정됐는지를 보여 주어 부하가 고르게
 퍼졌는지 확인하는 데 쓰고, `executor_select` 는 현재 어떤 선택 방식을 쓰는지를 알려 줍니다.
+각 executor 의 `index` 는 설정 목록(`coordinator.executors`) 순번으로, 이 값으로
+`GET /executors/{index}/tasks`·`/metrics` 프록시를 통해 해당 executor 의 상세(task·메트릭)를
+coordinator 한 곳에서 볼 수 있습니다(터미널 모니터 `bin/dashboard-tui.sh` 가 이를 씁니다).
 
 ```json
 {
@@ -279,7 +282,7 @@ curl -s 'localhost:8088/cluster?refresh=false'   # 캐시 사용
       "disk":   {"path": "/", "total_gb": 823.96, "used_gb": 566.25, "percent": 72.4} }
   },
   "executors": [
-    { "executor_url": "http://127.0.0.1:8087", "healthy": true,
+    { "executor_url": "http://127.0.0.1:8087", "healthy": true, "index": 0,
       "cpu_percent": 3.1, "memory_percent": 22.5, "memory_used_mb": 4096.0,
       "disk_percent": 61.0, "disk_used_gb": 120.5, "disk_total_gb": 200.0 }
   ],
@@ -378,7 +381,7 @@ coordinator·executor 는 뜰 때 Spring Boot 처럼 콘솔에 ASCII 배너와 *
 ██║  ██║██║▄▄ ██║██╔══╝
 ██████╔╝╚██████╔╝███████╗
 ╚═════╝  ╚══▀▀═╝ ╚══════╝
- Distributed Query Executor  (v0.2.0+g860f3cd)
+ Distributed Query Executor  (v0.3.0+g860f3cd)
  :: executor:8087 ::   Python 3.9.25
 ```
 
@@ -391,7 +394,7 @@ coordinator·executor 는 뜰 때 Spring Boot 처럼 콘솔에 ASCII 배너와 *
 ```bash
 # 버전만 확인(기동하지 않음)
 QUERY_EXECUTOR_CONFIG_DIR=conf .venv/bin/python -m coordinator --version
-# query-executor 0.2.0+g860f3cd
+# query-executor 0.3.0+g860f3cd
 ```
 
 배너를 바꾸고 싶으면 설정 디렉터리에 `banner.txt` 를 두면 됩니다(Spring Boot 방식). 파일
@@ -796,20 +799,20 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 ## 배포 (RHEL 9.2, /data1 단일 트리)
 
 실제 서버에 배포할 때 이 프로젝트는 조금 독특한 규칙을 따릅니다. 보안 정책상 `/etc`·`/opt`·
-`/var` 같은 시스템 디렉터리를 건드리지 않고, 모든 것을 `/data1/Distributed Query Executor` 한 트리
+`/var` 같은 시스템 디렉터리를 건드리지 않고, 모든 것을 `/data1/distributed-query-executor` 한 트리
 아래에 모아 둡니다. 또한 systemd 시스템 유닛 대신 런처 스크립트로 서비스를 켜고 끕니다.
 설치 스크립트와 자세한 절차는 [`packaging/README.md`](packaging/README.md) 를 참고하세요. 가장
 기본적인 흐름은 아래와 같습니다.
 
 ```bash
 sudo ./bin/install.sh                                    # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
-B=/data1/Distributed Query Executor/bin
+B=/data1/distributed-query-executor/bin
 sudo -u gpadmin $B/start.sh      # 전체 기동(executor 들 + coordinator)
 sudo -u gpadmin $B/status.sh     # 상태(프로세스 + health)
 sudo -u gpadmin $B/stop.sh       # 전체 중지
 ```
 
-런처 스크립트(`/data1/Distributed Query Executor/bin/`)는 **전체**를 한꺼번에 다루는 것과 **역할별**로
+런처 스크립트(`/data1/distributed-query-executor/bin/`)는 **전체**를 한꺼번에 다루는 것과 **역할별**로
 나눠 다루는 것으로 구성됩니다. 한 번에 전부 켜고 끄려면 전체 스크립트를, coordinator 만 또는
 특정 executor 만 손보려면 역할별 스크립트를 쓰면 됩니다. 각 스크립트의 쓰임은 아래 표와
 같습니다.
@@ -832,7 +835,7 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 ```
 
 설치 스크립트가 무엇을 해 주는지도 알아 두면 좋습니다. `install.sh` 는 `gpadmin` 계정과
-`/data1/Distributed Query Executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, TLS
+`/data1/distributed-query-executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, TLS
 용 자리표시 파일(`config/impala-ca.pem`)을 생성합니다.
 
 ### 에어갭(인터넷 차단) 설치
