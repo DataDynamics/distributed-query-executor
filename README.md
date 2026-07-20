@@ -150,7 +150,7 @@ src/                   # 파이썬 소스 루트(패키지: core / coordinator /
     dashboard.py         executor self-view 대시보드 HTML(remote mode에서 /에 노출)
     app.py               REST API (POST /tasks, /query-run(커스텀 함수 위임), /datasources, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
     __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
-bin/                 # 런처 스크립트(start/stop/status[-coordinator|-executor]·env·check-prereqs)
+bin/                 # 런처 스크립트(start/stop/status[-coordinator|-executor]·env·check-prereqs·config-tui)
 conf/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
 examples/            # 커스텀 쿼리 함수 등 예제 코드(examples.query_funcs.*)
 packaging/           # 배포·패키징 일체: install.sh(/data1 트리 배포) + README.md(배포 안내)
@@ -165,6 +165,18 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 담되 군데군데 `${변수:기본값}` 같은 자리표시자를 비워 둡니다. 시스템을 켜면 properties 파일의
 값으로 yml 의 자리표시자를 채워 최종 설정을 만듭니다. 이 방식은 argus-catalog backend 와
 동일하므로, 그 프로젝트에 익숙하다면 똑같은 감각으로 다루면 됩니다.
+
+> **TUI 로 편집하기(`bin/config-tui.sh`)**: `config.properties` 를 직접 손으로 고치는 대신,
+> 터미널 전체화면 설정 편집기를 쓸 수 있습니다. 항목 목록·기본값·설명·유효 값(enum)은 모두
+> `config.yml` 에서 자동으로 읽어 오므로 설정이 늘어도 편집기가 자동으로 따라갑니다.
+> `←→` 로 섹션 탭, `↑↓` 로 항목 이동, `Enter` 로 값 편집(bool/enum 은 `스페이스` 토글),
+> `r` 로 기본값 복원, `s` 로 저장합니다. 저장 시 기존 파일은 `config.properties.bak` 로
+> 백업되고, 바꾼 값만 주석·순서를 보존한 채 반영됩니다(비밀번호·DSN 은 화면에서 마스킹). 예:
+> ```bash
+> QUERY_EXECUTOR_CONFIG_DIR=conf bin/config-tui.sh   # 개발: 저장소 conf 편집
+> bin/config-tui.sh                                  # 배포 트리 기본 설정 편집
+> ```
+> 설정은 기동 시 로딩되므로, 저장 후 서비스를 재시작해야 적용됩니다.
 
 설정과 관련해 처음에 알아 두면 좋은 점들을 하나씩 풀어 보겠습니다.
 

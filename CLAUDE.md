@@ -38,7 +38,7 @@ src/
   core/        # 공용: 설정 로더/설정/로깅/메트릭 (coordinator·executor 공유)
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
-bin/           # 런처 스크립트(start/stop/status·env·check-prereqs — /data1 배포 트리와 공용)
+bin/           # 런처 스크립트(start/stop/status·env·check-prereqs·config-tui — /data1 배포 트리와 공용)
 conf/          # config.properties + config.yml 기본값 + templates/ + 스키마(postgresql.sql / warehousepg.sql)
 examples/      # 예제 코드(examples.query_funcs.* — 커스텀 쿼리 함수, src 밖 최상위 패키지)
 packaging/     # 배포·패키징 일체: install.sh + README.md(배포 안내) + wheels/(에어갭 휠 번들 py39·py311)
