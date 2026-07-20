@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # 이력 테이블 DDL. {table} 자리에 실제 테이블명을 format 으로 채워 사용한다.
 # 스키마(job_history 테이블)는 앱이 생성하지 않는다. 운영 전에
-# packaging/config/postgresql.sql 로 미리 만들어 두어야 한다.
+# conf/postgresql.sql 로 미리 만들어 두어야 한다.
 
 # 한 건의 상태 스냅샷을 추가하는 INSERT 문. 컬럼 순서는 _write() 의 row 튜플과 1:1 대응한다.
 _INSERT = """
@@ -41,7 +41,7 @@ class JobHistoryRepository:
 
     설정에서 DSN/테이블명을 읽어 보관한다. DSN 이 비어 있으면 enabled=False 가 되어
     기록은 생략되고 조회는 빈 결과를 돌려준다. 테이블 스키마는 앱이 만들지 않으며,
-    운영 전에 packaging/config/postgresql.sql 로 미리 생성돼 있어야 한다.
+    운영 전에 conf/postgresql.sql 로 미리 생성돼 있어야 한다.
     """
 
     def __init__(self, settings):

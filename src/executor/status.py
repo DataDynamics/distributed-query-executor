@@ -15,7 +15,7 @@ from .history import _executor_id
 logger = logging.getLogger(__name__)
 
 # 스키마(executor_status 테이블)는 앱이 생성하지 않는다. 운영 전에
-# packaging/config/postgresql.sql 로 미리 만들어 두어야 한다(executor_id 가 PK).
+# conf/postgresql.sql 로 미리 만들어 두어야 한다(executor_id 가 PK).
 
 # self-report UPSERT: 같은 executor_id 행이 있으면(ON CONFLICT) 모든 메트릭과
 # updated_at 을 새 값으로 덮어쓴다. 즉 "마지막으로 본 상태" 한 줄만 항상 유지된다.

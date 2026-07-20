@@ -68,7 +68,7 @@ sequenceDiagram
 
 ## 예제 템플릿: `order_search`
 
-`packaging/config/templates/order_search/` 에 포함된 query-execute 전용 예제다. **WHERE 절에
+`conf/templates/order_search/` 에 포함된 query-execute 전용 예제다. **WHERE 절에
 지역 `IN` 목록(N개)** 과 **주문일 `BETWEEN` 날짜 구간**을 조합해 주문을 조회한다.
 
 ### `manifest.yml`
@@ -245,7 +245,7 @@ coordinator 대시보드(`/`)의 **`쿼리 실행`** 탭에서 브라우저로 �
 ```properties
 # 쿼리 템플릿 엔진 — query-execute 가 템플릿을 렌더하려면 반드시 활성.
 template.enabled=true
-template.dir=packaging/config/templates      # 템플릿 루트(운영은 배포 경로)
+template.dir=conf/templates      # 템플릿 루트(운영은 배포 경로)
 
 # 프록시 대상 executor 목록(쉼표 구분). query-execute 의 impala/trino 실행은 이 중에서 고른다.
 coordinator.executors=http://exec1:8001,http://exec2:8001

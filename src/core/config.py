@@ -164,7 +164,7 @@ class Settings:
         # SELECT/STAGING DDL/INSERT 를 서버 템플릿 파일로 런타임 생성(요청은 파라미터만 전달).
         self.template_enabled: bool = _to_bool(_get("template", "enabled", True))
         # 템플릿 루트 디렉터리(하위 <template_id>/manifest.yml + *.sql.j2). 개발 시
-        # packaging/config/templates 를 QUERY_EXECUTOR_CONFIG_DIR 로 가리키면 그 아래를 쓴다.
+        # conf/templates 를 QUERY_EXECUTOR_CONFIG_DIR 로 가리키면 그 아래를 쓴다.
         self.template_dir: str = _get(
             "template", "dir", str(_CONFIG_DIR / "templates")
         )

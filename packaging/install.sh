@@ -2,7 +2,7 @@
 # RHEL 9.2용 설치 스크립트(에어갭 + /data1 단일 트리).
 # 보안 정책상 /etc·/opt·/var 에 파일을 추가하지 않는다. 애플리케이션·설정·로그·런타임을
 # 모두 /data1/query-executor 아래에 배치하고, systemd 시스템 유닛 대신 런처 스크립트로 구동한다.
-# 사용법:  sudo ./deploy/install.sh
+# 사용법:  sudo ./packaging/install.sh
 set -euo pipefail
 
 # ── 경로(모두 /data1 아래) ──────────────────────────────────────────────
@@ -76,17 +76,17 @@ fi
 echo "==> 설정 파일 배치 -> $CONF_DIR"
 mkdir -p "$CONF_DIR" "$LOG_DIR" "$RUN_DIR" "$BIN_DIR"
 if [[ ! -f "$CONF_DIR/config.properties" ]]; then
-    cp "$APP_HOME/packaging/config/config.properties" "$CONF_DIR/config.properties"
+    cp "$APP_HOME/conf/config.properties" "$CONF_DIR/config.properties"
     # 로그 경로를 /data1 절대 경로로 고정(개발 기본값 logs -> $LOG_DIR)
     sed -i "s|^log.dir=.*|log.dir=$LOG_DIR|" "$CONF_DIR/config.properties"
 fi
-[[ -f "$CONF_DIR/config.yml" ]] || cp "$APP_HOME/packaging/config/config.yml" "$CONF_DIR/config.yml"
+[[ -f "$CONF_DIR/config.yml" ]] || cp "$APP_HOME/conf/config.yml" "$CONF_DIR/config.yml"
 
 # Impala TLS 자리표시 파일(실제 파일로 교체할 것). Greenplum 은 TLS 미적용.
 [[ -f "$CONF_DIR/impala-ca.pem" ]] || printf '# TLS CA 인증서(PEM) 자리표시 — 실제 Impala CA 로 교체할 것\n' > "$CONF_DIR/impala-ca.pem"
 
-echo "==> 런처 스크립트 배치 -> $BIN_DIR"
-cp "$APP_HOME"/deploy/bin/*.sh "$BIN_DIR"/
+# 런처 스크립트는 소스 트리의 bin/ 이 rsync 로 이미 $APP_HOME/bin 에 놓였다.
+echo "==> 런처 스크립트 실행 권한 -> $BIN_DIR"
 chmod +x "$BIN_DIR"/*.sh
 
 echo "==> 소유권/권한"

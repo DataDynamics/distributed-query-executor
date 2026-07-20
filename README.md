@@ -115,42 +115,46 @@ sequenceDiagram
 
 ## 디렉터리 구조
 
-이제 코드가 어디에 어떻게 놓여 있는지 살펴봅시다. 크게 보면 coordinator 와 executor 가
-공통으로 쓰는 `core/`, 지휘자 역할의 `coordinator/`, Executor 역할의 `executor/`, 그리고 설정과
-배포를 담는 디렉터리들로 나뉩니다. 아래 목록에서 왼쪽은 파일 경로, 오른쪽은 그 파일이 맡은
-일입니다. 처음에는 전부 외울 필요 없이, "공용 → 지휘자 → Executor" 순서로 큰 덩어리만 눈에
-익혀 두면 충분합니다.
+이제 코드가 어디에 어떻게 놓여 있는지 살펴봅시다. 소스 코드는 모두 `src/` 아래에 있고,
+크게 보면 coordinator 와 executor 가 공통으로 쓰는 `src/core/`, 지휘자 역할의
+`src/coordinator/`, Executor 역할의 `src/executor/` 로 나뉩니다. 그 밖에 설정(`conf/`),
+런처 스크립트(`bin/`), 배포·패키징(`packaging/`)을 담는 디렉터리들이 저장소 루트에 있습니다. 아래
+목록에서 왼쪽은 파일 경로, 오른쪽은 그 파일이 맡은 일입니다. 처음에는 전부 외울 필요 없이,
+"공용 → 지휘자 → Executor" 순서로 큰 덩어리만 눈에 익혀 두면 충분합니다.
 
 ```
-core/                # 공용: 설정 로더 + 설정 + 로깅 + 메트릭 (coordinator·executor 공유)
-  config_loader.py     config.properties + config.yml(${변수:기본값}) 치환 로더
-  config.py            Settings — config 파일 기반 전역 설정(싱글턴)
-  logging.py           일 단위 롤링 로깅(파일명_YYYYMMDD.log) + WARNING 전용 로그(*-warn.log) 분리
-  metrics.py           CPU/메모리/디스크 시스템 메트릭 수집(psutil)
-coordinator/         # FastAPI: 검증 → 분할 → 디스패치 → 상태 추적
-  parser.py            1단계 검증 + 파티션 IN 절 탐지(sqlglot, strict/lenient 모드)
-  splitter.py          IN 목록을 N개의 완전한 sub-query로 분할(원문 포맷 보존)
-  dispatcher.py        디스패치 + admission control(JobAdmission: 동시 슬롯 + 대기 큐) + 상태 polling
-  models.py            Job/Task 도메인 모델 + 상태 enum + 요청/응답 스키마
-  job_store.py         Job 저장소: InMemory(단일) / Sql(멀티 coordinator 공유, JSONB)
-  history.py           job 단위 실행 이력 기록·조회(PostgreSQL, job_id별 최신 1건)
-  monitor.py           executor /health·/metrics 폴링 + PostgreSQL 메트릭 기록
-  executor_status.py   공유 상태 테이블(executor self-report) 조회 + 신선도 liveness 판정
-  dashboard.py         모니터링 대시보드 HTML(인라인 CSS/JS) + 설정 마스킹
-  config.py            core 설정을 패키지-로컬로 재노출(임포트 편의)
-  app.py               REST API (POST /jobs, /query-execute, .../status·result·cancel, /datasources, /cluster, /executors, /health, /metrics)
-  __main__.py          실행 진입점 (python -m coordinator)
-executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task 상태 노출
-  backend.py           ImpalaToGreenplumBackend(impyla + psycopg) + MockBackend
-  models.py            Task 도메인 모델 + 상태 enum + 요청 스키마
-  history.py           task 단위 실행 이력 기록·조회(PostgreSQL, task_id별 최신 1건)
-  status.py            자기 상태(CPU/메모리/동시 task)를 공유 DB에 self-report(UPSERT)
-  dashboard.py         executor self-view 대시보드 HTML(remote mode에서 /에 노출)
-  app.py               REST API (POST /tasks, /query-run(커스텀 함수 위임), /datasources, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
-  __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
-packaging/config/    # config.properties + config.yml 기본값 + 스키마(*.sql)
-packaging/wheels/    # 에어갭 오프라인 설치용 cp39 휠 번들(coordinator/executor/dev, 유형별)
-deploy/              # install.sh + 런처 bin/(start/stop/status[-coordinator|-executor]·env) — /data1 트리 배포
+src/                   # 파이썬 소스 루트(패키지: core / coordinator / executor)
+  core/                # 공용: 설정 로더 + 설정 + 로깅 + 메트릭 (coordinator·executor 공유)
+    config_loader.py     config.properties + config.yml(${변수:기본값}) 치환 로더
+    config.py            Settings — config 파일 기반 전역 설정(싱글턴)
+    logging.py           일 단위 롤링 로깅(파일명_YYYYMMDD.log) + WARNING 전용 로그(*-warn.log) 분리
+    metrics.py           CPU/메모리/디스크 시스템 메트릭 수집(psutil)
+  coordinator/         # FastAPI: 검증 → 분할 → 디스패치 → 상태 추적
+    parser.py            1단계 검증 + 파티션 IN 절 탐지(sqlglot, strict/lenient 모드)
+    splitter.py          IN 목록을 N개의 완전한 sub-query로 분할(원문 포맷 보존)
+    dispatcher.py        디스패치 + admission control(JobAdmission: 동시 슬롯 + 대기 큐) + 상태 polling
+    models.py            Job/Task 도메인 모델 + 상태 enum + 요청/응답 스키마
+    job_store.py         Job 저장소: InMemory(단일) / Sql(멀티 coordinator 공유, JSONB)
+    history.py           job 단위 실행 이력 기록·조회(PostgreSQL, job_id별 최신 1건)
+    monitor.py           executor /health·/metrics 폴링 + PostgreSQL 메트릭 기록
+    executor_status.py   공유 상태 테이블(executor self-report) 조회 + 신선도 liveness 판정
+    dashboard.py         모니터링 대시보드 HTML(인라인 CSS/JS) + 설정 마스킹
+    config.py            core 설정을 패키지-로컬로 재노출(임포트 편의)
+    app.py               REST API (POST /jobs, /query-execute, .../status·result·cancel, /datasources, /cluster, /executors, /health, /metrics)
+    __main__.py          실행 진입점 (python -m coordinator)
+  executor/            # FastAPI: Impala 읽기 → Greenplum COPY 적재, task 상태 노출
+    backend.py           ImpalaToGreenplumBackend(impyla + psycopg) + MockBackend
+    models.py            Task 도메인 모델 + 상태 enum + 요청 스키마
+    history.py           task 단위 실행 이력 기록·조회(PostgreSQL, task_id별 최신 1건)
+    status.py            자기 상태(CPU/메모리/동시 task)를 공유 DB에 self-report(UPSERT)
+    dashboard.py         executor self-view 대시보드 HTML(remote mode에서 /에 노출)
+    app.py               REST API (POST /tasks, /query-run(커스텀 함수 위임), /datasources, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
+    __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
+bin/                 # 런처 스크립트(start/stop/status[-coordinator|-executor]·env·check-prereqs)
+conf/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
+examples/            # 커스텀 쿼리 함수 등 예제 코드(examples.query_funcs.*)
+packaging/           # 배포·패키징 일체: install.sh(/data1 트리 배포) + README.md(배포 안내)
+  wheels/            #   에어갭 오프라인 설치용 cp39 휠 번들(coordinator/executor/dev, 유형별)
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
 
@@ -166,7 +170,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 
 - 설정 파일들은 기본적으로 `/data1/Distributed Query Executor/config` 디렉터리에서 읽습니다. 다른
   위치를 쓰고 싶으면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 바꿀 수 있습니다.
-- 내 컴퓨터에서 개발하며 돌려볼 때는 `QUERY_EXECUTOR_CONFIG_DIR=packaging/config` 로
+- 내 컴퓨터에서 개발하며 돌려볼 때는 `QUERY_EXECUTOR_CONFIG_DIR=conf` 로
   지정해 저장소에 들어 있는 기본값을 그대로 쓰면 편합니다.
 - 가장 자주 손대는 핵심 항목은 `coordinator.executors`(Executor 목록),
   `coordinator.max_concurrent_jobs`/`max_pending_jobs`(동시 처리·대기 한도), `impala.*`(원본
@@ -216,7 +220,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 - Impala 접속은 기본으로 **TLS + LDAP(사용자/비밀번호)** 인증을 씁니다. 관련 설정은
   `impala.use_ssl`/`impala.ca_cert` 와 `impala.auth_mechanism=LDAP`, 그리고 LDAP 바인드용
   `impala.user`/`impala.password` 입니다(비밀번호 보호를 위해 TLS 권장,
-  [deploy/README.md](deploy/README.md) 참고).
+  [packaging/README.md](packaging/README.md) 참고).
 - 로깅은 `/data1/Distributed Query Executor/logs` 에 하루 단위로 파일이 갈리며 쌓입니다. 작업 요청이
   들어오면 **job_id 를 먼저 만들고**, 그 이후의 모든 로그 줄 앞에 `[job_id][task_id]` 가
   자동으로 붙습니다(coordinator·executor 공통). 예를 들면 다음과 같습니다.
@@ -331,7 +335,7 @@ executor 를 흉내가 아니라 실제 클러스터에 연결하려면, Impala�
 
 ## 로컬 실행
 
-설치를 마쳤다면 내 컴퓨터에서 실제로 서비스를 띄워 봅시다. 설정은 `packaging/config/` 의
+설치를 마쳤다면 내 컴퓨터에서 실제로 서비스를 띄워 봅시다. 설정은 `conf/` 의
 기본값을 그대로 쓰므로(`coordinator.executors`, 포트 등) 별도 설정 없이도 동작합니다.
 순서는 간단합니다. 먼저 Executor인 executor 를 한 대 이상 띄우고, 그다음 지휘자인 coordinator 를
 띄웁니다. executor 의 포트는 `EXECUTOR_PORT` 환경변수로 정하며, 포트만 달리해 여러 대를
@@ -339,13 +343,13 @@ executor 를 흉내가 아니라 실제 클러스터에 연결하려면, Impala�
 
 ```bash
 # executor 기동 (포트는 EXECUTOR_PORT 로 지정). 여러 개 띄울 수 있다.
-QUERY_EXECUTOR_CONFIG_DIR=packaging/config EXECUTOR_PORT=8087 \
+QUERY_EXECUTOR_CONFIG_DIR=conf EXECUTOR_PORT=8087 \
   .venv/bin/python -m executor &
-QUERY_EXECUTOR_CONFIG_DIR=packaging/config EXECUTOR_PORT=8086 \
+QUERY_EXECUTOR_CONFIG_DIR=conf EXECUTOR_PORT=8086 \
   .venv/bin/python -m executor &
 
 # coordinator 기동 (host/port/executors 는 config 에서 읽음)
-QUERY_EXECUTOR_CONFIG_DIR=packaging/config \
+QUERY_EXECUTOR_CONFIG_DIR=conf \
   .venv/bin/python -m coordinator
 ```
 
@@ -429,7 +433,7 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   (task 수 = 날짜 수).
 - 적재는 stage_insert **append** 입니다(각 task: 그 날짜 SELECT → staging(TEMP) → target INSERT).
   하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을
-  씁니다. 예제 템플릿: `packaging/config/templates/daily_sales/`.
+  씁니다. 예제 템플릿: `conf/templates/daily_sales/`.
 
 ### 결과 반환 실행 (`POST /query-execute`)
 
@@ -510,9 +514,9 @@ executor 가 남기는 task 단위 이력입니다. 아래 표는 두 이력 테
 - 기록 대상 DB 는 `history.db_dsn` 을 공유해 쓰며, 이 값이 없으면 `monitor.db_dsn` 을
   대신 씁니다. 둘 다 비어 있으면 이력 기능은 비활성화되고 경고 로그만 남습니다.
 - ⚠️ **스키마는 앱이 자동 생성하지 않는다.** PostgreSQL을 쓰기 전에 통합 스키마
-  `packaging/config/postgresql.sql`을 **먼저 실행**해 테이블/인덱스를 만들어 두어야 한다
+  `conf/postgresql.sql`을 **먼저 실행**해 테이블/인덱스를 만들어 두어야 한다
   (안 하면 "relation does not exist"로 실패):
-  `psql "$history_db_dsn" -f packaging/config/postgresql.sql`
+  `psql "$history_db_dsn" -f conf/postgresql.sql`
 
 특정 작업이 어떻게 진행됐는지 task 단위로 따라가 보고 싶다면, 아래처럼 `task_history` 를
 시간순으로 조회하면 됩니다.
@@ -533,7 +537,7 @@ FROM task_history WHERE job_id = '<job_id>' ORDER BY recorded_at;
 > ⚠️ **먼저 스키마 생성**: PostgreSQL을 쓰는 경우(공유 store / 이력 / self-report) 서비스
 > 기동 **전에** 반드시 통합 스키마를 한 번 적용한다. 앱은 테이블을 자동 생성하지 않는다.
 > ```bash
-> psql "postgresql://user:pass@pg:5432/queryexec" -f packaging/config/postgresql.sql
+> psql "postgresql://user:pass@pg:5432/queryexec" -f conf/postgresql.sql
 > ```
 
 멀티 coordinator 를 켜는 데 관여하는 설정들과 그 효과는 아래 표와 같습니다. 처음에는 위쪽
@@ -586,7 +590,7 @@ coordinator.orphan_reconcile_interval_s=30
   `max_pending_jobs`(대기 큐)로 동시 job 수를 제한, 초과 시 `429`. 단 이 한도는 **coordinator
   인스턴스별**(인메모리)이라 멀티 coordinator 환경에선 인스턴스 수만큼 합산된다.
 
-스키마는 `packaging/config/postgresql.sql` 하나에 모두 통합되어 있습니다. 앱이 DDL 을 직접
+스키마는 `conf/postgresql.sql` 하나에 모두 통합되어 있습니다. 앱이 DDL 을 직접
 실행하지 않으므로 **반드시 먼저 실행**해 두어야 합니다.
 
 > 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 두면 된다.
@@ -595,11 +599,11 @@ coordinator.orphan_reconcile_interval_s=30
 점이 있습니다.
 
 > **WarehousePG / Greenplum 7** 에 메타 저장소를 둘 때는 `postgresql.sql` 대신
-> `packaging/config/warehousepg.sql` 을 적용한다(테이블마다 `DISTRIBUTED BY`, history/metrics 는
+> `conf/warehousepg.sql` 을 적용한다(테이블마다 `DISTRIBUTED BY`, history/metrics 는
 > 대리 PK 를 빼 `job_id`/`executor_url` 로 co-locate). GP7=PG12 라 앱 SQL(`ON CONFLICT`·`JSONB`·
 > `DISTINCT ON`)은 그대로 동작한다. 다만 heartbeat/예약 같은 고빈도 단일행 UPSERT 는 MPP 와 맞지
 > 않으니, 성능이 중요하면 이 메타 저장소는 PostgreSQL 에 두고 WarehousePG 는 데이터 적재 대상으로만
-> 쓰는 편이 낫다. 자세한 차이는 [`deploy/README.md`](deploy/README.md) 참고.
+> 쓰는 편이 낫다. 자세한 차이는 [`packaging/README.md`](packaging/README.md) 참고.
 
 ## 로컬 모드 (local mode)
 
@@ -725,11 +729,11 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 실제 서버에 배포할 때 이 프로젝트는 조금 독특한 규칙을 따릅니다. 보안 정책상 `/etc`·`/opt`·
 `/var` 같은 시스템 디렉터리를 건드리지 않고, 모든 것을 `/data1/Distributed Query Executor` 한 트리
 아래에 모아 둡니다. 또한 systemd 시스템 유닛 대신 런처 스크립트로 서비스를 켜고 끕니다.
-설치 스크립트와 자세한 절차는 [`deploy/README.md`](deploy/README.md) 를 참고하세요. 가장
+설치 스크립트와 자세한 절차는 [`packaging/README.md`](packaging/README.md) 를 참고하세요. 가장
 기본적인 흐름은 아래와 같습니다.
 
 ```bash
-sudo ./deploy/install.sh                              # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
+sudo ./packaging/install.sh                              # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
 B=/data1/Distributed Query Executor/bin
 sudo -u gpadmin $B/start.sh      # 전체 기동(executor 들 + coordinator)
 sudo -u gpadmin $B/status.sh     # 상태(프로세스 + health)
@@ -774,14 +778,14 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 
    ```bash
    # coordinator 만
-   sudo WHEELHOUSE=packaging/wheels/coordinator ./deploy/install.sh
+   sudo WHEELHOUSE=packaging/wheels/coordinator ./packaging/install.sh
    # executor 포함(impyla·SASL)
    sudo WHEELHOUSE=packaging/wheels/coordinator:packaging/wheels/executor \
-        INSTALL_EXECUTOR=1 ./deploy/install.sh
+        INSTALL_EXECUTOR=1 ./packaging/install.sh
    ```
 
 인터넷이 아예 없으면 **RHEL 9.2 DVD ISO 를 루프백 마운트**해 yum 리포지토리로 쓰는 방법이
-있습니다(자세한 절차는 [`deploy/README.md`](deploy/README.md)). 휠 번들의 구성과 사용법은
+있습니다(자세한 절차는 [`packaging/README.md`](packaging/README.md)). 휠 번들의 구성과 사용법은
 [`packaging/wheels/README.md`](packaging/wheels/README.md) 를 참고하세요.
 
 ## 쿼리 분할 모드

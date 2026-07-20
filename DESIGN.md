@@ -112,7 +112,7 @@ coordinator 쪽 부품들을 먼저 봅시다. 요청을 받는 API부터, 쿼�
 
 | 컴포넌트 | 책임 |
 |---|---|
-| **API Layer** | 작업 제출/조회/취소, 클러스터 상태, 대시보드(`coordinator/app.py`) |
+| **API Layer** | 작업 제출/조회/취소, 클러스터 상태, 대시보드(`src/coordinator/app.py`) |
 | **Parser** | sqlglot로 SQL 파싱, partition column의 `IN(...)` 노드 탐색, strict/lenient 모드 검증(`parser.py`) |
 | **Splitter** | IN 값 리스트를 `parallelism`개로 분할 → sub-query N개 재작성(원문 포맷 보존, `splitter.py`) |
 | **JobAdmission** | 동시 실행 슬롯 + 대기 큐 상한(과부하 시 429). `dispatcher.py` |
@@ -130,7 +130,7 @@ coordinator 쪽 부품들을 먼저 봅시다. 요청을 받는 API부터, 쿼�
 
 | 컴포넌트 | 책임 |
 |---|---|
-| **Task API** | `POST /tasks`(수신·실행 시작), `GET /tasks`·`/tasks/{id}`(상태), `/cancel`, `/metrics` — `executor/app.py` |
+| **Task API** | `POST /tasks`(수신·실행 시작), `GET /tasks`·`/tasks/{id}`(상태), `/cancel`, `/metrics` — `src/executor/app.py` |
 | **Backend** | `ImpalaToGreenplumBackend`(impyla read → psycopg COPY/INSERT) + `MockBackend`. copy 모드는 COPY 전 **컬럼 사전검증(preflight)** 으로 불일치 조기 실패(`backend.py`) |
 | **Task Store** | 받은 task 상태(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED) + 누적 `rows_written`(인메모리 dict) |
 | **TaskHistory** | task 단위 상태 전이 이력 PostgreSQL 기록·조회(`history.py`) |
@@ -697,9 +697,9 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 | 동시성 | asyncio + Semaphore(admission/디스패치) + thread pool(동기 DB 호출 래핑) |
 | 상태/이력 저장 | 인메모리 dict / **파일 영속(JSON 스냅샷, 단일 노드 크래시 복구)** / **PostgreSQL**(`jobs`/`job_history`/`task_history`/`executor_status`/`executor_health_metrics`) |
 | 대시보드 | 인라인 HTML + vanilla JS(빌드 도구 없음) |
-| 배포 | /data1 트리 + 런처 스크립트로 coordinator 1 + executor N(`deploy/README.md`) |
+| 배포 | /data1 트리 + 런처 스크립트로 coordinator 1 + executor N(`packaging/README.md`) |
 
-요약하면, coordinator와 executor 모두 Python 3.9 이상에서 FastAPI로 만들어졌고, SQL 분석에는 sqlglot, Impala 읽기에는 impyla, Greenplum 쓰기에는 psycopg, 둘 사이의 통신에는 httpx를 씁니다. 동시성은 asyncio와 세마포어, 그리고 동기 DB 호출을 감싸는 스레드 풀로 다루며, 상태와 이력은 앞서 본 대로 인메모리·파일·PostgreSQL 중에서 고를 수 있습니다. 대시보드는 빌드 도구 없는 인라인 HTML과 순수 자바스크립트로 되어 있고, 배포는 런처 스크립트로 coordinator 한 대와 executor 여러 대를 띄우는 방식입니다(자세한 내용은 [deploy/README.md](deploy/README.md)).
+요약하면, coordinator와 executor 모두 Python 3.9 이상에서 FastAPI로 만들어졌고, SQL 분석에는 sqlglot, Impala 읽기에는 impyla, Greenplum 쓰기에는 psycopg, 둘 사이의 통신에는 httpx를 씁니다. 동시성은 asyncio와 세마포어, 그리고 동기 DB 호출을 감싸는 스레드 풀로 다루며, 상태와 이력은 앞서 본 대로 인메모리·파일·PostgreSQL 중에서 고를 수 있습니다. 대시보드는 빌드 도구 없는 인라인 HTML과 순수 자바스크립트로 되어 있고, 배포는 런처 스크립트로 coordinator 한 대와 executor 여러 대를 띄우는 방식입니다(자세한 내용은 [packaging/README.md](packaging/README.md)).
 
 ---
 
@@ -851,7 +851,7 @@ executor가 쓰는 CSV의 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 �
 - **파일 권한**: 외부테이블 read는 세그먼트 postgres 프로세스 사용자(보통 gpadmin)로 로컬 파일을 연다 → executor가 쓴 파일이 그 사용자에게 읽기 가능해야 한다(공유 umask/소유권 합의).
 - **호스트당 파일 수 ≤ 세그먼트 수** — coordinator가 `S_h`로 상한을 강제한다.
 - **mirror failover**: primary 세그먼트가 다른 호스트의 mirror로 넘어가면 그 로컬 파일이 없으므로 load가 실패한다 → 재시도 정책 대상.
-- **배포 변경**: 이 모드는 executor가 세그먼트 호스트에 co-locate되어야 하므로, `remote` 배치(독립 executor 풀)와 배포 형태가 다르다([deploy/README.md](deploy/README.md)에 별도 배치로 기술).
+- **배포 변경**: 이 모드는 executor가 세그먼트 호스트에 co-locate되어야 하므로, `remote` 배치(독립 executor 풀)와 배포 형태가 다르다([packaging/README.md](packaging/README.md)에 별도 배치로 기술).
 
 ### 17.8 설정 키
 
@@ -870,7 +870,7 @@ executor가 쓰는 CSV의 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 �
 - **host 매핑(gp_hostname)**: executor 가 `_gp_hostname()`(`executor.gp_hostname` 설정 우선, 없으면 OS hostname)을 `/metrics`·`/info`로 보고. coordinator 의 `_resolve_hosts()`가 이를 수집해(HttpDispatcher는 `/metrics` 조회+URL별 캐시, 실패 시 URL 호스트 폴백) `file://` URI 의 호스트로 쓴다 — HTTP URL 호스트(IP/별칭) ≠ GP 호스트명 문제를 바로잡는다.
 - **파일 예산 배분(`files_per_host ≤ S_h`)**: Phase 1 디스패치 전 `_plan_local_stage()`가 `backend.segment_host_counts()`(`{host: S_h}`)와 executor→host 매핑으로 `stage.plan_file_budget()`을 돌려, 각 파일(=export task)을 호스트당 `S_h`(또는 `min(S_h, stage.max_files_per_host)`)를 넘지 않게 배분하고 `executor_url`/`out_path`를 재확정한다(호스트 내 executor 라운드로빈). 총 파일 수가 예산(Σ S_h)을 넘으면 배치 불가 → job FAILED. 토폴로지/executor 미상(목·로컬)이면 기존 배정 유지.
 - **호스트 검증**: Phase 2 직전 `backend.segment_hosts()`(`gp_segment_configuration`)로 매핑된 호스트가 실재하는지 확인(`stage.validate_hosts`, 기본 on). 없으면 load 전에 조기 실패.
-- **coordinator(Phase 2·3)**: 디스패처 `run()`의 배리어(`_execute` 반환) 뒤 `_run_stage_load()`가 GP master에 외부테이블 DDL→staging 적재→(멱등 선삭제)→target INSERT를 한 트랜잭션으로 실행하고 `_cleanup_stage()`로 각 executor 로컬 파일을 정리한다. `file://` URI·`FORMAT 'CSV'(...)`·파일 인덱스 조립은 `coordinator/stage.py`(순수 함수)가 담당. `finalize_job`은 local_stage를 원자 적재로 보아 실패 시 정책 무관 FAILED.
+- **coordinator(Phase 2·3)**: 디스패처 `run()`의 배리어(`_execute` 반환) 뒤 `_run_stage_load()`가 GP master에 외부테이블 DDL→staging 적재→(멱등 선삭제)→target INSERT를 한 트랜잭션으로 실행하고 `_cleanup_stage()`로 각 executor 로컬 파일을 정리한다. `file://` URI·`FORMAT 'CSV'(...)`·파일 인덱스 조립은 `src/coordinator/stage.py`(순수 함수)가 담당. `finalize_job`은 local_stage를 원자 적재로 보아 실패 시 정책 무관 FAILED.
 - **테스트**: `tests/test_local_stage.py` — stage.py 순수 함수, executor 라우팅/cleanup/metrics, LocalDispatcher 2-phase e2e, gp_hostname 매핑·검증까지 실 DB·실 디스크 없이 검증.
 
 ---
@@ -896,7 +896,7 @@ flowchart LR
 
 ### 18.2 템플릿 저장 구조
 
-`template.dir`(기본 `/data1/query-executor/config/templates`, 개발 시 `packaging/config/templates`) 아래 **`<template_id>/` 디렉터리 하나가 하나의 이관 시나리오**입니다.
+`template.dir`(기본 `/data1/query-executor/config/templates`, 개발 시 `conf/templates`) 아래 **`<template_id>/` 디렉터리 하나가 하나의 이관 시나리오**입니다.
 
 ```
 <template_dir>/sales_migration/
@@ -920,8 +920,8 @@ flowchart LR
 
 ### 18.3 엔진과 커스텀 함수
 
-- **엔진**(`coordinator/template.py`, `TemplateEngine`): Jinja2 `SandboxedEnvironment` + `StrictUndefined`(미정의 변수 즉시 실패, 위험 속성 접근 차단), `autoescape=False`(HTML 이 아닌 SQL). 단일 워커 전제라 in-process 캐시가 안전하며, `template.auto_reload` 로 개발 중 변경을 반영합니다. `create_app` 에서 1개 생성해 주입합니다.
-- **커스텀 함수**(`coordinator/template_funcs.py`): `@template_filter`/`@template_global` 데코레이터로 등록하는 레지스트리. 내장 SQL 안전 필터(`sql_str`·`sql_in`·`sql_num`·`sql_ident`)와 도메인 글로벌(`date_range`)을 제공합니다. 설정 `template.func_modules`(쉼표 구분 import 경로)에 모듈을 지정하면 엔진 기동 시 import 되어 앱 코드 수정 없이 함수를 추가할 수 있습니다.
+- **엔진**(`src/coordinator/template.py`, `TemplateEngine`): Jinja2 `SandboxedEnvironment` + `StrictUndefined`(미정의 변수 즉시 실패, 위험 속성 접근 차단), `autoescape=False`(HTML 이 아닌 SQL). 단일 워커 전제라 in-process 캐시가 안전하며, `template.auto_reload` 로 개발 중 변경을 반영합니다. `create_app` 에서 1개 생성해 주입합니다.
+- **커스텀 함수**(`src/coordinator/template_funcs.py`): `@template_filter`/`@template_global` 데코레이터로 등록하는 레지스트리. 내장 SQL 안전 필터(`sql_str`·`sql_in`·`sql_num`·`sql_ident`)와 도메인 글로벌(`date_range`)을 제공합니다. 설정 `template.func_modules`(쉼표 구분 import 경로)에 모듈을 지정하면 엔진 기동 시 import 되어 앱 코드 수정 없이 함수를 추가할 수 있습니다.
 
 ### 18.4 보안
 
@@ -946,12 +946,12 @@ flowchart LR
 
 ### 18.7 결과 반환 실행 (`POST /query-execute`)
 
-`POST /jobs` 가 **이관**(Impala→Greenplum, 결과가 coordinator 를 거치지 않음)인 반면, `POST /query-execute` 는 같은 템플릿을 렌더한 SELECT 를 실행해 **결과(상위 N행)를 클라이언트에 동기로 돌려주는** 미리보기성 실행입니다. 사실상 §18 템플릿 엔진과 `/datasources` 미리보기(`core/dbprobe.py`)를 합친 것입니다.
+`POST /jobs` 가 **이관**(Impala→Greenplum, 결과가 coordinator 를 거치지 않음)인 반면, `POST /query-execute` 는 같은 템플릿을 렌더한 SELECT 를 실행해 **결과(상위 N행)를 클라이언트에 동기로 돌려주는** 미리보기성 실행입니다. 사실상 §18 템플릿 엔진과 `/datasources` 미리보기(`src/core/dbprobe.py`)를 합친 것입니다.
 
 - **요청**: `template_id` + `params`(이름-값 항목 **배열** `[{name, value}, ...]`) + `datasource`(선택, 미지정 시 `source.type`) + `limit`(1~10000). 배열은 내부에서 `{name: value}` dict 로 접혀 기존 렌더 경로(`ParamSpec` 검증·`sql_in` 이스케이프)를 그대로 탑니다. 같은 이름이 두 번 오면 `422 DUPLICATE_PARAM`.
 - **렌더**: `TemplateEngine.render_query()` 가 **`select` 조각만** 렌더합니다(이관용 `render()` 와 달리 exec_mode 별 insert/staging 조각을 요구하지 않아 어떤 템플릿이든 동작). 렌더된 SELECT 는 `validate_select_query()` 로 **단일 행 반환 SELECT** 인지 검증합니다(다중 문·비-SELECT 차단; 값은 이미 템플릿 필터로 이스케이프되지만 구조 방어를 한 겹 더 둠).
 - **실행 라우팅 — 클라이언트는 executor 를 지정하지 않는다(2갈래로 통일)**: `greenplum`/`history`(메타/타깃 DB)는 coordinator 가 직접(psycopg) 실행하고, **그 외 소스(`impala`/`trino`/`source`)는 datasource 종류와 무관하게 executor 의 `POST /query-run` 하나로 통일 위임**합니다(초기엔 impala 만 built-in 을 타는 비대칭이 있었으나 제거). 대상 executor 는 클라이언트가 지정하지 않고, coordinator 가 **`/jobs` 디스패치와 동일한 선택 정책**(`coordinator.executor_select` — `least_loaded`/`p2c` 면 '가장 한가한', 기본 `round_robin` 이면 회전)으로 고릅니다. 연결(transport) 실패 시 다음 executor 로 failover 하며(SELECT 는 멱등), executor 가 도달 후 돌려준 4xx/5xx(SQL 오류·함수 미설정)는 확정 응답이므로 failover 없이 그대로 전달합니다. 실제 실행한 executor 는 응답 `executed_by` 로 관측할 수 있습니다(직접 실행이면 null).
-- **소스 실행 = 커스텀 함수 위임(`/query-run`)**: query-execute 의 소스 실행은 executor 가 소스(Trino 등)를 **직접 접속하지 않고**, 설정으로 지정한 외부 Python 함수에 위임합니다(`run_trino_select` 직접 호출 제거). executor 의 `POST /query-run` 이 `query.func.module`(dotted path, `importlib` 로딩·캐시)로 함수를 찾아 `run(sql, config=<query.func.config.* dict>, limit)` 를 호출하고, 반환된 `QueryResult`(또는 동일 키 dict)를 그대로 응답합니다. **설정은 config.properties 에서 자유 정의** — `query.func.config.<키>=<값>` 을 프리픽스로 모아(코드/`config.yml` 수정 없이) 함수에 dict 로 넘깁니다(값은 문자열, 형변환은 함수 책임; `core/config.py` 의 `_collect_prefix`). 미설정 시 400, 로드/실행 실패 시 502. 참조 구현: `examples/query_funcs/trino_runner.py`. (임의 SQL 미리보기 `/datasources/{name}/query`(§B 운영 점검용)와 이관 `_source_connect` 의 소스 접속은 별개로 built-in 유지.)
+- **소스 실행 = 커스텀 함수 위임(`/query-run`)**: query-execute 의 소스 실행은 executor 가 소스(Trino 등)를 **직접 접속하지 않고**, 설정으로 지정한 외부 Python 함수에 위임합니다(`run_trino_select` 직접 호출 제거). executor 의 `POST /query-run` 이 `query.func.module`(dotted path, `importlib` 로딩·캐시)로 함수를 찾아 `run(sql, config=<query.func.config.* dict>, limit)` 를 호출하고, 반환된 `QueryResult`(또는 동일 키 dict)를 그대로 응답합니다. **설정은 config.properties 에서 자유 정의** — `query.func.config.<키>=<값>` 을 프리픽스로 모아(코드/`config.yml` 수정 없이) 함수에 dict 로 넘깁니다(값은 문자열, 형변환은 함수 책임; `src/core/config.py` 의 `_collect_prefix`). 미설정 시 400, 로드/실행 실패 시 502. 참조 구현: `examples/query_funcs/trino_runner.py`. (임의 SQL 미리보기 `/datasources/{name}/query`(§B 운영 점검용)와 이관 `_source_connect` 의 소스 접속은 별개로 built-in 유지.)
 - **응답**: `{template_id, datasource, sql(감사용 렌더 SQL), columns, rows, row_count, truncated, limit, elapsed_ms, executed_by}` — `columns`/`rows`/… 는 `dbprobe.QueryResult` shape 과 동일하고, `executed_by` 는 실제 실행 executor URL(직접 실행이면 null)입니다. `datasource` 는 coordinator 가 확정값으로 싣습니다(`/query-run` 응답엔 datasource 가 없어 보정).
 - **이관 소스와의 분리**: `datasource` 를 생략하면 전역 `source.type` 을 기본으로 쓰지만, 요청에 명시하면 그 소스로 라우팅됩니다. 이 덕분에 "이관(`/jobs`)은 Impala 읽기 → Greenplum 적재, query-execute 는 Trino(커스텀 함수) 실행" 처럼 기능별로 소스를 나눌 수 있습니다 — `source.type=impala` 로 두고 query-execute 요청에 `datasource:"trino"` 를 명시하면 됩니다.
 - **경계**: 결과가 coordinator 메모리를 거치므로 `limit`(≤10000)으로 응답 크기를 강제하는 **미리보기 규모 전용**입니다. 대량 이관은 계속 `/jobs`. 또한 executor 의 `/query-run`·`/datasources/{name}/query` 는 task 세마포어(`max_concurrent_tasks`)를 거치지 않으므로, 무거운 사용이 예상되면 별도 동시성 가드를 후속으로 고려합니다.
@@ -963,9 +963,9 @@ flowchart LR
 기본 분할(§8)은 파티션 컬럼의 `IN` 값 목록을 N등분합니다. 여기에 더해, `/jobs`(이관)는 **날짜 태스크 컬럼 기반 fan-out** 모드를 지원합니다 — `IN` 을 쓰지 않고 **날짜 하나 = task 하나**로 펼쳐, executor 마다 하루치를 맡깁니다(일별 배치 이관에 자연스러운 모델).
 
 - **요청**: 템플릿 stage_insert 에 `task_column`(날짜 컬럼) + `task_range`(오늘 기준 상대 일수, **양끝 포함**)를 추가합니다. 예: `task_column:"dt", task_range:[-7,0]` → 오늘 포함 8일. `partition_column`/`parallelism`/`split_strategy` 는 이 모드에서 쓰이지 않습니다(task 수 = 날짜 수).
-- **분할**(`coordinator/app.py` `_build_fanout`, IN 파싱·`split` 우회): 서버 오늘(KST) 기준으로 날짜 목록을 만들고(`_compute_task_dates`), **날짜마다 SELECT 조각만** `render_query()` 로 렌더해(컨텍스트에 `task_column`·`task_date` 주입) 하루치 sub-query 를 만듭니다. `INSERT`/`staging_ddl` 은 **날짜 독립**이라 대표 날짜로 **1회** 렌더해 job-level 로 공유합니다(§18.5 의 per-task `sub_query` / job-level 나머지 plumbing 그대로). 각 task 의 `partition_values` 에는 그 날짜를 담습니다(관측/표시용).
+- **분할**(`src/coordinator/app.py` `_build_fanout`, IN 파싱·`split` 우회): 서버 오늘(KST) 기준으로 날짜 목록을 만들고(`_compute_task_dates`), **날짜마다 SELECT 조각만** `render_query()` 로 렌더해(컨텍스트에 `task_column`·`task_date` 주입) 하루치 sub-query 를 만듭니다. `INSERT`/`staging_ddl` 은 **날짜 독립**이라 대표 날짜로 **1회** 렌더해 job-level 로 공유합니다(§18.5 의 per-task `sub_query` / job-level 나머지 plumbing 그대로). 각 task 의 `partition_values` 에는 그 날짜를 담습니다(관측/표시용).
 - **적재 방식**: stage_insert 는 **append** 입니다(그 날짜 SELECT → staging(TEMP) COPY → target INSERT). 하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나(TRUNCATE 등) 날짜별 물리 테이블을 씁니다 — 프레임워크는 대상에 DELETE 를 하지 않습니다.
-- **템플릿 계약**: SELECT 조각은 `WHERE {{ task_column | sql_ident }} = {{ task_date | sql_str }}` 처럼 하루치를 조회하고, INSERT/staging 은 날짜를 참조하지 않습니다. 예제: `packaging/config/templates/daily_sales/`.
+- **템플릿 계약**: SELECT 조각은 `WHERE {{ task_column | sql_ident }} = {{ task_date | sql_str }}` 처럼 하루치를 조회하고, INSERT/staging 은 날짜를 참조하지 않습니다. 예제: `conf/templates/daily_sales/`.
 - **예시**(today=2026-07-10, `[-7,0]`): `2026-07-03 … 2026-07-10` = 8 task, executor 당 1일. 각 task: 그 날짜 SELECT → staging(TEMP) COPY → INSERT.
 
 **테스트**: `tests/test_task_fanout.py` — `_compute_task_dates`(양끝 포함·역순·포맷·오류), dry-run(날짜별 1 task·날짜별 partition_values·IN 없음·INSERT 공유), 템플릿/exec_mode/range 검증(422).
@@ -977,7 +977,7 @@ flowchart LR
 마지막으로, 지금은 없지만 앞으로 더할 만한 기능들을 적어 둡니다. 이 목록은 시스템이 어느 방향으로 발전하려 하는지를 보여 줍니다. 각 항목을 한 줄로 풀어 설명하면 다음과 같습니다.
 
 - **실행 중 즉시 취소**: 지금은 진행 중인 작업을 곧장 끊기 어려운데, 백엔드 커서를 취소(`cursor.cancel()`)하고 트랜잭션을 rollback해 진행 중이던 Impala 읽기와 COPY를 즉시 멈출 수 있게 한다.
-- **헬스 기반 executor 선택**(Phase 1·2·3 구현 완료): `coordinator.executor_select=least_loaded|p2c`로 **초기 배정**과 **failover 순서**를 헬스/부하 기반으로 정한다(HA는 분산 스탬피드를 피하는 **P2C** 권장). HA 고도화로 **공유 self-report(URL 키 부하 뷰)·TTL 보호 공유 예약·죽은 coordinator 소유 job 정합**까지 지원한다 — §12 참고(`coordinator/selector.py`·`reservation.py`·`ha.py`).
+- **헬스 기반 executor 선택**(Phase 1·2·3 구현 완료): `coordinator.executor_select=least_loaded|p2c`로 **초기 배정**과 **failover 순서**를 헬스/부하 기반으로 정한다(HA는 분산 스탬피드를 피하는 **P2C** 권장). HA 고도화로 **공유 self-report(URL 키 부하 뷰)·TTL 보호 공유 예약·죽은 coordinator 소유 job 정합**까지 지원한다 — §12 참고(`src/coordinator/selector.py`·`reservation.py`·`ha.py`).
 - **append 모드 재실행 안전화**: 현재 폴링 중 유실은 멱등(`overwrite_partitions`)일 때만 재배정한다. task 단위 staging+swap 등으로 `append`도 안전 재실행 가능하게.
 - **callback 기반 상태 전파**: polling 대신 executor→coordinator 콜백으로 부하 제거.
 - **집계/GROUP BY 쿼리 지원**: 소스 측 사전 집계 후 적재 또는 적재 후 재집계.

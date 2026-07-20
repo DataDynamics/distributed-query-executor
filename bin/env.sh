@@ -8,8 +8,9 @@ RUN_DIR="$APP_HOME/run"
 
 # 설정 디렉터리(코드 기본값과 동일하지만 명시적으로 고정)
 export QUERY_EXECUTOR_CONFIG_DIR="$APP_HOME/config"
-# 소스 트리에서 직접 실행하므로(패키지 미설치) coordinator/executor 모듈을 찾도록 경로 지정
-export PYTHONPATH="$APP_HOME${PYTHONPATH:+:$PYTHONPATH}"
+# 소스 트리에서 직접 실행하므로(패키지 미설치) coordinator/executor 모듈을 찾도록 경로 지정.
+# src/ 가 패키지 루트이고, 커스텀 쿼리 함수 예제(examples.*)는 APP_HOME 루트에 있어 둘 다 넣는다.
+export PYTHONPATH="$APP_HOME/src:$APP_HOME${PYTHONPATH:+:$PYTHONPATH}"
 
 # 기동할 executor 포트(config 의 coordinator.executors 와 일치시킬 것)
 EXECUTOR_PORTS="${EXECUTOR_PORTS:-8087}"

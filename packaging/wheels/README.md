@@ -38,7 +38,7 @@
 
 ## 오프라인 설치
 
-이제 실제로 설치하는 방법입니다. 가장 간단한 길은 저장소에 들어 있는 `deploy/install.sh`
+이제 실제로 설치하는 방법입니다. 가장 간단한 길은 저장소에 들어 있는 `packaging/install.sh`
 스크립트를 쓰는 것입니다. 이 스크립트에 `WHEELHOUSE` 라는 환경변수로 "휠이 모여 있는
 폴더"의 위치를 알려 주면, 스크립트가 알아서 `--no-index`(인터넷 저장소를 쳐다보지 말라는
 뜻)와 `--find-links` 를 붙여 설치를 진행합니다. 휠을 모아 둔 이 폴더를 흔히
@@ -48,7 +48,7 @@ coordinator 만 설치할 때는 `WHEELHOUSE` 에 `coordinator` 디렉터리 하
 
 ```bash
 # coordinator 만
-sudo WHEELHOUSE=packaging/wheels/coordinator ./deploy/install.sh
+sudo WHEELHOUSE=packaging/wheels/coordinator ./packaging/install.sh
 ```
 
 executor 까지 설치하려면 앞서 설명한 대로 `coordinator/` 와 `executor/` 두 폴더를 모두
@@ -58,7 +58,7 @@ executor 까지 설치하려면 앞서 설명한 대로 `coordinator/` 와 `exec
 ```bash
 # executor 포함(콜론으로 여러 디렉터리 지정 → 다중 --find-links)
 sudo WHEELHOUSE=packaging/wheels/coordinator:packaging/wheels/executor \
-     INSTALL_EXECUTOR=1 ./deploy/install.sh
+     INSTALL_EXECUTOR=1 ./packaging/install.sh
 ```
 
 스크립트를 거치지 않고 `pip` 을 직접 호출하고 싶다면 다음처럼 손으로 옵션을 붙여도 됩니다.

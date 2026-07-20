@@ -34,6 +34,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
+# src 레이아웃: 소스는 src/ 아래에 있고 패키지명은 그대로(core/coordinator/executor).
+package-dir = {"" = "src"}
 packages = ["core", "coordinator", "executor"]
 
 # 에어갭 내장 웹 에셋(swagger-ui·redoc·폰트). wheel 로 빌드할 때도 포함되도록

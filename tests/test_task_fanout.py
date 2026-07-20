@@ -15,7 +15,7 @@ from coordinator.job_store import JobStore
 from coordinator.parser import QueryValidationError
 from core.timeutil import now_dt
 
-REPO_TEMPLATES = Path(__file__).resolve().parent.parent / "packaging" / "config" / "templates"
+REPO_TEMPLATES = Path(__file__).resolve().parent.parent / "conf" / "templates"
 
 
 # ───────────────────────── 순수 함수 ─────────────────────────
