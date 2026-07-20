@@ -38,7 +38,7 @@ src/
   core/        # 공용: 설정 로더/설정/로깅/메트릭 (coordinator·executor 공유)
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
-bin/           # 런처·설치 스크립트(install/start/stop/status·env·check-prereqs·config-tui — /data1 배포 트리와 공용)
+bin/           # 런처·설치 스크립트(install/start/stop/status·env·check-prereqs·config-tui·dashboard-tui — /data1 배포 트리와 공용)
 conf/          # config.properties + config.yml 기본값 + templates/ + 스키마(postgresql.sql / warehousepg.sql)
 examples/      # 예제 코드(examples.query_funcs.* — 커스텀 쿼리 함수, src 밖 최상위 패키지)
 packaging/     # 배포·패키징: README.md(배포 안내) + wheels/(에어갭 휠 번들 py39·py311). 설치는 bin/install.sh
@@ -110,6 +110,14 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `GET /datasources` + `POST /datasources/{name}/query` 엔드포인트가 이를 호출한다.
   executor 는 소스들을 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala/trino 는
   요청 본문 `executor_url` 로 executor 에 프록시한다(coordinator 에는 소스 드라이버가 없음).
+- `src/coordinator/tui.py` — **coordinator 대시보드의 읽기 전용 curses 모니터**(`python -m
+  coordinator.tui`, `bin/dashboard-tui.sh`). 웹 대시보드와 같은 JSON API(`/cluster`·`/jobs`·
+  `/history`·`/info`)를 폴링해 텍스트 UI 로 그린다(HTML 스크래핑 아님). 개별 executor 상세는
+  **coordinator 프록시**(`GET /executors/{idx}/tasks`·`/metrics`·`/tasks/{tid}/detail`, app.py
+  `_proxy_executor_get`)로 가져와 **coordinator 한 곳만** 붙어도 executor 화면까지 본다(executor 는
+  설정목록 index=allowlist 로만 지정 → SSRF 방지, `/datasources` 프록시와 동일 관례). `/cluster`·
+  `/executors` 엔트리에 드릴인 키 `index` 를 붙인다(`_annotate_executor_index`). 순수 포매터는
+  curses 무관(테스트 대상), config-tui 와 같은 에어갭 stdlib curses.
 - `src/core/version.py` + `src/core/banner.py` — **버전 단일 소스 + 기동 배너**. 버전은
   `version.py` 의 `__version__` **한 줄이 유일 소스**이고, `pyproject.toml` 이 `dynamic`
   + `attr` 로 그 값을 읽는다(버전 올릴 때 이 한 줄만 수정). `banner.py` 는 coordinator/

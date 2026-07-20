@@ -150,7 +150,7 @@ src/                   # 파이썬 소스 루트(패키지: core / coordinator /
     dashboard.py         executor self-view 대시보드 HTML(remote mode에서 /에 노출)
     app.py               REST API (POST /tasks, /query-run(커스텀 함수 위임), /datasources, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
     __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
-bin/                 # 런처·설치 스크립트(install·start/stop/status[-coordinator|-executor]·env·check-prereqs·config-tui)
+bin/                 # 런처·설치 스크립트(install·start/stop/status[-coordinator|-executor]·env·check-prereqs·config-tui·dashboard-tui)
 conf/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
 examples/            # 커스텀 쿼리 함수 등 예제 코드(examples.query_funcs.*)
 packaging/           # 배포·패키징 일체: README.md(배포 안내) + wheels/(에어갭 휠 번들). 설치는 bin/install.sh
@@ -397,6 +397,30 @@ QUERY_EXECUTOR_CONFIG_DIR=conf .venv/bin/python -m coordinator --version
 배너를 바꾸고 싶으면 설정 디렉터리에 `banner.txt` 를 두면 됩니다(Spring Boot 방식). 파일
 안에서 `${version}`·`${role}`·`${port}`·`${python}` 자리표시자가 치환되며, 파일이 있으면
 내장 아트 대신 그 내용을 씁니다.
+
+## 터미널 모니터 (`bin/dashboard-tui.sh`)
+
+웹 대시보드를 브라우저 없이 **터미널에서** 보는 읽기 전용 모니터입니다. 웹 UI와 **같은
+JSON API**(`/cluster`·`/jobs`·`/history`·`/info`)를 폴링해 그리며(HTML 스크래핑 아님),
+개별 executor의 task/메트릭 화면은 **coordinator 프록시**(`GET /executors/{idx}/tasks`·
+`/metrics`)로 가져옵니다. 즉 TUI는 **coordinator 한 곳에만** 붙어도 각 executor 화면까지
+볼 수 있습니다(각 executor에 직접 접속하지 않음).
+
+```bash
+QUERY_EXECUTOR_CONFIG_DIR=conf bin/dashboard-tui.sh            # 설정에서 coordinator URL 유추
+bin/dashboard-tui.sh --url http://127.0.0.1:8088 --interval 1 # URL·새로고침 주기 지정
+```
+
+탭은 **Cluster**(coordinator/executor 헬스·부하 + job 집계) / **Jobs**(목록 → Enter로 task
+상세) / **Executors**(목록 → Enter로 해당 executor의 task·메트릭, coordinator 프록시 경유) /
+**History** / **Info** 입니다. `←→` 탭, `↑↓` 이동, `Enter` 드릴인, `←`/`ESC` 뒤로,
+`r` 즉시 새로고침, `q` 종료. 자동으로 주기 폴링(`--interval`, 기본 2초)합니다. 에어갭 대응으로
+외부 라이브러리 없이 표준 `curses`만 씁니다. (읽기 전용 — job 취소/재시도 같은 쓰기 동작은
+웹 UI/API에서 하세요.)
+
+> 새로 추가된 읽기 전용 프록시 엔드포인트: `GET /executors/{idx}/info|metrics|tasks|tasks/{id}/detail`.
+> `idx`는 `coordinator.executors` 설정 목록의 인덱스(허용 목록)이며, `/cluster`·`/executors`
+> 응답의 각 executor 엔트리에 이 `index`가 함께 옵니다.
 
 ## 작업 상태 확인 & 이력
 
