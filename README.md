@@ -365,6 +365,39 @@ QUERY_EXECUTOR_CONFIG_DIR=conf \
   .venv/bin/python -m coordinator
 ```
 
+## 버전 & 기동 배너
+
+coordinator·executor 는 뜰 때 Spring Boot 처럼 콘솔에 ASCII 배너와 **버전·역할·포트**를
+찍습니다. 로그 파일을 열지 않고도 어떤 버전이 어느 포트에서 떴는지 부팅 로그에서 바로
+보입니다.
+
+```
+██████╗  ██████╗ ███████╗
+██╔══██╗██╔═══██╗██╔════╝
+██║  ██║██║   ██║█████╗
+██║  ██║██║▄▄ ██║██╔══╝
+██████╔╝╚██████╔╝███████╗
+╚═════╝  ╚══▀▀═╝ ╚══════╝
+ Distributed Query Executor  (v0.1.0+g860f3cd)
+ :: executor:8087 ::   Python 3.9.25
+```
+
+버전 관리는 **단일 소스** 원칙입니다. `src/core/version.py` 의 `__version__` **한 줄**이
+유일한 버전 정의이고, `pyproject.toml` 은 `dynamic`+`attr` 로 그 값을 그대로 읽습니다.
+따라서 릴리스할 때는 그 한 줄만 고치면 패키지 메타데이터·기동 배너·`--version` 이 모두
+함께 올라갑니다. 배포 트리에는 `.git` 이 없으므로(설치 시 제외) git 리비전은 있으면
+`+g<sha>` 로만 덧붙는 부가 정보입니다(환경변수 `QUERY_EXECUTOR_GIT_SHA` 로 각인 가능).
+
+```bash
+# 버전만 확인(기동하지 않음)
+QUERY_EXECUTOR_CONFIG_DIR=conf .venv/bin/python -m coordinator --version
+# query-executor 0.1.0+g860f3cd
+```
+
+배너를 바꾸고 싶으면 설정 디렉터리에 `banner.txt` 를 두면 됩니다(Spring Boot 방식). 파일
+안에서 `${version}`·`${role}`·`${port}`·`${python}` 자리표시자가 치환되며, 파일이 있으면
+내장 아트 대신 그 내용을 씁니다.
+
 ## 작업 상태 확인 & 이력
 
 작업을 다루는 기본 흐름은 "제출하면 job_id 를 받고, 그 job_id 로 진행 상태를 물어본다" 입니다.

@@ -110,6 +110,13 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `GET /datasources` + `POST /datasources/{name}/query` 엔드포인트가 이를 호출한다.
   executor 는 소스들을 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala/trino 는
   요청 본문 `executor_url` 로 executor 에 프록시한다(coordinator 에는 소스 드라이버가 없음).
+- `src/core/version.py` + `src/core/banner.py` — **버전 단일 소스 + 기동 배너**. 버전은
+  `version.py` 의 `__version__` **한 줄이 유일 소스**이고, `pyproject.toml` 이 `dynamic`
+  + `attr` 로 그 값을 읽는다(버전 올릴 때 이 한 줄만 수정). `banner.py` 는 coordinator/
+  executor 가 뜰 때 Spring Boot 식 ASCII 배너(버전·역할·포트)를 stdout 에 찍고, 설정 디렉터리에
+  `banner.txt` 가 있으면 그걸 우선(자리표시자 `${version}`/`${role}`/`${port}`/`${python}` 치환).
+  `python -m coordinator|executor --version` 은 버전만 출력하고 종료. 배포 트리엔 `.git` 이
+  없어 git sha 는 있으면 `+g<sha>` 로 붙이는 best-effort(환경변수 `QUERY_EXECUTOR_GIT_SHA` 로 각인 가능).
 
 ## 설정
 

@@ -1,6 +1,8 @@
 [project]
 name = "query-executor"
-version = "0.1.0"
+# 버전은 src/core/version.py 의 __version__ 을 유일 소스로 읽는다(아래 [tool.setuptools.dynamic]).
+# 버전을 올릴 때는 그 파일 한 줄만 고치면 패키지 메타·기동 배너·--version 이 함께 따라온다.
+dynamic = ["version"]
 description = "Coordinator + N Executor API: Impala SELECT를 파티션 IN 목록으로 분할해 Greenplum에 적재"
 requires-python = ">=3.9"
 dependencies = [
@@ -37,6 +39,10 @@ build-backend = "setuptools.build_meta"
 # src 레이아웃: 소스는 src/ 아래에 있고 패키지명은 그대로(core/coordinator/executor).
 package-dir = {"" = "src"}
 packages = ["core", "coordinator", "executor"]
+
+# 동적 버전: src/core/version.py 의 __version__ 을 패키지 버전으로 읽는다(단일 소스).
+[tool.setuptools.dynamic]
+version = {attr = "core.version.__version__"}
 
 # 에어갭 내장 웹 에셋(swagger-ui·redoc·폰트). wheel 로 빌드할 때도 포함되도록
 # 명시한다(배포는 보통 rsync 로 소스 트리를 그대로 복사하지만 안전장치).

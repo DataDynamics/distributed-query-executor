@@ -6,13 +6,17 @@
 사용:  EXECUTOR_PORT=8087 python -m executor
 """
 
+import logging
 import os
+import sys
 from pathlib import Path
 
 import uvicorn
 
+from core.banner import print_banner
 from core.config import settings
 from core.logging import setup_logging
+from core.version import version_string
 
 
 def _log_filename() -> str:
@@ -37,11 +41,22 @@ def main() -> None:
     저장소를 쓰므로 워커는 인스턴스당 1개로 고정한다(여러 워커면 상태가 분산돼 깨진다).
     uvicorn 자체 로그 설정은 비활성(log_config=None)해 우리 로깅 구성을 그대로 쓴다.
     """
+    # `--version`: 버전만 출력하고 종료(기동하지 않음).
+    if "--version" in sys.argv[1:]:
+        print(f"query-executor {version_string()}")
+        return
+
+    port = int(os.getenv("EXECUTOR_PORT", "8087"))
+    # Spring Boot 처럼 기동 배너를 콘솔에 먼저 찍는다(버전·역할·포트 표시).
+    print_banner("executor", port)
+
     setup_logging(
         program_name="query-executor-server",
         filename=_log_filename(),
     )
-    port = int(os.getenv("EXECUTOR_PORT", "8087"))
+    logging.getLogger(__name__).info(
+        "executor 기동 — version=%s port=%s", version_string(), port
+    )
     uvicorn.run(
         "executor.app:app",
         host=settings.executor_host,
