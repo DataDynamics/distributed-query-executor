@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # RHEL 9.2용 설치 스크립트(에어갭 + /data1 단일 트리).
 # 보안 정책상 /etc·/opt·/var 에 파일을 추가하지 않는다. 애플리케이션·설정·로그·런타임을
-# 모두 /data1/query-executor 아래에 배치하고, systemd 시스템 유닛 대신 런처 스크립트로 구동한다.
+# 모두 /data1/distributed-query-executor 아래에 배치하고, systemd 시스템 유닛 대신 런처 스크립트로 구동한다.
 # 사용법:  sudo ./packaging/install.sh
 set -euo pipefail
 
 # ── 경로(모두 /data1 아래) ──────────────────────────────────────────────
 APP_USER="${APP_USER:-gpadmin}"            # 서비스 계정(없으면 생성, 홈=/data1)
 APP_BASE="/data1"
-APP_HOME="$APP_BASE/query-executor"
+APP_HOME="$APP_BASE/distributed-query-executor"
 CONF_DIR="$APP_HOME/config"                # config.{properties,yml}, 인증서
 LOG_DIR="$APP_HOME/logs"
 RUN_DIR="$APP_HOME/run"                     # PID
@@ -16,6 +16,8 @@ BIN_DIR="$APP_HOME/bin"                     # 런처 스크립트
 VENV="$APP_HOME/.venv"
 
 # RHEL 9.2 기본 Python 은 3.9 이다. 별도 설치 없이 시스템 python3.9 를 그대로 쓴다.
+# Python 3.11(dnf install python3.11)로 배포하려면 PYTHON=python3.11 로 지정하고,
+# 에어갭이면 WHEELHOUSE 도 packaging/wheels/py311 쪽을 가리킨다.
 PYTHON="${PYTHON:-python3.9}"
 # 에어갭(인터넷 차단) 설치: WHEELHOUSE 에 미리 받아 둔 wheel 디렉터리를 지정하면
 # PyPI 대신 그 디렉터리에서만(--no-index) 설치한다. 비우면 pip 기본 인덱스(Nexus 등) 사용.
@@ -61,7 +63,7 @@ else
 fi
 if [[ -n "$WHEELHOUSE" ]]; then
     # WHEELHOUSE 는 콜론(:)으로 여러 디렉터리 지정 가능 → 다중 --find-links
-    # 예) packaging/wheels/coordinator:packaging/wheels/executor
+    # 예) packaging/wheels/py39 (버전별 단일 디렉터리에 전체 휠이 들어 있다)
     echo "    (에어갭 모드) wheelhouse=$WHEELHOUSE"
     FIND_LINKS=()
     IFS=':' read -ra _WHS <<< "$WHEELHOUSE"

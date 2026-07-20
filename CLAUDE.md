@@ -41,7 +41,7 @@ src/
 bin/           # 런처 스크립트(start/stop/status·env·check-prereqs — /data1 배포 트리와 공용)
 conf/          # config.properties + config.yml 기본값 + templates/ + 스키마(postgresql.sql / warehousepg.sql)
 examples/      # 예제 코드(examples.query_funcs.* — 커스텀 쿼리 함수, src 밖 최상위 패키지)
-packaging/     # 배포·패키징 일체: install.sh + README.md(배포 안내) + wheels/(에어갭 휠 번들)
+packaging/     # 배포·패키징 일체: install.sh + README.md(배포 안내) + wheels/(에어갭 휠 번들 py39·py311)
 tests/         # pytest (coordinator·executor 검증/라이프사이클/admission/대시보드)
 ```
 

@@ -154,7 +154,7 @@ bin/                 # 런처 스크립트(start/stop/status[-coordinator|-execu
 conf/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
 examples/            # 커스텀 쿼리 함수 등 예제 코드(examples.query_funcs.*)
 packaging/           # 배포·패키징 일체: install.sh(/data1 트리 배포) + README.md(배포 안내)
-  wheels/            #   에어갭 오프라인 설치용 cp39 휠 번들(coordinator/executor/dev, 유형별)
+  wheels/            #   에어갭 오프라인 설치용 휠 번들(파이썬 버전별 py39/·py311/ 두 벌)
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
 
@@ -773,15 +773,14 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 
 1. **사내 PyPI 프록시(Nexus 등)** 가 있으면 `pip.conf`(`/data1/.config/pip/pip.conf`)에
    `index-url`/`trusted-host` 를 지정하면 평소처럼 설치된다.
-2. **완전 오프라인**이면 저장소의 `packaging/wheels/` 휠 번들(cp39, 유형별 디렉터리)로
-   `--no-index` 설치한다. `WHEELHOUSE` 는 콜론으로 여러 디렉터리를 지정한다:
+2. **완전 오프라인**이면 저장소의 `packaging/wheels/` 휠 번들(파이썬 버전별 py39/·py311/)로
+   `--no-index` 설치한다. `WHEELHOUSE` 에는 대상 파이썬 버전의 디렉터리를 지정한다:
 
    ```bash
    # coordinator 만
-   sudo WHEELHOUSE=packaging/wheels/coordinator ./packaging/install.sh
+   sudo WHEELHOUSE=packaging/wheels/py39 ./packaging/install.sh
    # executor 포함(impyla·SASL)
-   sudo WHEELHOUSE=packaging/wheels/coordinator:packaging/wheels/executor \
-        INSTALL_EXECUTOR=1 ./packaging/install.sh
+   sudo WHEELHOUSE=packaging/wheels/py39 INSTALL_EXECUTOR=1 ./packaging/install.sh
    ```
 
 인터넷이 아예 없으면 **RHEL 9.2 DVD ISO 를 루프백 마운트**해 yum 리포지토리로 쓰는 방법이

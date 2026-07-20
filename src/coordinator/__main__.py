@@ -5,7 +5,7 @@ core.logging 으로 애플리케이션 로깅을 먼저 구성한 뒤, coordinat
 uvicorn 으로 띄운다.
 
 사용:  python -m coordinator
-설정:  /data1/query-executor/config/config.{properties,yml} (QUERY_EXECUTOR_CONFIG_DIR 로 변경 가능)
+설정:  /data1/distributed-query-executor/config/config.{properties,yml} (QUERY_EXECUTOR_CONFIG_DIR 로 변경 가능)
 """
 
 import uvicorn

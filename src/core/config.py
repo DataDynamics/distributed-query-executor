@@ -2,7 +2,7 @@
 
 이 모듈은 분산 쿼리 실행기(coordinator·executor)가 공유하는 모든 설정값을
 한곳에 모아 ``Settings`` 객체로 노출한다. 설정은 설정 디렉터리
-(기본 /data1/query-executor/config, 환경변수 QUERY_EXECUTOR_CONFIG_DIR 로 변경 가능)의
+(기본 /data1/distributed-query-executor/config, 환경변수 QUERY_EXECUTOR_CONFIG_DIR 로 변경 가능)의
 두 파일에서 로드된다:
 
 1. config.properties - Java 스타일 key=value 변수 정의. config.yml 안의
@@ -36,7 +36,7 @@ from core.config_loader import load_config, load_properties
 
 # 설정 디렉터리는 환경변수로 우선 결정하고, 없으면 운영 기본 경로를 쓴다.
 # 모듈 로드 시점에 한 번 확정되며, init_settings() 로 재로딩해도 디렉터리는 유지된다.
-_CONFIG_DIR = Path(os.environ.get("QUERY_EXECUTOR_CONFIG_DIR", "/data1/query-executor/config"))
+_CONFIG_DIR = Path(os.environ.get("QUERY_EXECUTOR_CONFIG_DIR", "/data1/distributed-query-executor/config"))
 _yaml_path: Path = _CONFIG_DIR / "config.yml"
 _properties_path: Path = _CONFIG_DIR / "config.properties"
 # _raw 는 properties 치환까지 끝난 "원시 설정 dict"(YAML 계층 구조 그대로).
@@ -458,7 +458,7 @@ class Settings:
         # 동일 경로를 쓰되, 그 안의 파일은 호스트마다 다르다(각자 자기 몫만 쓴다). job 별
         # 하위 디렉터리({local_dir}/{job_id}/)로 격리된다.
         self.stage_local_dir: str = _get_nested(
-            "executor", "stage", "local_dir", "/data1/query-executor/stage"
+            "executor", "stage", "local_dir", "/data1/distributed-query-executor/stage"
         )
         # CSV 방언 — executor 의 write 와 GP file:// 외부테이블 FORMAT 'CSV'(...) 에 공통 적용된다.
         # 양쪽이 정확히 일치해야 하며(불일치 시 조용한 데이터 오염), 기본 구분자는 데이터에 잘

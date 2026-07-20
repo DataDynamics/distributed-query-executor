@@ -14,7 +14,7 @@ query:
 # 템플릿 루트 아래 <template_id>/manifest.yml + *.sql.j2 조각으로 하나의 이관 시나리오를 이룬다.
 template:
   enabled: ${template.enabled:true}                       # 템플릿 기능 사용 여부
-  dir: ${template.dir:/data1/query-executor/config/templates}  # 템플릿 루트 디렉터리(개발: conf/templates)
+  dir: ${template.dir:/data1/distributed-query-executor/config/templates}  # 템플릿 루트 디렉터리(개발: conf/templates)
   auto_reload: ${template.auto_reload:false}              # 파일 변경 자동 리로드(개발 편의, 운영 off)
   func_modules: ${template.func_modules:}                 # 커스텀 함수 모듈(쉼표 구분 import 경로). 기동 시 import 되어 필터/글로벌 등록
   validate_ddl_single_stmt: ${template.validate_ddl_single_stmt:true}  # 렌더된 DDL/INSERT 를 단일 문으로 강제(다중 문 인젝션 방지)
@@ -23,7 +23,7 @@ template:
 # 일 단위 롤링(파일명_YYYYMMDD.log). INFO 메인 로그와 WARNING 전용 로그를 분리한다.
 logging:
   level: ${log.level:INFO}                        # 메인 로그 레벨(이 레벨 이상을 메인 파일에 기록)
-  dir: ${log.dir:/data1/query-executor/logs}    # 로그 디렉터리
+  dir: ${log.dir:/data1/distributed-query-executor/logs}    # 로그 디렉터리
   rolling:
     type: daily                                   # 롤링 방식(일 단위)
     backup_count: ${log.backup_count:30}          # 보관 일수(초과분 자동 삭제)
@@ -142,7 +142,7 @@ executor:
     queue_size: ${copy.queue_size:8}              # 파이프라인 큐 크기(배치 개수). 메모리 ≈ queue_size × batch_size 행
     format: ${copy.format:text}                   # COPY 포맷 text|binary. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백)
   stage:                                          # local_stage(file:// 세그먼트 로컬 스테이징, DESIGN §17)
-    local_dir: ${stage.local_dir:/data1/query-executor/stage}  # 로컬 CSV 저장 루트(모든 세그먼트 호스트 동일 경로, job_id 하위로 격리)
+    local_dir: ${stage.local_dir:/data1/distributed-query-executor/stage}  # 로컬 CSV 저장 루트(모든 세그먼트 호스트 동일 경로, job_id 하위로 격리)
     csv_delimiter: ${stage.csv_delimiter:`}       # CSV 컬럼 구분자(기본 backtick `). executor write 와 외부테이블 FORMAT 이 공유
     csv_null: ${stage.csv_null:}                  # CSV NULL 표현(기본 빈 문자열)
     csv_quote: ${stage.csv_quote:"}               # CSV 인용문자(기본 ")

@@ -36,7 +36,7 @@ class FakeRunner:
 
 @pytest.fixture(autouse=True)
 def _hermetic_settings(monkeypatch):
-    """테스트를 머신의 /data1/query-executor/config(실 DB) 설정과 무관하게 유지한다."""
+    """테스트를 머신의 /data1/distributed-query-executor/config(실 DB) 설정과 무관하게 유지한다."""
     from coordinator.config import settings
     monkeypatch.setattr(settings, "history_db_dsn", "", raising=False)
     monkeypatch.setattr(settings, "store_backend", "memory", raising=False)

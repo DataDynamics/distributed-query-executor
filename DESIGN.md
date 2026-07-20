@@ -647,12 +647,12 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 
 다음으로 두 종류의 **대시보드**가 있습니다. **coordinator 대시보드(`/`)**는 빌드 도구가 필요 없는 인라인 HTML로 되어 있고 3초마다 화면을 갱신하며, 처리중인 Query, 실행 이력, Executor, 환경설정, 그외 정보 탭으로 나뉩니다. **executor self-view 대시보드(`/`)**는 remote 모드에서 각 executor 프로세스가 자기 task와 메트릭, 이력을 스스로 보여 주는 화면입니다(처리중 Task, 실행 이력, 환경설정, 그외 정보). local 모드에서는 executor 프로세스가 따로 없으므로 자연히 coordinator 화면만 보이게 됩니다.
 
-끝으로 **로깅**입니다. 로그는 `/data1/query-executor/logs`에 하루 단위로 롤링(날짜가 바뀌면 파일을 새로 만드는 방식)되어 쌓입니다. 모든 로그에는 어떤 작업·일감에 관한 것인지 알 수 있도록 `[job_id][task_id]` 컨텍스트가 자동으로 붙습니다. 특히 WARNING 이상의 경고는 별도의 `*-warn.log` 파일로 분리해(로거 이름까지 담은 강화 포맷으로) 운영 중에 문제만 빠르게 추적할 수 있게 했습니다.
+끝으로 **로깅**입니다. 로그는 `/data1/distributed-query-executor/logs`에 하루 단위로 롤링(날짜가 바뀌면 파일을 새로 만드는 방식)되어 쌓입니다. 모든 로그에는 어떤 작업·일감에 관한 것인지 알 수 있도록 `[job_id][task_id]` 컨텍스트가 자동으로 붙습니다. 특히 WARNING 이상의 경고는 별도의 `*-warn.log` 파일로 분리해(로거 이름까지 담은 강화 포맷으로) 운영 중에 문제만 빠르게 추적할 수 있게 했습니다.
 
 - **시스템 메트릭**: 두 서비스 모두 `/metrics`(CPU/메모리/디스크 + 동시 처리). coordinator `HealthMonitor`가 executor를 폴링해 `/executors`·`/cluster`로 제공하고 `monitor.db_dsn` 설정 시 `executor_health_metrics`에 기록.
 - **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query / 실행 이력 / Executor / 환경설정 / 그외 정보.
 - **executor self-view 대시보드(`/`)**: remote 모드의 각 executor 프로세스가 자기 task/메트릭/이력을 노출(처리중 Task / 실행 이력 / 환경설정 / 그외 정보). local 모드에선 executor 프로세스가 없으므로 자연히 coordinator 화면만 보인다.
-- **로깅**: `/data1/query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트 자동 주입. **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적.
+- **로깅**: `/data1/distributed-query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트 자동 주입. **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적.
 
 ---
 
@@ -857,7 +857,7 @@ executor가 쓰는 CSV의 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 �
 
 | 설정(프로퍼티) | 기본값 | 의미 |
 |---|---|---|
-| `stage.local_dir` | `/data1/query-executor/stage` | 로컬 CSV 저장 루트(모든 호스트 동일 경로) |
+| `stage.local_dir` | `/data1/distributed-query-executor/stage` | 로컬 CSV 저장 루트(모든 호스트 동일 경로) |
 | `stage.csv_delimiter` / `stage.csv_null` / `stage.csv_quote` | `` ` `` / `` / `"` | CSV 방언(§17.5) |
 | `stage.files_per_host` | `0`(자동=`S_h`) | 호스트당 파일 수 상한. 0이면 세그먼트 수로 자동 |
 | `stage.cleanup` | `true` | Phase 3에서 로컬 파일/외부테이블/staging 정리 여부 |
@@ -896,7 +896,7 @@ flowchart LR
 
 ### 18.2 템플릿 저장 구조
 
-`template.dir`(기본 `/data1/query-executor/config/templates`, 개발 시 `conf/templates`) 아래 **`<template_id>/` 디렉터리 하나가 하나의 이관 시나리오**입니다.
+`template.dir`(기본 `/data1/distributed-query-executor/config/templates`, 개발 시 `conf/templates`) 아래 **`<template_id>/` 디렉터리 하나가 하나의 이관 시나리오**입니다.
 
 ```
 <template_dir>/sales_migration/

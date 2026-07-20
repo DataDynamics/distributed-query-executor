@@ -20,7 +20,7 @@ target 적재**까지 성공시키는 과정을, (A) 실제 GP+Impala 환경에�
 | **토폴로지** | executor 를 **각 GP 세그먼트 호스트**에 배치(호스트당 1개 이상). coordinator 는 GP master 와 분리된 별도 노드. |
 | **coordinator 설정** | `greenplum.dsn`(GP master 접속, Phase 2·검증·토폴로지 조회에 사용), `coordinator.executors`(각 executor base URL 목록), `store.backend`(memory/postgres). |
 | **executor 설정** | `impala.host`(export 소스), **`greenplum.dsn`**(⚠️ export 는 GP 를 쓰지 않지만 `build_backend` 가 DSN 이 있어야 실백엔드를 고른다 — 연결은 lazy 라 export 경로에선 실제 접속하지 않음), `executor.gp_hostname`(그 호스트의 `gp_segment_configuration.hostname` 과 일치, 미설정 시 OS hostname), `stage.local_dir`. |
-| **로컬 디렉터리** | `stage.local_dir`(예: `/data1/query-executor/stage`)가 **모든 세그먼트 호스트에 동일 경로**로 존재하고, executor 프로세스가 write, **GP 세그먼트 postgres(보통 gpadmin)가 read** 가능해야 한다(소유권/퍼미션). |
+| **로컬 디렉터리** | `stage.local_dir`(예: `/data1/distributed-query-executor/stage`)가 **모든 세그먼트 호스트에 동일 경로**로 존재하고, executor 프로세스가 write, **GP 세그먼트 postgres(보통 gpadmin)가 read** 가능해야 한다(소유권/퍼미션). |
 | **GP 스키마** | target 테이블(`public.sales_mirror`)과 staging 테이블(또는 job 이 만들 `staging_ddl`)이 존재/생성 가능. `gp_segment_configuration` 조회 권한. |
 | **CSV 방언** | executor write 와 외부테이블 `FORMAT 'CSV'` 는 같은 설정(`stage.csv_delimiter` 기본 backtick `` ` ``)을 쓰므로 자동 일치. |
 
@@ -89,8 +89,8 @@ coordinator 가 GP master 에 실제로 실행하는 SQL(Phase 2, 한 트랜잭�
 ```sql
 CREATE TEMP TABLE stg_sales (...) DISTRIBUTED BY (user_id);         -- staging_ddl
 CREATE EXTERNAL TABLE ext_job_ab12cd (user_id bigint, amount numeric, dt date)
-  LOCATION ('file://seg1/data1/query-executor/stage/job_ab12cd/f0.csv',
-            'file://seg2/data1/query-executor/stage/job_ab12cd/f1.csv', ...)
+  LOCATION ('file://seg1/data1/distributed-query-executor/stage/job_ab12cd/f0.csv',
+            'file://seg2/data1/distributed-query-executor/stage/job_ab12cd/f1.csv', ...)
   FORMAT 'CSV' ( DELIMITER '`' NULL '' QUOTE '"' );
 INSERT INTO stg_sales SELECT * FROM ext_job_ab12cd;                 -- 세그먼트 로컬 병렬 read
 DELETE FROM public.sales_mirror WHERE dt IN ('2026-06-01', ...);   -- overwrite_partitions
@@ -125,8 +125,8 @@ curl -s http://<coordinator>:8000/jobs/job_ab12cd | jq '.tasks[] | {status, rows
 **② 세그먼트 로컬 CSV (각 세그먼트 호스트에서)**
 ```bash
 # Phase 1 진행/직후 (cleanup 전)
-ls -l /data1/query-executor/stage/job_ab12cd/     # f0.csv, f1.csv ... (그 호스트 몫만)
-head -n1 /data1/query-executor/stage/job_ab12cd/f0.csv   # backtick(`) 구분자 확인
+ls -l /data1/distributed-query-executor/stage/job_ab12cd/     # f0.csv, f1.csv ... (그 호스트 몫만)
+head -n1 /data1/distributed-query-executor/stage/job_ab12cd/f0.csv   # backtick(`) 구분자 확인
 ```
 - ✅ 파일이 **각 호스트에 자기 몫만** 생성(호스트당 파일 수 ≤ 그 호스트 primary 세그먼트 수).
 - ✅ 구분자/NULL/quote 가 설정과 일치(`FORMAT 'CSV'` 와 동일).
@@ -142,13 +142,13 @@ psql "$GP_DSN" -c "\det ext_job_ab12cd"   # 적재 후엔 없어야 함(cleanup 
 
 **④ 로컬 파일 정리 (cleanup 후, 각 세그먼트 호스트)**
 ```bash
-ls /data1/query-executor/stage/job_ab12cd/ 2>&1   # No such file or directory (stage.cleanup=true)
+ls /data1/distributed-query-executor/stage/job_ab12cd/ 2>&1   # No such file or directory (stage.cleanup=true)
 ```
 - ✅ `stage.cleanup=true`(기본)면 job 디렉터리가 삭제됨. 디버깅 시 `false` 로 보존.
 
 **⑤ 로그 (coordinator·executor 일 단위 롤링 + `[job_id][task_id]` 컨텍스트)**
 ```bash
-grep job_ab12cd /data1/query-executor/logs/*.log
+grep job_ab12cd /data1/distributed-query-executor/logs/*.log
 ```
 - ✅ coordinator: `파일 예산 배분 — 4파일, 호스트별={'seg1':2,'seg2':2}`, `local_stage Phase 2 적재 완료(target 반영 N행)`.
 - ✅ executor: `EXPORT_WRITE` 단계 시작/종료(소요·행수).

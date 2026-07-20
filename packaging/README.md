@@ -5,7 +5,7 @@
 설정을 다루는 방식도 미리 알아 두면 좋습니다. 이 프로젝트는 **`config.properties` + `config.yml`** 방식을 씁니다. 즉, 값은 `config.properties` 에 적어 두고, 그 값을 `config.yml` 이라는 본문 설정 파일이 가져다 채워 넣는 구조입니다.
 
 > **보안 정책**: `/etc`·`/opt`·`/var` 에 파일을 추가하지 않는다. 애플리케이션·설정·로그·
-> 런타임을 모두 **`/data1/query-executor`** 아래에 두고, systemd 시스템 유닛 대신
+> 런타임을 모두 **`/data1/distributed-query-executor`** 아래에 두고, systemd 시스템 유닛 대신
 > **런처 스크립트(`bin/`)** 로 구동한다.
 
 이 정책이 왜 중요한지 한마디 덧붙이면, 시스템 공용 디렉터리를 건드리지 않기 때문에 권한 다툼이나 다른 소프트웨어와의 충돌 없이, 모든 것이 한 폴더 안에 깔끔하게 모여 있게 됩니다. 그래서 백업도 이동도 제거도 쉬워집니다.
@@ -25,7 +25,7 @@
 | `../conf/config.yml` | `${변수:기본값}` 치환을 쓰는 메인 YAML 설정 |
 | `install.sh` | 사용자/디렉터리/venv/설정/런처를 한 번에 구성하는 설치 스크립트 |
 
-표만으로는 전체 그림이 잘 안 그려질 수 있으니, 배포가 끝난 뒤 서버에서 무엇이 어디에 놓이는지를 산문으로 풀어 두겠습니다. 모든 것은 앞서 말한 한 그루의 디렉터리 나무 아래에 정리됩니다. 애플리케이션의 본체와 파이썬 가상환경(`.venv`, 이 프로젝트만을 위한 격리된 파이썬 실행 환경)은 **앱 홈**인 `/data1/query-executor` 에 자리 잡습니다. 설정 파일들은 그 아래 **설정 디렉터리**인 `/data1/query-executor/config` 에 모이며, 필요하면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 위치를 바꿀 수 있습니다. 프로그램이 남기는 기록인 **로그**는 `/data1/query-executor/logs` 에 쌓이는데, 하루 단위로 파일이 갈라지는 일 단위 롤링 방식이라 `파일명_YYYYMMDD.log` 형태의 이름을 갖습니다. 마지막으로 프로세스 ID 파일처럼 실행 중에만 의미가 있는 것들은 **런타임** 폴더인 `/data1/query-executor/run` 에 둡니다.
+표만으로는 전체 그림이 잘 안 그려질 수 있으니, 배포가 끝난 뒤 서버에서 무엇이 어디에 놓이는지를 산문으로 풀어 두겠습니다. 모든 것은 앞서 말한 한 그루의 디렉터리 나무 아래에 정리됩니다. 애플리케이션의 본체와 파이썬 가상환경(`.venv`, 이 프로젝트만을 위한 격리된 파이썬 실행 환경)은 **앱 홈**인 `/data1/distributed-query-executor` 에 자리 잡습니다. 설정 파일들은 그 아래 **설정 디렉터리**인 `/data1/distributed-query-executor/config` 에 모이며, 필요하면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 위치를 바꿀 수 있습니다. 프로그램이 남기는 기록인 **로그**는 `/data1/distributed-query-executor/logs` 에 쌓이는데, 하루 단위로 파일이 갈라지는 일 단위 롤링 방식이라 `파일명_YYYYMMDD.log` 형태의 이름을 갖습니다. 마지막으로 프로세스 ID 파일처럼 실행 중에만 의미가 있는 것들은 **런타임** 폴더인 `/data1/distributed-query-executor/run` 에 둡니다.
 
 executor 는 한 대만 띄우는 것이 아니라 **포트별로 여러 인스턴스**를 띄울 수 있습니다. 예를 들어 `EXECUTOR_PORTS="8087 8086"` 처럼 지정하면 두 개의 executor 가 각각의 포트에서 동시에 일합니다. 그런데 여기서 한 가지 중요한 원칙이 있습니다. coordinator 와 executor 는 둘 다 자신의 상태를 **프로세스 메모리**에 담아 두기 때문에, 인스턴스 하나는 반드시 **단일 워커**로 실행해야 합니다. 그래서 더 많은 일을 처리하고 싶다면 한 프로세스 안의 워커 수를 늘리는 것이 아니라, **executor 인스턴스 수**를 늘리는 방식으로 확장합니다.
 
@@ -44,11 +44,11 @@ sudo ./packaging/install.sh
 #   에어갭 예: sudo WHEELHOUSE=/path/wheels INSTALL_EXECUTOR=1 ./packaging/install.sh
 
 # 2) 설정 확인/수정
-sudo vi /data1/query-executor/config/config.properties   # executors, impala.*, greenplum.dsn 등
+sudo vi /data1/distributed-query-executor/config/config.properties   # executors, impala.*, greenplum.dsn 등
 
 # 3) 서비스 기동 (executor 2개 + coordinator)
-sudo -u gpadmin /data1/query-executor/bin/start.sh
-sudo -u gpadmin /data1/query-executor/bin/status.sh
+sudo -u gpadmin /data1/distributed-query-executor/bin/start.sh
+sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
 ```
 
 각 단계를 말로 풀면 이렇습니다. 0번은 최초 한 번만 하면 되는 준비로, RHEL 9.2 에 기본으로 들어 있는 Python 3.9 와 파일 복사에 쓰이는 rsync 를 설치합니다. 1번이 핵심인데, 저장소 루트에서 `install.sh` 를 실행하면 설치가 한 번에 이루어집니다. 만약 외부 인터넷이 막혀 있는 환경, 즉 **에어갭**(망 분리되어 외부 네트워크에 연결되지 않은 폐쇄망)이라면 미리 받아 둔 파이썬 휠 묶음의 경로를 `WHEELHOUSE` 로 알려 주고, executor 드라이버까지 함께 설치하려면 `INSTALL_EXECUTOR=1` 을 붙여 줍니다. 2번에서는 설치된 설정 파일을 열어 우리 환경에 맞게 고칩니다(executor 목록, Impala 접속 정보, Greenplum DSN 등). 마지막 3번에서 서비스를 띄우고 상태를 확인하면 설치가 마무리됩니다.
@@ -56,9 +56,9 @@ sudo -u gpadmin /data1/query-executor/bin/status.sh
 그렇다면 `install.sh` 는 우리 대신 정확히 무엇을 해 주는 걸까요? 다음과 같은 일들을 차례로 처리합니다.
 
 - 서비스 계정 `gpadmin` 생성(홈 `/data1`)
-- 앱을 `/data1/query-executor` 로 복사(`.venv`/`.git`/`logs`/`config`/`run` 제외)
-- `/data1/query-executor/.venv` 가상환경 + 의존성 설치(`WHEELHOUSE` 지정 시 오프라인)
-- `conf/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/data1/query-executor/logs` 로 설정
+- 앱을 `/data1/distributed-query-executor` 로 복사(`.venv`/`.git`/`logs`/`config`/`run` 제외)
+- `/data1/distributed-query-executor/.venv` 가상환경 + 의존성 설치(`WHEELHOUSE` 지정 시 오프라인)
+- `conf/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/data1/distributed-query-executor/logs` 로 설정
 - TLS 자리표시 파일 생성(`config/impala-ca.pem`)
 - 런처 스크립트를 `bin/` 으로 배치, 소유권/권한 설정
 
@@ -67,19 +67,15 @@ sudo -u gpadmin /data1/query-executor/bin/status.sh
 설치를 시작하기 전이나 끝낸 후에 "필요한 것이 다 갖춰졌는지"를 미리 확인하고 싶을 때가 있습니다. 그럴 때 쓰는 것이 `check-prereqs.sh` 입니다. 이 스크립트는 **OS 패키지**와 **파이썬 휠**(파이썬 패키지를 미리 빌드해 둔 설치 파일)이 제대로 준비되었는지 **확인만** 하고, 무언가를 설치하지는 않습니다. 결과를 종료코드로도 알려 주는데, 모든 항목이 충족되면 `0`, 하나라도 빠지면 `1` 을 돌려줍니다. 그래서 자동화 파이프라인이나 배포 전 점검 게이트의 통과/실패 판정에도 그대로 끼워 넣을 수 있습니다.
 
 ```bash
-# OS 패키지(rpm) + coordinator,executor 휠(.venv) 점검
+# OS 패키지(rpm) + 휠(.venv) 점검
 ./bin/check-prereqs.sh
-
-# 휠은 특정 그룹만(coordinator / executor / dev)
-./bin/check-prereqs.sh coordinator
-./bin/check-prereqs.sh coordinator executor dev
 
 # 한쪽만 점검
 OS_ONLY=1     ./bin/check-prereqs.sh   # OS 패키지만
 WHEELS_ONLY=1 ./bin/check-prereqs.sh   # 휠만
 ```
 
-위 명령들이 무엇을 들여다보는지 이어서 설명하겠습니다. 먼저 **OS 패키지** 점검은 `rpm -q` 명령으로 빌드에 쓰이는 도구들과 SASL 관련 의존성이 깔려 있는지 확인합니다. 구체적으로는 `gcc gcc-c++ make python3-devel python3 python3-pip cyrus-sasl-devel` 가 대상입니다. 다음으로 **파이썬 휠** 점검은 `packaging/wheels/<그룹>/` 폴더에 들어 있는 `.whl`·`.tar.gz` 파일 이름에서 패키지 이름과 버전을 뽑아낸 뒤, 실제 `.venv` 에 설치된 목록과 하나하나 대조합니다. 그 결과는 일치하면 `[OK]`, 아직 설치되지 않았으면 `[MISSING]`, 버전이 어긋나면 `[VER ?]`(이쪽은 실패가 아니라 경고일 뿐) 로 표시됩니다. 마지막으로 점검에 쓰이는 경로는 환경변수로 바꿀 수 있습니다. 검사할 파이썬은 `VENV_PY` 로, 휠 묶음의 루트는 `WHEELS_ROOT` 로 지정하며, 실제 배포 대상 서버에서는 보통 `VENV_PY=/data1/query-executor/.venv/bin/python` 처럼 그 서버의 가상환경 파이썬을 가리키도록 둡니다.
+위 명령들이 무엇을 들여다보는지 이어서 설명하겠습니다. 먼저 **OS 패키지** 점검은 `rpm -q` 명령으로 빌드에 쓰이는 도구들과 SASL 관련 의존성이 깔려 있는지 확인합니다. 구체적으로는 `gcc gcc-c++ make python3-devel python3 python3-pip cyrus-sasl-devel` 가 대상입니다. 다음으로 **파이썬 휠** 점검은 `packaging/wheels/py<버전>/` 폴더에 들어 있는 `.whl`·`.tar.gz` 파일 이름에서 패키지 이름과 버전을 뽑아낸 뒤, 실제 `.venv` 에 설치된 목록과 하나하나 대조합니다. 그 결과는 일치하면 `[OK]`, 아직 설치되지 않았으면 `[MISSING]`, 버전이 어긋나면 `[VER ?]`(이쪽은 실패가 아니라 경고일 뿐) 로 표시됩니다. 마지막으로 점검에 쓰이는 경로는 환경변수로 바꿀 수 있습니다. 검사할 파이썬은 `VENV_PY` 로, 휠 묶음의 루트는 `WHEELS_ROOT` 로 지정하며, 실제 배포 대상 서버에서는 보통 `VENV_PY=/data1/distributed-query-executor/.venv/bin/python` 처럼 그 서버의 가상환경 파이썬을 가리키도록 둡니다.
 
 ## 설정 항목 (config.properties)
 
@@ -108,7 +104,7 @@ impala.port=21050
 impala.database=default
 impala.auth_mechanism=LDAP        # LDAP(기본) | PLAIN | NOSASL
 impala.use_ssl=true
-impala.ca_cert=/data1/query-executor/config/impala-ca.pem
+impala.ca_cert=/data1/distributed-query-executor/config/impala-ca.pem
 impala.user=                      # LDAP 바인드 사용자
 impala.password=                  # LDAP 비밀번호
 
@@ -145,14 +141,14 @@ copy.batch_size=10000
 sudo dnf install -y cyrus-sasl-devel gcc gcc-c++ make python3-devel
 
 # 1) executor 드라이버 + SASL 설치(설치 시 INSTALL_EXECUTOR=1 했으면 생략)
-sudo /data1/query-executor/.venv/bin/pip install -r /data1/query-executor/requirements-executor.txt
+sudo /data1/distributed-query-executor/.venv/bin/pip install -r /data1/distributed-query-executor/requirements-executor.txt
 
 # 2) TLS CA 인증서 배치(임의 파일명 가능 — config.properties 의 impala.ca_cert 와 일치시킬 것)
-sudo cp impala-ca.pem /data1/query-executor/config/impala-ca.pem
-sudo chown -R gpadmin:gpadmin /data1/query-executor/config
+sudo cp impala-ca.pem /data1/distributed-query-executor/config/impala-ca.pem
+sudo chown -R gpadmin:gpadmin /data1/distributed-query-executor/config
 
 # 3) config.properties 의 impala.user / impala.password(LDAP 바인드 자격증명) 설정
-sudo vi /data1/query-executor/config/config.properties
+sudo vi /data1/distributed-query-executor/config/config.properties
 ```
 
 ## 멀티 coordinator & 실행 이력 (PostgreSQL)
@@ -185,7 +181,7 @@ executor.status_interval_s=10
 
 ```bash
 PG="postgresql://user:pass@pg-host:5432/queryexec"
-psql "$PG" -f /data1/query-executor/conf/postgresql.sql
+psql "$PG" -f /data1/distributed-query-executor/conf/postgresql.sql
 ```
 
 반대로, 이런 고급 구성이 필요 없는 분도 많을 것입니다. 그래서 단순한 경우의 권장값을 함께 적어 둡니다.
@@ -202,7 +198,7 @@ psql "$PG" -f /data1/query-executor/conf/postgresql.sql
 > 고빈도 단일행 UPSERT 라 MPP 와 맞지 않으므로, 성능이 중요하면 이 메타 저장소는 PostgreSQL 에
 > 두고 WarehousePG 는 데이터 적재 대상(`greenplum.dsn`)으로만 쓰는 편이 낫다.
 > ```bash
-> psql "$PG" -f /data1/query-executor/conf/warehousepg.sql
+> psql "$PG" -f /data1/distributed-query-executor/conf/warehousepg.sql
 > ```
 
 ## 운영 명령
@@ -210,19 +206,19 @@ psql "$PG" -f /data1/query-executor/conf/postgresql.sql
 서비스를 일단 띄우고 나면, 그 다음부터는 날마다 상태를 살피고 로그를 들여다보고 가끔 재시작하는 운영 작업이 이어집니다. 자주 쓰는 명령들을 한곳에 모아 두었으니, 필요할 때 골라 쓰면 됩니다. 맨 앞의 `B=...` 줄은 긴 경로를 매번 치지 않으려고 `$B` 라는 짧은 이름에 담아 두는 것입니다.
 
 ```bash
-B=/data1/query-executor/bin
+B=/data1/distributed-query-executor/bin
 # 상태(프로세스 + health) — 전체 / 역할별
 sudo -u gpadmin $B/status.sh
 sudo -u gpadmin $B/status-coordinator.sh
 sudo -u gpadmin $B/status-executor.sh
 
 # 파일 로그(일 단위 롤링)
-tail -f /data1/query-executor/logs/query-coordinator-server.log
-tail -f /data1/query-executor/logs/query-executor-server-8087.log
+tail -f /data1/distributed-query-executor/logs/query-coordinator-server.log
+tail -f /data1/distributed-query-executor/logs/query-executor-server-8087.log
 
 # WARNING 이상만 모은 전용 로그(문제 추적용, *-warn.log)
-tail -f /data1/query-executor/logs/query-coordinator-server-warn.log
-tail -f /data1/query-executor/logs/query-executor-server-8087-warn.log
+tail -f /data1/distributed-query-executor/logs/query-coordinator-server-warn.log
+tail -f /data1/distributed-query-executor/logs/query-executor-server-8087-warn.log
 
 # 재시작(전체) / 중지
 sudo -u gpadmin $B/stop.sh && sudo -u gpadmin $B/start.sh
@@ -298,7 +294,7 @@ monitor.disk_path=/
 여기서도 앞서 말한 원칙이 똑같이 적용됩니다. 메트릭을 담는 `executor_health_metrics` 테이블 역시 앱이 알아서 만들어 주지 않으므로, 통합 스키마인 `conf/postgresql.sql` 을 **먼저 적용**해야 합니다. 만약 `monitor.db_dsn` 이 다른 데이터베이스를 가리킨다면 그 데이터베이스에도 동일하게 스키마를 적용해 주어야 합니다.
 
 ```bash
-psql "postgresql://user:pass@pg-host:5432/monitoring" -f /data1/query-executor/conf/postgresql.sql
+psql "postgresql://user:pass@pg-host:5432/monitoring" -f /data1/distributed-query-executor/conf/postgresql.sql
 
 # 최근 기록 조회
 psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_percent

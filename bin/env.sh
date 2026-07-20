@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 런처 공통 환경 + 헬퍼 함수(/data1 트리). 모든 start/stop/status 스크립트가 source 한다.
 # 시스템 디렉터리(/etc·/opt·/var)를 쓰지 않고 모든 경로를 /data1 아래에 둔다.
-APP_HOME="/data1/query-executor"
+APP_HOME="/data1/distributed-query-executor"
 VENV_PY="$APP_HOME/.venv/bin/python"
 LOG_DIR="$APP_HOME/logs"
 RUN_DIR="$APP_HOME/run"
