@@ -87,28 +87,25 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   함수): `file://` 외부테이블 DDL·staging 적재·멱등 DELETE·정리 SQL, 파일 예산 배분
   (`plan_file_budget`, 호스트당 ≤ S_h), executor_url→gp_hostname 유도. 자세히는 DESIGN §17.
 - `src/coordinator/job_store.py` — `InMemoryJobStore`(단일) / `SqlJobStore`(멀티 coordinator, JSONB).
-- `src/executor/backend.py` — `ImpalaToGreenplumBackend`(소스 impyla|trino → psycopg) + `MockBackend`.
-  소스 엔진은 `source.type`(impala 기본 | trino)으로 고르며, 연결을 여는 지점만
-  `_source_connect`/`_open_source_cursor`/`_source_execute` 로 분기하고 스트리밍/적재 로직은 공유한다.
-  trino 는 쿼리 단위 옵션이 없어 요청별 `impala_query_options` 는 impala 소스에서만 적용된다
-  (trino 는 `trino.session_properties` 로 연결 단위 적용).
+- `src/executor/backend.py` — `ImpalaToGreenplumBackend`(소스 impyla → psycopg) + `MockBackend`.
+  소스는 Impala 전용이다. 소스 접속은 `_source_connect`/`_open_source_cursor`/`_source_execute` 에
+  모여 있고 스트리밍/적재 로직은 이와 무관하게 공유한다. 요청별 `impala_query_options` 는 SET 으로 병합된다.
   GP 연결은 `_GreenplumPool`(표준 라이브러리 기반)로 재사용하며, 반납 시 `DISCARD ALL` 로
   세션을 초기화해 stage_insert 의 TEMP 테이블이 다음 task 와 충돌하지 않게 한다.
   `exec_mode`: `copy`(COPY) / `statement`(INSERT 그대로 실행) / `stage_insert`(TEMP 경유) /
   `local_stage`(executor 가 로컬 CSV export → coordinator 가 `file://` 외부테이블로 세그먼트
   로컬 병렬 read → target INSERT, 2-phase). local_stage 는 executor 를 GP 세그먼트 호스트에
   co-locate 해야 한다(DESIGN §17). export fetch 는 형변환을 꺼 timestamp/date 를 wire 문자열
-  그대로 받아 CSV 로 쓴다(재파싱 비용 제거 — impala 는 `convert_types=False`, trino 는
-  `legacy_primitive_types=True` 로 동일 적용).
+  그대로 받아 CSV 로 쓴다(재파싱 비용 제거 — impyla `convert_types=False`).
 - `src/executor/app.py` — task 상태머신(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED),
   `executor.max_concurrent_tasks` 세마포어.
 - `src/core/logging.py` — 일 단위 롤링 + `[job_id][task_id]` 컨텍스트 주입 + **WARNING 전용
   로그(`*-warn.log`) 분리**.
 - `src/core/dbprobe.py` — **데이터소스 SELECT 미리보기/연결 테스트 공용 로직**. 임의 SQL 을
-  Impala/Trino/Greenplum/history DB 에 실행해 상위 N행을 JSON 안전 형태로 반환(`fetchmany` 로
+  Impala/Greenplum/history DB 에 실행해 상위 N행을 JSON 안전 형태로 반환(`fetchmany` 로
   잘라 truncated 표시, PostgreSQL 은 커밋 없이 닫아 implicit rollback). 두 앱의
   `GET /datasources` + `POST /datasources/{name}/query` 엔드포인트가 이를 호출한다.
-  executor 는 소스들을 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala/trino 는
+  executor 는 소스들을 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala 는
   요청 본문 `executor_url` 로 executor 에 프록시한다(coordinator 에는 소스 드라이버가 없음).
 - `src/coordinator/tui.py` — **coordinator 대시보드의 읽기 전용 curses 모니터**(`python -m
   coordinator.tui`, `bin/dashboard-tui.sh`). 웹 대시보드와 같은 JSON API(`/cluster`·`/jobs`·
@@ -139,9 +136,9 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   큐 100) → 합 초과 시 429 / `coordinator.max_dispatch_concurrency`(task 디스패치 32) /
   `executor.max_concurrent_tasks`(executor당 8) / `greenplum.pool_max`(GP 커넥션 풀, 0=동시 task 수와 동일).
 - 멀티 coordinator: `store.backend=postgres` + 공유 `history.db_dsn`, `executor.self_report=true`.
-- 백엔드: 소스 호스트(`source.type` 에 따라 `impala.host` 또는 `trino.host`) + `greenplum.dsn`
-  둘 다 있으면 실제 백엔드, 아니면 `MockBackend`. trino 접속은 `trino.*`(host/port/user/password/
-  catalog/schema/http_scheme/verify/session_properties, 의존성 `trino` — requirements-executor.txt).
+- 백엔드: `impala.host` + `greenplum.dsn` 둘 다 있으면 실제 백엔드, 아니면 `MockBackend`
+  (소스는 Impala 전용). query-execute 의 소스 실행은 별개로 `/query-run` 커스텀 함수에 위임한다(예제
+  `trino_runner`, 의존성 `trino` 는 이 예제용 — requirements-executor.txt).
 - 템플릿 엔진: `template.dir`(템플릿 루트, 개발 `conf/templates`) / `template.enabled` /
   `template.auto_reload`(개발 편의) / `template.func_modules`(커스텀 함수 모듈) /
   `template.validate_ddl_single_stmt`. 의존성 `Jinja2`(requirements.txt).

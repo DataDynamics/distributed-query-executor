@@ -4,7 +4,8 @@
 #   sudo dnf install -y gcc gcc-c++ make python3-devel cyrus-sasl-devel
 -r requirements.txt
 impyla>=0.19
-# Trino 소스(source.type=trino) 클라이언트. 에어갭 환경에선 오프라인 wheel 로 설치한다.
+# Trino 클라이언트 — query-run 커스텀 함수 예제(examples/query_funcs/trino_runner.py)에서 사용.
+# 이 예제(C)를 안 쓰면 불필요하지만, 에어갭 오프라인 wheel 번들을 위해 기본 포함한다.
 trino>=0.320
 psycopg[binary]>=3.2
 # Impala SASL(LDAP/PLAIN) 인증

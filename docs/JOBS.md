@@ -1,6 +1,6 @@
 # JOBS.md — 이관 실행 `stage_insert` (`POST /jobs`)
 
-`POST /jobs` 는 소스(Impala/Trino)의 대량 데이터를 Greenplum 으로 옮기는 **이관**이다. 이 문서는
+`POST /jobs` 는 소스(Impala)의 대량 데이터를 Greenplum 으로 옮기는 **이관**이다. 이 문서는
 그중 **`exec_mode: stage_insert`** 하나만 정리한다 — 소스 SELECT 결과를 Greenplum **staging(TEMP)
 테이블에 COPY** 로 실은 뒤 **`INSERT … SELECT FROM staging`** 으로 최종 테이블에 반영하는 2단계
 모드다. 소스와 대상이 서로 다른 엔진이거나 컬럼 매핑·복잡한 INSERT 가 필요할 때 쓰는 표준 패턴이다.
@@ -23,7 +23,7 @@ sequenceDiagram
     participant C as Client
     participant CO as Coordinator
     participant EX as Executor (선택됨)
-    participant SRC as Source (Impala/Trino)
+    participant SRC as Source (Impala)
     participant GP as Greenplum
 
     C->>CO: POST /jobs {exec_mode:stage_insert, sql, target_table, staging_table, wrapper_query, ...}
@@ -189,7 +189,7 @@ FROM {{ staging_table | sql_ident }}
 
 각 task 는 한 Greenplum 세션(연결) 안에서 다음을 수행한다(`src/executor/backend.py`):
 
-1. 소스(Impala/Trino)에 `sub_query`(SELECT) 실행 → **행 단위 스트리밍 fetch**.
+1. 소스(Impala)에 `sub_query`(SELECT) 실행 → **행 단위 스트리밍 fetch**.
 2. `CREATE TEMP TABLE staging`(staging_ddl 있으면).
 3. 스트리밍 행을 psycopg `COPY` 로 **staging TEMP** 에 적재(파이프라인).
 4. `INSERT … SELECT FROM staging`(insert_sql) 실행 → target 반영. `COMMIT`.
@@ -247,7 +247,7 @@ stage_insert 는 소스 읽기 + Greenplum staging/INSERT 를 executor 에서 �
 (`config.properties`).
 
 ```properties
-# 소스(읽기): source.type=impala|trino + 접속 정보
+# 소스(읽기): Impala 접속 정보
 source.type=impala
 impala.host=impala-coordinator.example.com
 
@@ -263,5 +263,5 @@ copy.pipeline=true            # 소스 읽기와 GP COPY 를 겹쳐 실행(벽�
 executor.max_concurrent_tasks=8   # executor 1대 동시 task 수
 ```
 
-> `impala.host`(또는 `trino.host`)와 `greenplum.dsn` 이 둘 다 있어야 실제 백엔드가 뜬다. 없으면
+> `impala.host` 와 `greenplum.dsn` 이 둘 다 있어야 실제 백엔드가 뜬다. 없으면
 > `MockBackend`(테스트/개발). 템플릿 엔진은 `template.enabled=true` 필요.

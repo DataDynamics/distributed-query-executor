@@ -24,7 +24,7 @@
 - **C(query-execute)의 소스 실행은 `/query-run` 하나로 통일**돼 있다 — impala/trino 구분 없이 모든
   소스는 executor 의 커스텀 함수(`query.func.module`)에 위임한다. `greenplum`/`history` 만
   coordinator 가 직접(psycopg) 실행한다(메타/타깃 DB, 커스텀 함수 불필요).
-- **B(미리보기)** 는 C 와 별개다 — 임의 SQL 을 built-in 드라이버(impala/trino/greenplum/history)로
+- **B(미리보기)** 는 C 와 별개다 — 임의 SQL 을 built-in 드라이버(impala/greenplum/history)로
   실행하는 **운영 점검 도구**이며, 대시보드 `데이터소스` 탭이 이를 쓴다. 앱 로직의 쿼리 실행은 C 를 쓴다.
 
 ---

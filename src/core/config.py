@@ -383,33 +383,13 @@ class Settings:
         self.impala_query_options: dict[str, str] = _kv_dict(
             _get_nested("executor", "impala", "query_options", "")
         )
-        # 소스 엔진 선택: impala(기본) | trino. executor 가 SELECT 를 실행할 소스 DB 종류.
-        # copy/stage_insert/local_stage 의 읽기 쪽과 /datasources 미리보기가 이 값을 따른다.
+        # 소스 엔진: impala 전용. executor 가 SELECT 를 읽는 소스 DB 는 Impala 이며,
+        # query-execute 의 기본 datasource(미지정 시) 로도 쓰인다. 하위 호환을 위해
+        # source.type 설정 키는 남겨 두되 실질값은 impala 다.
         self.source_type: str = str(
             _get_nested("executor", "source", "type", "impala")
         ).strip().lower() or "impala"
-        # Trino (source) — source.type=trino 일 때 사용하는 접속 정보.
-        # trino 파이썬 클라이언트(trino.dbapi.connect)에 그대로 전달할 값들이다.
-        self.trino_host: str = _get_nested("executor", "trino", "host", "")
-        self.trino_port: int = int(_get_nested("executor", "trino", "port", 8080))
-        # Trino 는 인증이 없어도 user 헤더(X-Trino-User)가 필수라 기본값을 둔다.
-        self.trino_user: str = _get_nested("executor", "trino", "user", "query-executor")
-        # password 를 설정하면 BasicAuthentication 사용(클라이언트 제약상 https 필수).
-        self.trino_password: str = _get_nested("executor", "trino", "password", "")
-        self.trino_catalog: str = _get_nested("executor", "trino", "catalog", "hive")
-        self.trino_schema: str = _get_nested("executor", "trino", "schema", "default")
-        self.trino_http_scheme: str = str(
-            _get_nested("executor", "trino", "http_scheme", "http")
-        ).strip().lower() or "http"
-        # TLS 검증: 비우면 기본(true), "true"/"false" 또는 CA 인증서 파일 경로를 지정할 수 있다.
-        self.trino_verify: str = str(_get_nested("executor", "trino", "verify", "")).strip()
-        # 세션 프로퍼티 전역 기본값. "query_max_run_time=1h,..." 형태 → dict.
-        # Trino 클라이언트는 연결 단위로만 세션 프로퍼티를 받으므로 요청별 재정의는 없다
-        # (요청별 impala_query_options 는 impala 소스에서만 적용).
-        self.trino_session_properties: dict[str, str] = _kv_dict(
-            _get_nested("executor", "trino", "session_properties", "")
-        )
-        # 커스텀 쿼리 실행 함수(query-execute 의 trino 경로 위임용). config.properties 에서
+        # 커스텀 쿼리 실행 함수(query-execute 의 소스 실행 위임용). config.properties 에서
         # 자유 정의한다: query.func.module 은 dotted path(module:func / module.func),
         # query.func.config.* 는 함수에 넘길 설정 dict(host/port/user/... + 임의 파라미터, 문자열).
         # YAML 스키마가 아니라 raw properties 를 직접 읽어 키를 자유롭게 추가할 수 있게 한다.
@@ -485,9 +465,8 @@ class Settings:
         self.stage_max_files_per_host: int = int(
             _get_nested("executor", "stage", "max_files_per_host", 0)
         )
-        # local_stage export 시 소스 커서의 값 형변환 여부. False(기본)면 형변환을 꺼
+        # local_stage export 시 impyla 커서의 값 형변환 여부. False(기본)면 형변환을 꺼
         # TIMESTAMP/DATE/DECIMAL 을 wire 문자열 그대로 받아 CSV 로 바로 쓴다(재파싱 비용 제거).
-        # impala 는 impyla 의 convert_types, trino 는 legacy_primitive_types 로 동일하게 적용된다.
         # 특수 타입(BINARY 등)이 문자열화에 문제가 되면 true 로 되돌린다.
         self.stage_impala_convert_types: bool = _to_bool(
             _get_nested("executor", "stage", "impala_convert_types", False)

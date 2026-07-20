@@ -1130,7 +1130,7 @@ def create_app(
     def list_datasources():
         """coordinator 가 SELECT 테스트할 수 있는 데이터소스를 반환한다.
 
-        history/greenplum 은 coordinator 가 직접(psycopg) 테스트하고, impala/trino 는
+        history/greenplum 은 coordinator 가 직접(psycopg) 테스트하고, impala 는
         드라이버가 없어 ``executor_url`` 을 지정해 executor 로 프록시해야 한다.
         """
         return {
@@ -1138,7 +1138,7 @@ def create_app(
                 {"name": "history", "configured": bool(settings.history_db_dsn)},
                 {"name": "greenplum", "configured": bool(settings.greenplum_dsn)},
             ],
-            "via_executor": ["impala", "trino", "greenplum", "history"],
+            "via_executor": ["impala", "greenplum", "history"],
             "executors": list(settings.executors),
         }
 
@@ -1150,7 +1150,7 @@ def create_app(
     async def query_datasource(name: str, req: DatasourceQueryRequest):
         """``name`` 데이터소스에 임의 SQL 을 실행해 상위 N행을 반환한다.
 
-        ``executor_url`` 이 있으면 그 executor 의 동일 엔드포인트로 프록시한다(impala/trino 등
+        ``executor_url`` 이 있으면 그 executor 의 동일 엔드포인트로 프록시한다(impala 처럼
         coordinator 에 드라이버가 없는 데이터소스용). 없으면 coordinator 가 직접 접속
         가능한 history/greenplum 만 로컬 실행한다.
         """
@@ -1189,8 +1189,8 @@ def create_app(
                 if not settings.history_db_dsn:
                     raise HTTPException(status_code=400, detail="history.db_dsn(또는 monitor.db_dsn) 미설정")
                 result = await asyncio.to_thread(run_postgres_select, settings.history_db_dsn, req.sql, limit=limit)
-            elif name in ("impala", "trino"):
-                # coordinator 에는 소스 드라이버(impyla/trino)가 없다 — executor 로 프록시해야 한다.
+            elif name == "impala":
+                # coordinator 에는 소스 드라이버(impyla)가 없다 — executor 로 프록시해야 한다.
                 raise HTTPException(
                     status_code=400,
                     detail=f"{name} 은(는) coordinator 에서 직접 테스트할 수 없습니다 — executor_url 을 지정하세요",
