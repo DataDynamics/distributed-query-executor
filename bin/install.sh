@@ -2,7 +2,7 @@
 # RHEL 9.2용 설치 스크립트(에어갭 + /data1 단일 트리).
 # 보안 정책상 /etc·/opt·/var 에 파일을 추가하지 않는다. 애플리케이션·설정·로그·런타임을
 # 모두 /data1/distributed-query-executor 아래에 배치하고, systemd 시스템 유닛 대신 런처 스크립트로 구동한다.
-# 사용법:  sudo ./packaging/install.sh
+# 사용법:  sudo ./bin/install.sh
 set -euo pipefail
 
 # ── 경로(모두 /data1 아래) ──────────────────────────────────────────────

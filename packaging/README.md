@@ -23,7 +23,7 @@
 | `bin/env.sh` | 런처 공통 환경 + 헬퍼 함수(경로·포트) |
 | `../conf/config.properties` | Java 스타일 key=value 변수 정의 |
 | `../conf/config.yml` | `${변수:기본값}` 치환을 쓰는 메인 YAML 설정 |
-| `install.sh` | 사용자/디렉터리/venv/설정/런처를 한 번에 구성하는 설치 스크립트 |
+| `bin/install.sh` | 사용자/디렉터리/venv/설정/런처를 한 번에 구성하는 설치 스크립트 |
 
 표만으로는 전체 그림이 잘 안 그려질 수 있으니, 배포가 끝난 뒤 서버에서 무엇이 어디에 놓이는지를 산문으로 풀어 두겠습니다. 모든 것은 앞서 말한 한 그루의 디렉터리 나무 아래에 정리됩니다. 애플리케이션의 본체와 파이썬 가상환경(`.venv`, 이 프로젝트만을 위한 격리된 파이썬 실행 환경)은 **앱 홈**인 `/data1/distributed-query-executor` 에 자리 잡습니다. 설정 파일들은 그 아래 **설정 디렉터리**인 `/data1/distributed-query-executor/config` 에 모이며, 필요하면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 위치를 바꿀 수 있습니다. 프로그램이 남기는 기록인 **로그**는 `/data1/distributed-query-executor/logs` 에 쌓이는데, 하루 단위로 파일이 갈라지는 일 단위 롤링 방식이라 `파일명_YYYYMMDD.log` 형태의 이름을 갖습니다. 마지막으로 프로세스 ID 파일처럼 실행 중에만 의미가 있는 것들은 **런타임** 폴더인 `/data1/distributed-query-executor/run` 에 둡니다.
 
@@ -40,8 +40,8 @@ executor 는 한 대만 띄우는 것이 아니라 **포트별로 여러 인스�
 sudo dnf install -y python3 python3-pip python3-devel rsync
 
 # 1) 저장소 루트에서 실행 (에어갭이면 WHEELHOUSE/INSTALL_EXECUTOR 지정)
-sudo ./packaging/install.sh
-#   에어갭 예: sudo WHEELHOUSE=/path/wheels INSTALL_EXECUTOR=1 ./packaging/install.sh
+sudo ./bin/install.sh
+#   에어갭 예: sudo WHEELHOUSE=/path/wheels INSTALL_EXECUTOR=1 ./bin/install.sh
 
 # 2) 설정 확인/수정
 sudo vi /data1/distributed-query-executor/config/config.properties   # executors, impala.*, greenplum.dsn 등

@@ -150,10 +150,10 @@ src/                   # 파이썬 소스 루트(패키지: core / coordinator /
     dashboard.py         executor self-view 대시보드 HTML(remote mode에서 /에 노출)
     app.py               REST API (POST /tasks, /query-run(커스텀 함수 위임), /datasources, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
     __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
-bin/                 # 런처 스크립트(start/stop/status[-coordinator|-executor]·env·check-prereqs·config-tui)
+bin/                 # 런처·설치 스크립트(install·start/stop/status[-coordinator|-executor]·env·check-prereqs·config-tui)
 conf/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
 examples/            # 커스텀 쿼리 함수 등 예제 코드(examples.query_funcs.*)
-packaging/           # 배포·패키징 일체: install.sh(/data1 트리 배포) + README.md(배포 안내)
+packaging/           # 배포·패키징 일체: README.md(배포 안내) + wheels/(에어갭 휠 번들). 설치는 bin/install.sh
   wheels/            #   에어갭 오프라인 설치용 휠 번들(파이썬 버전별 py39/·py311/ 두 벌)
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
 ```
@@ -745,7 +745,7 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 기본적인 흐름은 아래와 같습니다.
 
 ```bash
-sudo ./packaging/install.sh                              # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
+sudo ./bin/install.sh                                    # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
 B=/data1/Distributed Query Executor/bin
 sudo -u gpadmin $B/start.sh      # 전체 기동(executor 들 + coordinator)
 sudo -u gpadmin $B/status.sh     # 상태(프로세스 + health)
@@ -790,9 +790,9 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 
    ```bash
    # coordinator 만
-   sudo WHEELHOUSE=packaging/wheels/py39 ./packaging/install.sh
+   sudo WHEELHOUSE=packaging/wheels/py39 ./bin/install.sh
    # executor 포함(impyla·SASL)
-   sudo WHEELHOUSE=packaging/wheels/py39 INSTALL_EXECUTOR=1 ./packaging/install.sh
+   sudo WHEELHOUSE=packaging/wheels/py39 INSTALL_EXECUTOR=1 ./bin/install.sh
    ```
 
 인터넷이 아예 없으면 **RHEL 9.2 DVD ISO 를 루프백 마운트**해 yum 리포지토리로 쓰는 방법이

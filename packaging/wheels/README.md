@@ -29,7 +29,7 @@ pip 은 `-r` 로 지정한 목록에 있는 패키지만 이 폴더에서 골라
 
 ## 오프라인 설치
 
-이제 실제로 설치하는 방법입니다. 가장 간단한 길은 저장소에 들어 있는 `packaging/install.sh`
+이제 실제로 설치하는 방법입니다. 가장 간단한 길은 저장소에 들어 있는 `bin/install.sh`
 스크립트를 쓰는 것입니다. 이 스크립트에 `WHEELHOUSE` 라는 환경변수로 "휠이 모여 있는
 폴더"의 위치를 알려 주면, 스크립트가 알아서 `--no-index`(인터넷 저장소를 쳐다보지 말라는
 뜻)와 `--find-links` 를 붙여 설치를 진행합니다. 휠을 모아 둔 이 폴더를 흔히
@@ -41,10 +41,10 @@ pip 은 `-r` 로 지정한 목록에 있는 패키지만 이 폴더에서 골라
 
 ```bash
 # coordinator 만
-sudo WHEELHOUSE=packaging/wheels/py39 ./packaging/install.sh
+sudo WHEELHOUSE=packaging/wheels/py39 ./bin/install.sh
 
 # executor 포함
-sudo WHEELHOUSE=packaging/wheels/py39 INSTALL_EXECUTOR=1 ./packaging/install.sh
+sudo WHEELHOUSE=packaging/wheels/py39 INSTALL_EXECUTOR=1 ./bin/install.sh
 ```
 
 스크립트를 거치지 않고 `pip` 을 직접 호출하고 싶다면 다음처럼 손으로 옵션을 붙여도 됩니다.
@@ -66,7 +66,7 @@ Python 3.11 로 배포할 때는 위 예시들에서 경로의 `py39` 를 `py311
 ```bash
 # Python 3.11 + executor 포함 설치
 sudo PYTHON=python3.11 WHEELHOUSE=packaging/wheels/py311 \
-     INSTALL_EXECUTOR=1 ./packaging/install.sh
+     INSTALL_EXECUTOR=1 ./bin/install.sh
 ```
 
 마지막으로, 완전한 에어갭이 아니라 사내에 패키지 저장소를 대신해 주는 중계 서버가 있는

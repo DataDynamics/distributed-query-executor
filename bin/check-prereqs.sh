@@ -166,6 +166,6 @@ if [[ "$missing" -eq 0 ]]; then
 else
     echo "결과: 누락/문제 $missing 건 — 위 [MISSING]/! 항목을 설치하세요."
     echo "  OS:   sudo dnf install -y ${OS_PACKAGES[*]}"
-    echo "  휠:   sudo WHEELHOUSE=$WHEELS_ROOT ./packaging/install.sh"
+    echo "  휠:   sudo WHEELHOUSE=$WHEELS_ROOT ./bin/install.sh"
     exit 1
 fi
