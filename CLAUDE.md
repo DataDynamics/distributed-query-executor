@@ -17,7 +17,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 405개.
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 434개.
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -107,6 +107,10 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `GET /datasources` + `POST /datasources/{name}/query` 엔드포인트가 이를 호출한다.
   executor 는 소스들을 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala 는
   요청 본문 `executor_url` 로 executor 에 프록시한다(coordinator 에는 소스 드라이버가 없음).
+- `src/core/config_tui.py` — **config.properties 편집용 curses 설정 TUI**(`python -m
+  core.config_tui`, `bin/config-tui.sh`). `config.yml` 을 파싱해 항목·기본값·설명·enum 을 자동
+  추출(스키마 하드코딩 없음)하고, 바꾼 값만 주석·순서를 보존해 diff-write 한다(저장 전 `.bak`
+  백업, 비밀값 마스킹). 순수 로직은 curses 무관(테스트 대상), 에어갭 stdlib curses.
 - `src/coordinator/tui.py` — **coordinator 대시보드의 읽기 전용 curses 모니터**(`python -m
   coordinator.tui`, `bin/dashboard-tui.sh`). 웹 대시보드와 같은 JSON API(`/cluster`·`/jobs`·
   `/history`·`/info`)를 폴링해 텍스트 UI 로 그린다(HTML 스크래핑 아님). 개별 executor 상세는
@@ -127,7 +131,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 
 `config.properties`(Java 스타일 key=value)의 값으로 `config.yml` 의 `${변수:기본값}`
 자리표시자를 치환해 로드한다(`src/core/config_loader.py`). 설정 디렉터리는
-`/data1/query-executor/config`(환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경, 개발 시 `conf`).
+`/data1/distributed-query-executor/config`(환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경, 개발 시 `conf`).
 
 - `src/core/config.py` 의 `_get("section","key")` 는 **YAML 의 섹션 구조**를 따라 읽는다. 새 설정을
   추가할 때 placeholder 이름(`${coordinator.x}`)이 아니라 **실제 YAML 중첩 위치**가 섹션과
