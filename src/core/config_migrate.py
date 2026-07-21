@@ -1,6 +1,6 @@
 """기존 설치본 config.properties 의 사용자 변경분을 찾아 새 기본 설정에 적용한다.
 
-업그레이드 시나리오를 위한 도구다. 새 버전을 배포하면 저장소의 ``conf/config.properties``
+업그레이드 시나리오를 위한 도구다. 새 버전을 배포하면 저장소의 ``config/config.properties``
 (새 기본값·새 키·새 주석)가 갱신되지만, 설치 경로(``/data1/distributed-query-executor/
 config``)의 설정은 운영자가 손으로 고친 값들을 담고 있어 그대로 덮어쓸 수 없다. 이 도구는
 둘을 비교해 **사용자 변경분만** 뽑아 새 기본 파일 위에 얹는다:
@@ -19,12 +19,12 @@ config``)의 설정은 운영자가 손으로 고친 값들을 담고 있어 그
     python -m core.config_migrate                  # 설치 설정을 제자리 갱신(.bak 백업)
     python -m core.config_migrate --dry-run        # 무엇이 적용될지 보고만
     python -m core.config_migrate --old /path/config.properties \
-        --new conf/config.properties --out /tmp/merged.properties
+        --new config/config.properties --out /tmp/merged.properties
 
 기본 경로: ``--old`` 는 ``$QUERY_EXECUTOR_CONFIG_DIR/config.properties``(미설정 시
-``/data1/distributed-query-executor/config/config.properties``), ``--new`` 는 소스/배포
-트리의 ``conf/config.properties``, ``--out`` 은 ``--old`` 와 동일(제자리 업그레이드).
-런처는 ``bin/migrate-config.sh``.
+``/data1/distributed-query-executor/config/config.properties``), ``--new`` 는 이 도구를
+실행하는 (새 버전) 소스 트리의 ``config/config.properties``, ``--out`` 은 ``--old`` 와 동일
+(제자리 업그레이드). 런처는 ``bin/migrate-config.sh``.
 """
 from __future__ import annotations
 
@@ -49,12 +49,14 @@ def _default_old_path() -> Path:
 
 
 def _default_new_path() -> Path:
-    """새 기본 config.properties 의 기본 위치: 이 패키지가 속한 트리의 ``conf/``.
+    """새 기본 config.properties 의 기본 위치: 이 패키지가 속한 트리의 ``config/``.
 
     src 레이아웃이므로 ``src/core/config_migrate.py`` 기준 두 단계 위가 트리 루트다.
-    소스 트리(저장소)와 배포 트리(/data1, rsync 로 conf/ 포함 복사) 모두 성립한다.
+    업그레이드 시엔 새로 받은 (새 버전) 소스 트리에서 이 도구를 실행해 그 트리의
+    ``config/config.properties`` 를 새 기본값으로 삼고, ``--old`` 로 설치 경로의 라이브
+    설정을 가리킨다.
     """
-    return Path(__file__).resolve().parents[2] / "conf" / "config.properties"
+    return Path(__file__).resolve().parents[2] / "config" / "config.properties"
 
 
 @dataclass

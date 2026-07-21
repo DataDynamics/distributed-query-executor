@@ -117,7 +117,7 @@ sequenceDiagram
 
 이제 코드가 어디에 어떻게 놓여 있는지 살펴봅시다. 소스 코드는 모두 `src/` 아래에 있고,
 크게 보면 coordinator 와 executor 가 공통으로 쓰는 `src/core/`, 지휘자 역할의
-`src/coordinator/`, Executor 역할의 `src/executor/` 로 나뉩니다. 그 밖에 설정(`conf/`),
+`src/coordinator/`, Executor 역할의 `src/executor/` 로 나뉩니다. 그 밖에 설정(`config/`),
 런처 스크립트(`bin/`), 배포·패키징(`packaging/`)을 담는 디렉터리들이 저장소 루트에 있습니다. 아래
 목록에서 왼쪽은 파일 경로, 오른쪽은 그 파일이 맡은 일입니다. 처음에는 전부 외울 필요 없이,
 "공용 → 지휘자 → Executor" 순서로 큰 덩어리만 눈에 익혀 두면 충분합니다.
@@ -151,7 +151,7 @@ src/                   # 파이썬 소스 루트(패키지: core / coordinator /
     app.py               REST API (POST /tasks, /query-run(커스텀 함수 위임), /datasources, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
     __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 bin/                 # 런처·설치 스크립트(install·start/stop/status[-coordinator|-executor]·env·check-prereqs·config-tui·dashboard-tui)
-conf/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
+config/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
 customs/            # 사이트 커스텀 코드(customs.query_funcs.* — 운영에서 직접 사용하는 커스텀 쿼리 함수)
 packaging/           # 배포·패키징 일체: README.md(배포 안내) + wheels/(에어갭 휠 번들). 설치는 bin/install.sh
   wheels/            #   에어갭 오프라인 설치용 휠 번들(파이썬 버전별 py39/·py311/ 두 벌)
@@ -173,7 +173,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 > `r` 로 기본값 복원, `s` 로 저장합니다. 저장 시 기존 파일은 `config.properties.bak` 로
 > 백업되고, 바꾼 값만 주석·순서를 보존한 채 반영됩니다(비밀번호·DSN 은 화면에서 마스킹). 예:
 > ```bash
-> QUERY_EXECUTOR_CONFIG_DIR=conf bin/config-tui.sh   # 개발: 저장소 conf 편집
+> QUERY_EXECUTOR_CONFIG_DIR=config bin/config-tui.sh   # 개발: 저장소 config 편집
 > bin/config-tui.sh                                  # 배포 트리 기본 설정 편집
 > ```
 > 설정은 기동 시 로딩되므로, 저장 후 서비스를 재시작해야 적용됩니다.
@@ -182,7 +182,7 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
 
 - 설정 파일들은 기본적으로 `/data1/distributed-query-executor/config` 디렉터리에서 읽습니다. 다른
   위치를 쓰고 싶으면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 바꿀 수 있습니다.
-- 내 컴퓨터에서 개발하며 돌려볼 때는 `QUERY_EXECUTOR_CONFIG_DIR=conf` 로
+- 내 컴퓨터에서 개발하며 돌려볼 때는 `QUERY_EXECUTOR_CONFIG_DIR=config` 로
   지정해 저장소에 들어 있는 기본값을 그대로 쓰면 편합니다.
 - 가장 자주 손대는 핵심 항목은 `coordinator.executors`(Executor 목록),
   `coordinator.max_concurrent_jobs`/`max_pending_jobs`(동시 처리·대기 한도), `impala.*`(원본
@@ -350,7 +350,7 @@ executor 를 흉내가 아니라 실제 클러스터에 연결하려면, Impala�
 
 ## 로컬 실행
 
-설치를 마쳤다면 내 컴퓨터에서 실제로 서비스를 띄워 봅시다. 설정은 `conf/` 의
+설치를 마쳤다면 내 컴퓨터에서 실제로 서비스를 띄워 봅시다. 설정은 `config/` 의
 기본값을 그대로 쓰므로(`coordinator.executors`, 포트 등) 별도 설정 없이도 동작합니다.
 순서는 간단합니다. 먼저 Executor인 executor 를 한 대 이상 띄우고, 그다음 지휘자인 coordinator 를
 띄웁니다. executor 의 포트는 `EXECUTOR_PORT` 환경변수로 정하며, 포트만 달리해 여러 대를
@@ -358,13 +358,13 @@ executor 를 흉내가 아니라 실제 클러스터에 연결하려면, Impala�
 
 ```bash
 # executor 기동 (포트는 EXECUTOR_PORT 로 지정). 여러 개 띄울 수 있다.
-QUERY_EXECUTOR_CONFIG_DIR=conf EXECUTOR_PORT=8087 \
+QUERY_EXECUTOR_CONFIG_DIR=config EXECUTOR_PORT=8087 \
   .venv/bin/python -m executor &
-QUERY_EXECUTOR_CONFIG_DIR=conf EXECUTOR_PORT=8086 \
+QUERY_EXECUTOR_CONFIG_DIR=config EXECUTOR_PORT=8086 \
   .venv/bin/python -m executor &
 
 # coordinator 기동 (host/port/executors 는 config 에서 읽음)
-QUERY_EXECUTOR_CONFIG_DIR=conf \
+QUERY_EXECUTOR_CONFIG_DIR=config \
   .venv/bin/python -m coordinator
 ```
 
@@ -393,7 +393,7 @@ coordinator·executor 는 뜰 때 Spring Boot 처럼 콘솔에 ASCII 배너와 *
 
 ```bash
 # 버전만 확인(기동하지 않음)
-QUERY_EXECUTOR_CONFIG_DIR=conf .venv/bin/python -m coordinator --version
+QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator --version
 # query-executor 0.3.0+g860f3cd
 ```
 
@@ -410,7 +410,7 @@ JSON API**(`/cluster`·`/jobs`·`/history`·`/info`)를 폴링해 그리며(HTML
 볼 수 있습니다(각 executor에 직접 접속하지 않음).
 
 ```bash
-QUERY_EXECUTOR_CONFIG_DIR=conf bin/dashboard-tui.sh            # 설정에서 coordinator URL 유추
+QUERY_EXECUTOR_CONFIG_DIR=config bin/dashboard-tui.sh            # 설정에서 coordinator URL 유추
 bin/dashboard-tui.sh --url http://127.0.0.1:8088 --interval 1 # URL·새로고침 주기 지정
 ```
 
@@ -505,7 +505,7 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   (task 수 = 날짜 수).
 - 적재는 stage_insert **append** 입니다(각 task: 그 날짜 SELECT → staging(TEMP) → target INSERT).
   하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을
-  씁니다. 예제 템플릿: `conf/templates/daily_sales/`.
+  씁니다. 예제 템플릿: `config/templates/daily_sales/`.
 
 ### 결과 반환 실행 (`POST /query-execute`)
 
@@ -586,9 +586,9 @@ executor 가 남기는 task 단위 이력입니다. 아래 표는 두 이력 테
 - 기록 대상 DB 는 `history.db_dsn` 을 공유해 쓰며, 이 값이 없으면 `monitor.db_dsn` 을
   대신 씁니다. 둘 다 비어 있으면 이력 기능은 비활성화되고 경고 로그만 남습니다.
 - ⚠️ **스키마는 앱이 자동 생성하지 않는다.** PostgreSQL을 쓰기 전에 통합 스키마
-  `conf/postgresql.sql`을 **먼저 실행**해 테이블/인덱스를 만들어 두어야 한다
+  `config/postgresql.sql`을 **먼저 실행**해 테이블/인덱스를 만들어 두어야 한다
   (안 하면 "relation does not exist"로 실패):
-  `psql "$history_db_dsn" -f conf/postgresql.sql`
+  `psql "$history_db_dsn" -f config/postgresql.sql`
 
 특정 작업이 어떻게 진행됐는지 task 단위로 따라가 보고 싶다면, 아래처럼 `task_history` 를
 시간순으로 조회하면 됩니다.
@@ -609,7 +609,7 @@ FROM task_history WHERE job_id = '<job_id>' ORDER BY recorded_at;
 > ⚠️ **먼저 스키마 생성**: PostgreSQL을 쓰는 경우(공유 store / 이력 / self-report) 서비스
 > 기동 **전에** 반드시 통합 스키마를 한 번 적용한다. 앱은 테이블을 자동 생성하지 않는다.
 > ```bash
-> psql "postgresql://user:pass@pg:5432/queryexec" -f conf/postgresql.sql
+> psql "postgresql://user:pass@pg:5432/queryexec" -f config/postgresql.sql
 > ```
 
 멀티 coordinator 를 켜는 데 관여하는 설정들과 그 효과는 아래 표와 같습니다. 처음에는 위쪽
@@ -662,7 +662,7 @@ coordinator.orphan_reconcile_interval_s=30
   `max_pending_jobs`(대기 큐)로 동시 job 수를 제한, 초과 시 `429`. 단 이 한도는 **coordinator
   인스턴스별**(인메모리)이라 멀티 coordinator 환경에선 인스턴스 수만큼 합산된다.
 
-스키마는 `conf/postgresql.sql` 하나에 모두 통합되어 있습니다. 앱이 DDL 을 직접
+스키마는 `config/postgresql.sql` 하나에 모두 통합되어 있습니다. 앱이 DDL 을 직접
 실행하지 않으므로 **반드시 먼저 실행**해 두어야 합니다.
 
 > 단일 coordinator면 기본값(`store.backend=memory`, `executor.self_report=false`) 그대로 두면 된다.
@@ -671,7 +671,7 @@ coordinator.orphan_reconcile_interval_s=30
 점이 있습니다.
 
 > **WarehousePG / Greenplum 7** 에 메타 저장소를 둘 때는 `postgresql.sql` 대신
-> `conf/warehousepg.sql` 을 적용한다(테이블마다 `DISTRIBUTED BY`, history/metrics 는
+> `config/warehousepg.sql` 을 적용한다(테이블마다 `DISTRIBUTED BY`, history/metrics 는
 > 대리 PK 를 빼 `job_id`/`executor_url` 로 co-locate). GP7=PG12 라 앱 SQL(`ON CONFLICT`·`JSONB`·
 > `DISTINCT ON`)은 그대로 동작한다. 다만 heartbeat/예약 같은 고빈도 단일행 UPSERT 는 MPP 와 맞지
 > 않으니, 성능이 중요하면 이 메타 저장소는 PostgreSQL 에 두고 WarehousePG 는 데이터 적재 대상으로만

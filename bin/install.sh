@@ -76,13 +76,15 @@ else
 fi
 
 echo "==> 설정 파일 배치 -> $CONF_DIR"
+# 소스 트리의 config/ 기본값(properties·yml·스키마·templates)을 실사용 설정 디렉터리
+# ($CONF_DIR)에 최초 1회만 통째로 시딩한다. rsync 는 위에서 '/config' 를 제외하므로
+# 운영자 편집·인증서는 업그레이드 때 보존된다(새 기본값 반영은 migrate-config.sh 로 별도 처리).
 mkdir -p "$CONF_DIR" "$LOG_DIR" "$RUN_DIR" "$BIN_DIR"
-if [[ ! -f "$CONF_DIR/config.properties" ]]; then
-    cp "$APP_HOME/conf/config.properties" "$CONF_DIR/config.properties"
+if [[ ! -f "$CONF_DIR/config.yml" ]]; then
+    cp -a "$SRC_DIR/config/." "$CONF_DIR/"
     # 로그 경로를 /data1 절대 경로로 고정(개발 기본값 logs -> $LOG_DIR)
     sed -i "s|^log.dir=.*|log.dir=$LOG_DIR|" "$CONF_DIR/config.properties"
 fi
-[[ -f "$CONF_DIR/config.yml" ]] || cp "$APP_HOME/conf/config.yml" "$CONF_DIR/config.yml"
 
 # Impala TLS 자리표시 파일(실제 파일로 교체할 것). Greenplum 은 TLS 미적용.
 [[ -f "$CONF_DIR/impala-ca.pem" ]] || printf '# TLS CA 인증서(PEM) 자리표시 — 실제 Impala CA 로 교체할 것\n' > "$CONF_DIR/impala-ca.pem"

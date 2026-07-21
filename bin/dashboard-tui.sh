@@ -20,12 +20,12 @@ fi
 # src 레이아웃이므로 PYTHONPATH 에 src 를 넣어야 coordinator/core 모듈을 찾는다.
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
-# 설정 디렉터리 기본값(URL 유추에 사용): 환경변수 → 배포 config → 소스 conf.
+# 설정 디렉터리 기본값(URL 유추에 사용): 환경변수 → 배포 config → 소스 config.
 if [[ -z "${QUERY_EXECUTOR_CONFIG_DIR:-}" ]]; then
     if [[ -f "/data1/distributed-query-executor/config/config.yml" ]]; then
         export QUERY_EXECUTOR_CONFIG_DIR="/data1/distributed-query-executor/config"
     else
-        export QUERY_EXECUTOR_CONFIG_DIR="$ROOT/conf"
+        export QUERY_EXECUTOR_CONFIG_DIR="$ROOT/config"
     fi
 fi
 

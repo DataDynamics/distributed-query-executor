@@ -18,7 +18,7 @@ from core.config_tui import (
     write_config,
 )
 
-_CONF = Path(__file__).resolve().parents[1] / "conf"
+_CONF = Path(__file__).resolve().parents[1] / "config"
 
 
 # ── 스키마 파싱 ────────────────────────────────────────────────────────────

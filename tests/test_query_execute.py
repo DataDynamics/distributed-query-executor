@@ -16,7 +16,7 @@ from coordinator.app import create_app
 from coordinator.template import TemplateEngine, TemplateError
 from core.dbprobe import QueryResult
 
-REPO_TEMPLATES = Path(__file__).resolve().parent.parent / "conf" / "templates"
+REPO_TEMPLATES = Path(__file__).resolve().parent.parent / "config" / "templates"
 
 
 def _fake_result() -> QueryResult:

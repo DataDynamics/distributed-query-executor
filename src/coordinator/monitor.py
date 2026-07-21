@@ -58,7 +58,7 @@ class ExecutorHealth:
 
 
 # 스키마(executor_health_metrics 테이블)는 앱이 생성하지 않는다. 운영 전에
-# conf/postgresql.sql 로 미리 만들어 두어야 한다.
+# config/postgresql.sql 로 미리 만들어 두어야 한다.
 
 # 메트릭 한 건을 추가하는 INSERT 문. 값 순서는 _write_pg() 의 rows 튜플과 1:1 대응한다.
 _INSERT = """

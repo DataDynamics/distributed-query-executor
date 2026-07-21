@@ -21,8 +21,8 @@
 | `bin/start-executor.sh` / `stop-…` / `status-…` | **executor 만** 제어(포트 인자 선택, 생략 시 전체) |
 | `bin/check-prereqs.sh` | **사전 점검**: OS 패키지(rpm) + 파이썬 휠(.venv) 설치 여부 확인(설치는 안 함) |
 | `bin/env.sh` | 런처 공통 환경 + 헬퍼 함수(경로·포트) |
-| `../conf/config.properties` | Java 스타일 key=value 변수 정의 |
-| `../conf/config.yml` | `${변수:기본값}` 치환을 쓰는 메인 YAML 설정 |
+| `../config/config.properties` | Java 스타일 key=value 변수 정의 |
+| `../config/config.yml` | `${변수:기본값}` 치환을 쓰는 메인 YAML 설정 |
 | `bin/install.sh` | 사용자/디렉터리/venv/설정/런처를 한 번에 구성하는 설치 스크립트 |
 
 표만으로는 전체 그림이 잘 안 그려질 수 있으니, 배포가 끝난 뒤 서버에서 무엇이 어디에 놓이는지를 산문으로 풀어 두겠습니다. 모든 것은 앞서 말한 한 그루의 디렉터리 나무 아래에 정리됩니다. 애플리케이션의 본체와 파이썬 가상환경(`.venv`, 이 프로젝트만을 위한 격리된 파이썬 실행 환경)은 **앱 홈**인 `/data1/distributed-query-executor` 에 자리 잡습니다. 설정 파일들은 그 아래 **설정 디렉터리**인 `/data1/distributed-query-executor/config` 에 모이며, 필요하면 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 위치를 바꿀 수 있습니다. 프로그램이 남기는 기록인 **로그**는 `/data1/distributed-query-executor/logs` 에 쌓이는데, 하루 단위로 파일이 갈라지는 일 단위 롤링 방식이라 `파일명_YYYYMMDD.log` 형태의 이름을 갖습니다. 마지막으로 프로세스 ID 파일처럼 실행 중에만 의미가 있는 것들은 **런타임** 폴더인 `/data1/distributed-query-executor/run` 에 둡니다.
@@ -58,14 +58,14 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
 - 서비스 계정 `gpadmin` 생성(홈 `/data1`)
 - 앱을 `/data1/distributed-query-executor` 로 복사(`.venv`/`.git`/`logs`/`config`/`run` 제외)
 - `/data1/distributed-query-executor/.venv` 가상환경 + 의존성 설치(`WHEELHOUSE` 지정 시 오프라인)
-- `conf/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/data1/distributed-query-executor/logs` 로 설정
+- `config/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/data1/distributed-query-executor/logs` 로 설정
 - TLS 자리표시 파일 생성(`config/impala-ca.pem`)
 - 런처 스크립트를 `bin/` 으로 배치, 소유권/권한 설정
 
 > **업그레이드 시 설정 병합**: 재설치(재실행)해도 기존 `config/` 는 보존됩니다("없을 때만"
 > 복사). 다만 새 버전이 추가한 설정 키는 기존 파일에 없으므로,
 > `bin/migrate-config.sh` 로 병합하세요 — 기존 설치 설정에서 운영자가 바꾼 값(새 기본값과
-> 다른 값 + 직접 추가한 키)을 찾아 새 기본 `conf/config.properties` 위에 얹어 다시
+> 다른 값 + 직접 추가한 키)을 찾아 새 기본 `config/config.properties` 위에 얹어 다시
 > 기록합니다(주석·순서 보존, `.bak` 백업). `--dry-run` 으로 무엇이 적용될지 먼저 확인할 수
 > 있습니다.
 
@@ -188,7 +188,7 @@ executor.status_interval_s=10
 
 ```bash
 PG="postgresql://user:pass@pg-host:5432/queryexec"
-psql "$PG" -f /data1/distributed-query-executor/conf/postgresql.sql
+psql "$PG" -f /data1/distributed-query-executor/config/postgresql.sql
 ```
 
 반대로, 이런 고급 구성이 필요 없는 분도 많을 것입니다. 그래서 단순한 경우의 권장값을 함께 적어 둡니다.
@@ -199,13 +199,13 @@ psql "$PG" -f /data1/distributed-query-executor/conf/postgresql.sql
 메타 저장소를 일반 PostgreSQL 이 아니라 WarehousePG 나 Greenplum 7 에 두려는 경우를 위한 안내도 있습니다. WarehousePG 는 Greenplum 계열의 MPP(대규모 병렬 처리) 데이터베이스인데, 데이터를 여러 노드에 나눠 분산하는 특성이 있어 스키마를 조금 다르게 만들어 줘야 합니다.
 
 > **WarehousePG / Greenplum 7 에 메타 저장소를 둘 때**는 `postgresql.sql` 대신
-> [`warehousepg.sql`](../conf/warehousepg.sql) 을 적용한다(테이블마다 `DISTRIBUTED BY`
+> [`warehousepg.sql`](../config/warehousepg.sql) 을 적용한다(테이블마다 `DISTRIBUTED BY`
 > 지정, history/metrics 는 대리 PK 를 빼고 `job_id`/`executor_url` 로 co-locate). 앱 코드는
 > 그대로다(`ON CONFLICT`·`JSONB`·`DISTINCT ON` 모두 GP7=PG12 에서 지원). 다만 heartbeat/예약은
 > 고빈도 단일행 UPSERT 라 MPP 와 맞지 않으므로, 성능이 중요하면 이 메타 저장소는 PostgreSQL 에
 > 두고 WarehousePG 는 데이터 적재 대상(`greenplum.dsn`)으로만 쓰는 편이 낫다.
 > ```bash
-> psql "$PG" -f /data1/distributed-query-executor/conf/warehousepg.sql
+> psql "$PG" -f /data1/distributed-query-executor/config/warehousepg.sql
 > ```
 
 ## 운영 명령
@@ -298,10 +298,10 @@ monitor.table=executor_health_metrics
 monitor.disk_path=/
 ```
 
-여기서도 앞서 말한 원칙이 똑같이 적용됩니다. 메트릭을 담는 `executor_health_metrics` 테이블 역시 앱이 알아서 만들어 주지 않으므로, 통합 스키마인 `conf/postgresql.sql` 을 **먼저 적용**해야 합니다. 만약 `monitor.db_dsn` 이 다른 데이터베이스를 가리킨다면 그 데이터베이스에도 동일하게 스키마를 적용해 주어야 합니다.
+여기서도 앞서 말한 원칙이 똑같이 적용됩니다. 메트릭을 담는 `executor_health_metrics` 테이블 역시 앱이 알아서 만들어 주지 않으므로, 통합 스키마인 `config/postgresql.sql` 을 **먼저 적용**해야 합니다. 만약 `monitor.db_dsn` 이 다른 데이터베이스를 가리킨다면 그 데이터베이스에도 동일하게 스키마를 적용해 주어야 합니다.
 
 ```bash
-psql "postgresql://user:pass@pg-host:5432/monitoring" -f /data1/distributed-query-executor/conf/postgresql.sql
+psql "postgresql://user:pass@pg-host:5432/monitoring" -f /data1/distributed-query-executor/config/postgresql.sql
 
 # 최근 기록 조회
 psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_percent

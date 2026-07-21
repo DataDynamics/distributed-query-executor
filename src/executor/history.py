@@ -18,7 +18,7 @@ from core.phases import phase_of
 logger = logging.getLogger(__name__)
 
 # 스키마(task_history 테이블)는 앱이 생성/변경하지 않는다. 운영 전에
-# conf/postgresql.sql 로 테이블·컬럼·인덱스를 미리 만들어 두어야 한다.
+# config/postgresql.sql 로 테이블·컬럼·인덱스를 미리 만들어 두어야 한다.
 
 _INSERT = """
 INSERT INTO {table}

@@ -896,7 +896,7 @@ flowchart LR
 
 ### 18.2 템플릿 저장 구조
 
-`template.dir`(기본 `/data1/distributed-query-executor/config/templates`, 개발 시 `conf/templates`) 아래 **`<template_id>/` 디렉터리 하나가 하나의 이관 시나리오**입니다.
+`template.dir`(기본 `/data1/distributed-query-executor/config/templates`, 개발 시 `config/templates`) 아래 **`<template_id>/` 디렉터리 하나가 하나의 이관 시나리오**입니다.
 
 ```
 <template_dir>/sales_migration/
@@ -965,7 +965,7 @@ flowchart LR
 - **요청**: 템플릿 stage_insert 에 `task_column`(날짜 컬럼) + `task_range`(오늘 기준 상대 일수, **양끝 포함**)를 추가합니다. 예: `task_column:"dt", task_range:[-7,0]` → 오늘 포함 8일. `partition_column`/`parallelism`/`split_strategy` 는 이 모드에서 쓰이지 않습니다(task 수 = 날짜 수).
 - **분할**(`src/coordinator/app.py` `_build_fanout`, IN 파싱·`split` 우회): 서버 오늘(KST) 기준으로 날짜 목록을 만들고(`_compute_task_dates`), **날짜마다 SELECT 조각만** `render_query()` 로 렌더해(컨텍스트에 `task_column`·`task_date` 주입) 하루치 sub-query 를 만듭니다. `INSERT`/`staging_ddl` 은 **날짜 독립**이라 대표 날짜로 **1회** 렌더해 job-level 로 공유합니다(§18.5 의 per-task `sub_query` / job-level 나머지 plumbing 그대로). 각 task 의 `partition_values` 에는 그 날짜를 담습니다(관측/표시용).
 - **적재 방식**: stage_insert 는 **append** 입니다(그 날짜 SELECT → staging(TEMP) COPY → target INSERT). 하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나(TRUNCATE 등) 날짜별 물리 테이블을 씁니다 — 프레임워크는 대상에 DELETE 를 하지 않습니다.
-- **템플릿 계약**: SELECT 조각은 `WHERE {{ task_column | sql_ident }} = {{ task_date | sql_str }}` 처럼 하루치를 조회하고, INSERT/staging 은 날짜를 참조하지 않습니다. 예제: `conf/templates/daily_sales/`.
+- **템플릿 계약**: SELECT 조각은 `WHERE {{ task_column | sql_ident }} = {{ task_date | sql_str }}` 처럼 하루치를 조회하고, INSERT/staging 은 날짜를 참조하지 않습니다. 예제: `config/templates/daily_sales/`.
 - **예시**(today=2026-07-10, `[-7,0]`): `2026-07-03 … 2026-07-10` = 8 task, executor 당 1일. 각 task: 그 날짜 SELECT → staging(TEMP) COPY → INSERT.
 
 **테스트**: `tests/test_task_fanout.py` — `_compute_task_dates`(양끝 포함·역순·포맷·오류), dry-run(날짜별 1 task·날짜별 partition_values·IN 없음·INSERT 공유), 템플릿/exec_mode/range 검증(422).

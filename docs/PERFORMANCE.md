@@ -8,7 +8,7 @@
 [README.md](../README.md) 와 [packaging/README.md](../packaging/README.md) 를 함께 보면 좋습니다.
 
 처음 시작하기 전에 한 가지 약속만 기억해 두면 됩니다. 이 시스템의 모든 파라미터는
-`conf/config.properties` 라는 파일에 자바 스타일의 `key=value` 형태로 적습니다.
+`config/config.properties` 라는 파일에 자바 스타일의 `key=value` 형태로 적습니다.
 이 값들은 `config.yml` 안에 있는 `${변수:기본값}` 모양의 자리표시자(빈칸)를 채우는 방식으로
 읽힙니다. 그래서 아래 표에 나오는 기본값이란, 바로 `config.yml` 안에서 콜론(`:`) 뒤에 적혀 있는
 값을 가리킵니다. 설정을 따로 주지 않으면 이 기본값이 그대로 쓰입니다.
@@ -184,7 +184,7 @@ coordinator.orphan_reconcile_interval_s=30
 하고(3번), 마지막으로 죽은 coordinator 가 떠맡고 있던 job 을 다른 coordinator 가 알아서
 수습하게(4번) 만드는 것입니다. 여기에 한 가지 준비 작업이 필요합니다.
 
-> 스키마는 앱이 자동 생성하지 않는다. 기동 전에 `conf/postgresql.sql`
+> 스키마는 앱이 자동 생성하지 않는다. 기동 전에 `config/postgresql.sql`
 > (WarehousePG/Greenplum 7 이면 `warehousepg.sql`)을 먼저 적용한다.
 
 즉 애플리케이션이 데이터베이스 테이블을 알아서 만들어 주지 않으므로, 시스템을 띄우기 전에

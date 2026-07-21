@@ -22,11 +22,11 @@ python3.9 -m venv .venv
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
 # 로컬 실행 (저장소 기본 설정 사용). 소스가 src/ 아래라 PYTHONPATH=src 필요(pytest 는 conftest.py 가 처리).
-PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=conf EXECUTOR_PORT=8001 .venv/bin/python -m executor &
-PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=conf .venv/bin/python -m coordinator
+PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=config EXECUTOR_PORT=8001 .venv/bin/python -m executor &
+PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator
 
 # local 모드(별도 executor 없이 coordinator 안에서 직접 실행)
-COORDINATOR_EXECUTOR_MODE=local PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=conf .venv/bin/python -m coordinator
+COORDINATOR_EXECUTOR_MODE=local PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator
 ```
 
 > 셸에 `python` 이 없을 수 있다(pyenv). 항상 `.venv/bin/python` 을 명시적으로 쓴다.
@@ -39,7 +39,7 @@ src/
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
 bin/           # 런처·설치 스크립트(install/start/stop/status·env·check-prereqs·config-tui·dashboard-tui·migrate-config — /data1 배포 트리와 공용)
-conf/          # config.properties + config.yml 기본값 + templates/ + 스키마(postgresql.sql / warehousepg.sql)
+config/        # config.properties + config.yml 기본값 + templates/ + 스키마(postgresql.sql / warehousepg.sql)
 customs/       # 사이트 커스텀 코드(customs.query_funcs.* — 커스텀 쿼리 함수, src 밖 최상위 패키지)
 packaging/     # 배포·패키징: README.md(배포 안내) + wheels/(에어갭 휠 번들 py39·py311). 설치는 bin/install.sh
 tests/         # pytest (coordinator·executor 검증/라이프사이클/admission/대시보드)
@@ -66,7 +66,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   기존 요청 필드에 주입한다(이후 parser→splitter→dispatch 무변경). 커스텀 함수는
   `@template_filter`/`@template_global` 레지스트리(내장 `sql_str`/`sql_in`/`sql_ident`/`sql_num`/
   `date_range`) + 설정 `template.func_modules` 로 확장. `template_id` 미지정 시 기존 raw-SQL
-  방식 그대로(하위 호환). 예제: `conf/templates/sales_migration/`. 자세히는 DESIGN §18.
+  방식 그대로(하위 호환). 예제: `config/templates/sales_migration/`. 자세히는 DESIGN §18.
   **결과 반환 실행**(`POST /query-execute`, DESIGN §18.7): 같은 템플릿을 `render_query()`(select
   조각만 렌더)로 SELECT 만 만들어 실행하고 결과(상위 N행)를 동기 반환한다. coordinator 가 `/jobs` 와
   동일 정책으로 **가장 한가한 executor 를 골라 프록시**(클라이언트는 executor 를 모름), greenplum/
@@ -121,7 +121,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   curses 무관(테스트 대상), config-tui 와 같은 에어갭 stdlib curses.
 - `src/core/config_migrate.py` — **업그레이드용 설정 마이그레이션**(`python -m core.config_migrate`,
   `bin/migrate-config.sh`). 기존 설치 경로의 config.properties 에서 운영자 변경분(새 기본값과
-  다른 값 + 새 파일에 없는 키)을 찾아 새 기본 conf/config.properties 위에 얹어 기록한다
+  다른 값 + 새 파일에 없는 키)을 찾아 새 기본 config/config.properties 위에 얹어 기록한다
   (`merge_properties_lines` 재사용 — 주석·순서 보존, 없는 키는 마커 아래 추가, `.bak` 백업,
   `--dry-run` 보고, 비밀값은 보고에서 마스킹).
 - `src/core/version.py` + `src/core/banner.py` — **버전 단일 소스 + 기동 배너**. 버전은
@@ -136,7 +136,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 
 `config.properties`(Java 스타일 key=value)의 값으로 `config.yml` 의 `${변수:기본값}`
 자리표시자를 치환해 로드한다(`src/core/config_loader.py`). 설정 디렉터리는
-`/data1/distributed-query-executor/config`(환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경, 개발 시 `conf`).
+`/data1/distributed-query-executor/config`(환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 변경, 개발 시 `config`).
 
 - `src/core/config.py` 의 `_get("section","key")` 는 **YAML 의 섹션 구조**를 따라 읽는다. 새 설정을
   추가할 때 placeholder 이름(`${coordinator.x}`)이 아니라 **실제 YAML 중첩 위치**가 섹션과
@@ -148,7 +148,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - 백엔드: `impala.host` + `greenplum.dsn` 둘 다 있으면 실제 백엔드, 아니면 `MockBackend`
   (소스는 Impala 전용). query-execute 의 소스 실행은 별개로 `/query-run` 커스텀 함수에 위임한다(예제
   `trino_runner`, 의존성 `trino` 는 이 예제용 — requirements-executor.txt).
-- 템플릿 엔진: `template.dir`(템플릿 루트, 개발 `conf/templates`) / `template.enabled` /
+- 템플릿 엔진: `template.dir`(템플릿 루트, 개발 `config/templates`) / `template.enabled` /
   `template.auto_reload`(개발 편의) / `template.func_modules`(커스텀 함수 모듈) /
   `template.validate_ddl_single_stmt`. 의존성 `Jinja2`(requirements.txt).
 
@@ -179,7 +179,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   한정된다. `src/core/config.py` 의 `_qualify_table()` 이 설정에서 읽은 테이블명을 `public.<t>` 로 만들고
   (이미 `.` 한정된 값은 그대로), 각 repo 의 `self.table` f-string 이 이를 그대로 쓴다 — 앱 런타임
   SQL 과 두 DDL 파일이 같은 스키마를 가리킨다. 테이블/스키마를 바꾸면 **설정·DDL 두 파일을 함께** 고친다.
-- **메타 저장소 스키마는 두 벌**: `conf/postgresql.sql`(PostgreSQL) 과
+- **메타 저장소 스키마는 두 벌**: `config/postgresql.sql`(PostgreSQL) 과
   `warehousepg.sql`(WarehousePG/Greenplum 7=PG12). 테이블/컬럼을 바꾸면 **두 파일을 함께**
   고친다. WarehousePG 판은 테이블마다 `DISTRIBUTED BY` 가 붙고(PK 는 분산키를 포함해야 함),
   history/metrics 는 대리 PK 를 빼 `job_id`/`executor_url` 로 co-locate 한다. 앱 SQL(`ON

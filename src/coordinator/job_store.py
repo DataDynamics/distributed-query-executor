@@ -181,7 +181,7 @@ def reconcile_interrupted_jobs(store) -> int:
     return reconciled
 
 
-# 스키마(jobs 테이블)는 앱이 생성하지 않는다. 운영 전에 conf/postgresql.sql
+# 스키마(jobs 테이블)는 앱이 생성하지 않는다. 운영 전에 config/postgresql.sql
 # 을 적용해 테이블/인덱스를 미리 만들어 두어야 한다(아래 컬럼 구성 참고).
 #   job_id, coordinator_id, status, cancel_requested, updated_at, data(JSONB)
 
