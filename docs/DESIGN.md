@@ -649,10 +649,13 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 
 끝으로 **로깅**입니다. 로그는 `/data1/distributed-query-executor/logs`에 하루 단위로 롤링(날짜가 바뀌면 파일을 새로 만드는 방식)되어 쌓입니다. 모든 로그에는 어떤 작업·일감에 관한 것인지 알 수 있도록 `[job_id][task_id]` 컨텍스트가 자동으로 붙습니다. 특히 WARNING 이상의 경고는 별도의 `*-warn.log` 파일로 분리해(로거 이름까지 담은 강화 포맷으로) 운영 중에 문제만 빠르게 추적할 수 있게 했습니다.
 
+**기동 시점의 가시성**도 로깅으로 챙깁니다. coordinator·executor 는 뜰 때 Spring Boot 식 ASCII 배너(버전·역할·포트)와 함께 **실제로 로딩한 설정 파일(`config.properties`·`config.yml`)의 절대 경로**를 콘솔에 찍습니다(파일을 못 찾으면 해당 줄 뒤에 `← 파일 없음(로딩 실패)!` 마커). 이 콘솔 출력은 표준출력(stdout)이라 런처(`bin/env.sh`)가 `logs/<name>.out`으로 리다이렉트하는데, 여기에 더해 **같은 배너 전체(아트 + 버전 + 설정 절대 경로)를 애플리케이션 로그(`.log`)에도 한 레코드로** 남깁니다(`banner.log_startup`, 첫 줄은 grep 하기 좋은 `<role> 기동 (version=… port=…)` 요약). `.out`을 못 봐도 어떤 버전이 **어떤 설정 파일로** 떴는지 `.log`에서 바로 확인할 수 있어, "설정이 제대로 로딩됐는지 알 수 없는" 상황을 없애기 위함입니다.
+
 - **시스템 메트릭**: 두 서비스 모두 `/metrics`(CPU/메모리/디스크 + 동시 처리). coordinator `HealthMonitor`가 executor를 폴링해 `/executors`·`/cluster`로 제공하고 `monitor.db_dsn` 설정 시 `executor_health_metrics`에 기록.
 - **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query / 실행 이력 / Executor / 환경설정 / 그외 정보.
 - **executor self-view 대시보드(`/`)**: remote 모드의 각 executor 프로세스가 자기 task/메트릭/이력을 노출(처리중 Task / 실행 이력 / 환경설정 / 그외 정보). local 모드에선 executor 프로세스가 없으므로 자연히 coordinator 화면만 보인다.
 - **로깅**: `/data1/distributed-query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트 자동 주입. **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적.
+- **기동 배너 로그**: 기동 시 ASCII 배너(버전·역할·포트) + **로딩한 설정 파일 절대 경로**(못 찾으면 `파일 없음` 마커)를 콘솔(stdout→`.out`)에 찍고, 동일 배너 전체를 `.log`에도 한 레코드로 남긴다(`banner.log_startup`, 첫 줄은 grep 용 요약). 설정 로딩 여부·경로를 어느 파일에서든 확인. 순수 렌더 함수(`render_banner`/`render_config_sources`)는 I/O 무관이라 테스트 대상(`tests/test_banner_version.py`).
 
 ---
 
