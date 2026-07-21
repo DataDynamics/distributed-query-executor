@@ -101,6 +101,14 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `executor.max_concurrent_tasks` 세마포어.
 - `src/core/logging.py` — 일 단위 롤링 + `[job_id][task_id]` 컨텍스트 주입 + **WARNING 전용
   로그(`*-warn.log`) 분리**.
+- `src/core/http_logging.py` — **HTTP 요청/응답 DEBUG 로깅 미들웨어**(`core.http` 로거). 로그
+  레벨이 DEBUG 일 때만(`logger.isEnabledFor(DEBUG)` 가드) 각 요청/응답을 남기고, 아니면 즉시
+  통과(오버헤드 ~0). **순수 ASGI 미들웨어**(BaseHTTPMiddleware 아님) — `receive`/`send` 를 감싸
+  엿보기만 해 다운스트림 본문 읽기를 깨지 않고, 본문 복사본은 `max_body` 까지만 보관(원본은 그대로
+  전달 → 스트리밍/대용량도 로그만 절단). 본문·헤더는 마스킹(`core.masking` 의 `mask_text`/
+  `mask_header_value`), 잡음 경로(health/metrics/정적/docs) 기본 제외. 두 `create_app` 이
+  `install_http_logging(app, settings)` 로 등록. 순수 함수(`format_body`/`format_headers`/
+  `is_excluded`)는 테스트 대상(`tests/test_http_logging.py`).
 - `src/core/dbprobe.py` — **데이터소스 SELECT 미리보기/연결 테스트 공용 로직**. 임의 SQL 을
   Impala/Greenplum/history DB 에 실행해 상위 N행을 JSON 안전 형태로 반환(`fetchmany` 로
   잘라 truncated 표시, PostgreSQL 은 커밋 없이 닫아 implicit rollback). 두 앱의
@@ -152,6 +160,9 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - 동시성: `coordinator.max_concurrent_jobs`(실행 슬롯 16) + `coordinator.max_pending_jobs`(대기
   큐 100) → 합 초과 시 429 / `coordinator.max_dispatch_concurrency`(task 디스패치 32) /
   `executor.max_concurrent_tasks`(executor당 8) / `greenplum.pool_max`(GP 커넥션 풀, 0=동시 task 수와 동일).
+- HTTP 로깅: `logging.http.{enabled,bodies,max_body,headers,exclude_paths}`(기본 on/on/2048/off/
+  health·metrics·정적·docs). **로그 레벨이 DEBUG 일 때만** 요청/응답이 기록된다(별도 스위치 아님 —
+  `enabled=false` 로 DEBUG 여도 끌 수 있음). 자세히는 `src/core/http_logging.py`.
 - 멀티 coordinator: `store.backend=postgres` + 공유 `history.db_dsn`, `executor.self_report=true`.
 - 백엔드: `impala.host` + `greenplum.dsn` 둘 다 있으면 실제 백엔드, 아니면 `MockBackend`
   (소스는 Impala 전용). query-execute 의 소스 실행은 별개로 `/query-run` 커스텀 함수에 위임한다(예제

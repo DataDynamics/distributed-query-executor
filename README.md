@@ -128,6 +128,7 @@ src/                   # 파이썬 소스 루트(패키지: core / coordinator /
     config_loader.py     config.properties + config.yml(${변수:기본값}) 치환 로더
     config.py            Settings — config 파일 기반 전역 설정(싱글턴)
     logging.py           일 단위 롤링 로깅(파일명_YYYYMMDD.log) + WARNING 전용 로그(*-warn.log) 분리
+    http_logging.py      HTTP 요청/응답 DEBUG 로깅 미들웨어(core.http, 마스킹·절단·잡음경로 제외)
     metrics.py           CPU/메모리/디스크 시스템 메트릭 수집(psutil)
   coordinator/         # FastAPI: 검증 → 분할 → 디스패치 → 상태 추적
     parser.py            1단계 검증 + 파티션 IN 절 탐지(sqlglot, strict/lenient 모드)
@@ -244,6 +245,22 @@ tests/               # coordinator·executor 검증 + 라이프사이클 + admis
     운영 중 문제만 빠르게 추적하기 위해서입니다. 이 경고 로그는 로거 이름까지 담는 강화된
     포맷이며, 메인 레벨(`logging.level`)을 WARNING 보다 높게 잡아 두더라도 비지 않습니다.
     동작은 `logging.warn.{enabled,level,suffix}`(기본 `true`/`WARNING`/`-warn`)로 조절합니다.
+  - **HTTP 요청/응답 로깅**: 로그 레벨이 **DEBUG 일 때만**(`app.debug=true` 또는
+    `log.level=DEBUG`) 각 HTTP 요청/응답을 `core.http` 로거로 자동 기록합니다. 별도 스위치를
+    켤 필요 없이 DEBUG 로 내리면 켜지고, INFO 로 올리면 꺼집니다. 요청/응답을 두 줄로
+    남기며(짧은 `rid` 로 상관), 예시는 다음과 같습니다.
+    ```
+    → [0c5a015b] POST /jobs?dry=0 client=10.0.0.5
+      [0c5a015b] req-body {"sql":"SELECT ...","password":"***"}
+    ← [0c5a015b] POST /jobs 200 34.1ms
+      [0c5a015b] resp-body {"job_id":"job_..."}
+    ```
+    본문·헤더의 비밀값(DSN·`password`/`token`/`Authorization` 등)은 **마스킹**되고, 본문은
+    `max_body`(기본 2KB)로 절단됩니다. 대시보드 폴링·정적 파일 같은 잡음(`/health`·`/metrics`·
+    `/assets`·`/docs` 등)은 기본 제외됩니다. 순수 ASGI 미들웨어로 본문을 "엿보기만" 하므로
+    실제 처리(다운스트림 핸들러의 본문 읽기)에는 영향이 없습니다. 동작은
+    `logging.http.{enabled,bodies,max_body,headers,exclude_paths}`로 조절합니다
+    (기본 `true`/`true`/`2048`/`false`/health·metrics·정적·docs).
 - 모니터링과 관련해, 두 서비스 모두 `/health` 와 `/metrics`(CPU·메모리·디스크)를 제공합니다.
   coordinator 는 각 executor 의 `/health`·`/metrics` 를 주기적으로 폴링해(`GET /executors`)
   보여 주고, `monitor.db_dsn` 이 설정되어 있으면 CPU/메모리 사용량을 PostgreSQL

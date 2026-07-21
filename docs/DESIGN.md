@@ -651,11 +651,14 @@ coordinator가 여러 대일 때 생기는 까다로운 문제가 하나 있습�
 
 **기동 시점의 가시성**도 로깅으로 챙깁니다. coordinator·executor 는 뜰 때 Spring Boot 식 ASCII 배너(버전·역할·포트)와 함께 **실제로 로딩한 설정 파일(`config.properties`·`config.yml`)의 절대 경로**를 콘솔에 찍습니다(파일을 못 찾으면 해당 줄 뒤에 `← 파일 없음(로딩 실패)!` 마커). 이 콘솔 출력은 표준출력(stdout)이라 런처(`bin/env.sh`)가 `logs/<name>.out`으로 리다이렉트하는데, 여기에 더해 **같은 배너 전체(아트 + 버전 + 설정 절대 경로)를 애플리케이션 로그(`.log`)에도 한 레코드로** 남깁니다(`banner.log_startup`, 첫 줄은 grep 하기 좋은 `<role> 기동 (version=… port=…)` 요약). `.out`을 못 봐도 어떤 버전이 **어떤 설정 파일로** 떴는지 `.log`에서 바로 확인할 수 있어, "설정이 제대로 로딩됐는지 알 수 없는" 상황을 없애기 위함입니다.
 
+요청 단위 추적을 위해 **HTTP 요청/응답 로깅**도 있습니다. 로그 레벨이 **DEBUG 일 때만**(`app.debug=true` 또는 `log.level=DEBUG`) 각 HTTP 요청/응답을 `core.http` 로거로 자동 기록합니다 — 별도 스위치를 켜지 않아도 DEBUG 로 내리면 켜지고 INFO 로 올리면 꺼지므로, "지금 무슨 요청이 오가는지"를 필요할 때만 켜서 볼 수 있습니다. 요청은 도착 즉시 한 줄(메서드·경로·client), 처리가 끝나면 한 줄(상태·소요시간)을 남기고 짧은 `rid`로 상관하며, 켜져 있으면 요청/응답 본문도 함께 남깁니다. 구현은 **순수 ASGI 미들웨어**(`core.http_logging`)로, `receive`/`send` 메시지를 **엿보기만** 하기에(스트림을 소비하지 않음) 다운스트림 핸들러의 본문 읽기에 영향을 주지 않습니다. 본문 복사본은 `max_body`(기본 2KB)까지만 보관하고 원본 메시지는 항상 그대로 흘려보내므로, 스트리밍/대용량 응답(쿼리 결과 등)도 **로그만 절단될 뿐 정상 전달**됩니다. 본문·헤더의 자격증명(DSN·`password`/`token`/`Authorization` 등)은 마스킹하고, 대시보드 폴링·정적 파일 같은 잡음 경로(`/health`·`/metrics`·`/assets`·`/docs` 등)는 기본 제외합니다.
+
 - **시스템 메트릭**: 두 서비스 모두 `/metrics`(CPU/메모리/디스크 + 동시 처리). coordinator `HealthMonitor`가 executor를 폴링해 `/executors`·`/cluster`로 제공하고 `monitor.db_dsn` 설정 시 `executor_health_metrics`에 기록.
 - **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query / 실행 이력 / Executor / 환경설정 / 그외 정보.
 - **executor self-view 대시보드(`/`)**: remote 모드의 각 executor 프로세스가 자기 task/메트릭/이력을 노출(처리중 Task / 실행 이력 / 환경설정 / 그외 정보). local 모드에선 executor 프로세스가 없으므로 자연히 coordinator 화면만 보인다.
 - **로깅**: `/data1/distributed-query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트 자동 주입. **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적.
 - **기동 배너 로그**: 기동 시 ASCII 배너(버전·역할·포트) + **로딩한 설정 파일 절대 경로**(못 찾으면 `파일 없음` 마커)를 콘솔(stdout→`.out`)에 찍고, 동일 배너 전체를 `.log`에도 한 레코드로 남긴다(`banner.log_startup`, 첫 줄은 grep 용 요약). 설정 로딩 여부·경로를 어느 파일에서든 확인. 순수 렌더 함수(`render_banner`/`render_config_sources`)는 I/O 무관이라 테스트 대상(`tests/test_banner_version.py`).
+- **HTTP 요청/응답 로깅**: 로그 레벨이 **DEBUG 일 때만** 각 요청/응답을 `core.http` 로거로 자동 기록(별도 스위치 아님 — `logging.http.enabled=false` 로 DEBUG 여도 끔). 순수 ASGI 미들웨어(`core.http_logging`)로 `receive`/`send` 를 엿보기만 해 본문 읽기를 안 깨고, 본문 복사본은 `max_body` 까지만 보관(스트리밍/대용량은 로그만 절단, 원본은 정상 전달). 본문·헤더 자격증명 마스킹(`core.masking`), 잡음 경로(health/metrics/정적/docs) 기본 제외. 설정 `logging.http.{enabled,bodies,max_body,headers,exclude_paths}`. 순수 함수(`format_body`/`format_headers`/`is_excluded`)는 테스트 대상(`tests/test_http_logging.py`).
 
 ---
 
