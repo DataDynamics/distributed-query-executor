@@ -10,6 +10,22 @@ from __future__ import annotations
 
 import re
 
+# 자유 텍스트(요청/응답 본문·헤더)에서 흔한 자격증명 패턴을 가리기 위한 정규식.
+# 1) DSN/URL 의 userinfo 비밀번호: scheme://user:pass@host → user:***@host
+_DSN_CRED_RE = re.compile(r"://([^:/@\s]+):([^@\s]+)@")
+# 2) key=value / "key": "value" 형태의 비밀 필드(대소문자 무시). JSON·폼·properties 공통.
+#    값은 따옴표 안이거나(쉼표·중괄호·따옴표 전까지) 공백/구분자 전까지로 본다.
+_SECRET_FIELD_RE = re.compile(
+    r'(?P<key>["\']?(?:password|passwd|pwd|secret|token|api[_-]?key|auth[_-]?token)["\']?'
+    r'\s*[:=]\s*)(?P<q>["\']?)(?P<val>[^"\',\s}&]+)',
+    re.IGNORECASE,
+)
+
+# 값 전체를 통째로 가릴 민감 HTTP 헤더(이름 소문자 기준).
+SENSITIVE_HEADERS = frozenset(
+    {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"}
+)
+
 
 def mask_dsn(dsn: str | None) -> str:
     """DSN 의 비밀번호를 마스킹한다: ``scheme://user:pass@host`` → ``scheme://user:***@host``.
@@ -26,3 +42,37 @@ def mask_dsn(dsn: str | None) -> str:
     if not dsn:
         return ""
     return re.sub(r"://([^:/@]+):([^@]+)@", r"://\1:***@", dsn)
+
+
+def mask_text(text: str | None) -> str:
+    """자유 텍스트(요청/응답 본문 등)에서 흔한 자격증명을 **best-effort** 로 가린다.
+
+    HTTP 요청/응답 본문을 DEBUG 로그로 남길 때 비밀번호·토큰·DSN 이 평문으로 새지
+    않도록, 아래 두 패턴을 치환한다. 구조 파싱이 아니라 정규식 기반이라 완벽하진 않지만,
+    운영에서 흔한 노출(접속 DSN·`password`/`token` 필드)을 줄이는 것이 목적이다.
+
+    1. DSN/URL userinfo 비밀번호(``user:pass@`` → ``user:***@``).
+    2. ``password``/``token``/``secret``/``api_key`` 등 키의 값(따옴표 유무 무관).
+
+    Args:
+        text: 마스킹할 텍스트(없을 수 있음).
+
+    Returns:
+        비밀값이 ``***`` 로 가려진 텍스트(입력이 없으면 "").
+    """
+    if not text:
+        return ""
+    text = _DSN_CRED_RE.sub(r"://\1:***@", text)
+    text = _SECRET_FIELD_RE.sub(lambda m: f"{m.group('key')}{m.group('q')}***", text)
+    return text
+
+
+def mask_header_value(name: str, value: str) -> str:
+    """민감 HTTP 헤더면 값을 통째로 가리고, 아니면 본문 마스킹 규칙을 적용한다.
+
+    ``Authorization``/``Cookie`` 같은 헤더는 값 전체가 자격증명이므로 ``***`` 로 덮고,
+    그 외 헤더는 값 안에 섞인 DSN·비밀 필드만 :func:`mask_text` 로 가린다.
+    """
+    if name.lower() in SENSITIVE_HEADERS:
+        return "***"
+    return mask_text(value)

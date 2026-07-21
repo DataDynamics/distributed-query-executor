@@ -200,6 +200,19 @@ class Settings:
         # 메인 로그 파일명 stem 뒤에 붙는 접미사: foo.log → foo-warn.log
         self.log_warn_suffix: str = _get_nested("logging", "warn", "suffix", "-warn")
 
+        # HTTP 요청/응답 DEBUG 로깅(core.http). 로그 레벨이 DEBUG 일 때만 자동 기록되며,
+        # enabled=false 면 DEBUG 여도 끈다. 본문·헤더는 마스킹·절단, 잡음 경로는 제외.
+        self.log_http_enabled: bool = _to_bool(_get_nested("logging", "http", "enabled", True))
+        self.log_http_bodies: bool = _to_bool(_get_nested("logging", "http", "bodies", True))
+        self.log_http_max_body: int = int(_get_nested("logging", "http", "max_body", 2048))
+        self.log_http_headers: bool = _to_bool(_get_nested("logging", "http", "headers", False))
+        self.log_http_exclude_paths: list[str] = _csv_list(
+            _get_nested(
+                "logging", "http", "exclude_paths",
+                "/health,/metrics,/assets,/favicon.ico,/docs,/redoc,/openapi.json",
+            )
+        )
+
         self.config_dir: Path = _CONFIG_DIR
         self.config_yaml_path: Path = _yaml_path
         self.config_properties_path: Path = _properties_path

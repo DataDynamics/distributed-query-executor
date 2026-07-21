@@ -37,6 +37,16 @@ logging:
     enabled: ${log.warn.enabled:true}             # WARNING 전용 로그 사용 여부
     level: ${log.warn.level:WARNING}              # 전용 로그에 모을 최소 레벨(WARNING/ERROR)
     suffix: ${log.warn.suffix:-warn}              # 메인 파일명 stem 뒤에 붙는 접미사
+  # HTTP 요청/응답 로깅(core.http 로거). 메인 로그 레벨이 DEBUG 일 때만 자동으로 기록된다
+  # (app.debug=true 또는 log.level=DEBUG). enabled=false 면 DEBUG 여도 끈다. 본문·헤더는
+  # 마스킹·절단하며, 잡음 경로(health/metrics/정적/docs)는 exclude_paths 로 제외한다.
+  http:
+    enabled: ${log.http.enabled:true}             # DEBUG 여도 끌 수 있는 스위치
+    bodies: ${log.http.bodies:true}               # 요청/응답 본문 포함(마스킹·max_body 절단)
+    max_body: ${log.http.max_body:2048}           # 본문 로그 최대 바이트(초과분 절단)
+    headers: ${log.http.headers:false}            # 요청/응답 헤더 포함(민감 헤더 값 마스킹)
+    # 로깅 제외 경로(쉼표 구분, 정확 일치 또는 prefix/ 하위)
+    exclude_paths: ${log.http.exclude_paths:/health,/metrics,/assets,/favicon.ico,/docs,/redoc,/openapi.json}
 
 # ───────── Coordinator ─────────
 coordinator:

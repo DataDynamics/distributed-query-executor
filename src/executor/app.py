@@ -31,6 +31,7 @@ from fastapi.responses import HTMLResponse
 
 from core.config import settings
 from core.dbprobe import QueryResult, clamp_limit, run_impala_select, run_postgres_select
+from core.http_logging import install_http_logging
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
@@ -196,6 +197,8 @@ def create_app(
     # 에어갭: 내장 정적 에셋(/assets)과 오프라인 docs(/docs·/redoc)를 등록한다.
     mount_static(app)
     register_offline_docs(app)
+    # HTTP 요청/응답 DEBUG 로깅(로그 레벨이 DEBUG 일 때만 자동 기록). 잡음 경로는 기본 제외.
+    install_http_logging(app, settings)
     app.state.backend = backend
     app.state.tasks = tasks
     app.state.task_history = history

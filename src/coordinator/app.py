@@ -35,6 +35,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
 
 from core.dbprobe import clamp_limit, run_postgres_select
+from core.http_logging import install_http_logging
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.timeutil import format_at_fields, now_dt
@@ -388,6 +389,8 @@ def create_app(
     # 에어갭: 내장 정적 에셋(/assets)과 오프라인 docs(/docs·/redoc)를 등록한다.
     mount_static(app)
     register_offline_docs(app)
+    # HTTP 요청/응답 DEBUG 로깅(로그 레벨이 DEBUG 일 때만 자동 기록). 잡음 경로는 기본 제외.
+    install_http_logging(app, settings)
     # 핸들러들이 클로저로 직접 참조하지만, 미들웨어/디버깅/테스트에서 꺼내 쓸 수
     # 있도록 핵심 의존성을 app.state 에도 보관해 둔다.
     app.state.store = store
