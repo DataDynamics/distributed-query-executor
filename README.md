@@ -834,7 +834,11 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 
 실제 서버에 배포할 때 이 프로젝트는 조금 독특한 규칙을 따릅니다. 보안 정책상 `/etc`·`/opt`·
 `/var` 같은 시스템 디렉터리를 건드리지 않고, 모든 것을 `/data1/distributed-query-executor` 한 트리
-아래에 모아 둡니다. 또한 systemd 시스템 유닛 대신 런처 스크립트로 서비스를 켜고 끕니다.
+아래에 모아 둡니다. 기본은 런처 스크립트(`bin/start-*.sh`)로 서비스를 켜고 끕니다. systemd 로
+관리하고 싶으면 `bin/` 에 유닛 파일(`coordinator.service`, 포트별 인스턴스 `executor@.service`)이
+있어, `systemctl link` 로 설치할 수 있습니다(`bin/install-systemd.sh` 가 링크·활성화를 한 번에
+처리 — /etc 에는 심볼릭 링크만 생깁니다). 예: `sudo ./bin/install-systemd.sh 8087 8086` 후
+`systemctl status coordinator executor@8087`, `journalctl -u coordinator -f`.
 설치 스크립트와 자세한 절차는 [`packaging/README.md`](packaging/README.md) 를 참고하세요. 가장
 기본적인 흐름은 아래와 같습니다.
 

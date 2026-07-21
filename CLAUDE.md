@@ -39,6 +39,7 @@ src/
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
 bin/           # 런처·설치 스크립트(install/start/stop/status·env·check-prereqs·config-tui·dashboard-tui·migrate-config — /data1 배포 트리와 공용)
+               #   + systemd 유닛(coordinator.service·executor@.service 템플릿)·install-systemd.sh(선택: systemctl link)
 config/        # config.properties + config.yml 기본값 + 스키마(postgresql.sql / warehousepg.sql)
 templates/     # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2) — config 와 같은 레벨의 별도 디렉터리
 customs/       # 사이트 커스텀 코드(customs.query_funcs.* — 커스텀 쿼리 함수, src 밖 최상위 패키지)

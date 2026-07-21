@@ -5,8 +5,9 @@
 설정을 다루는 방식도 미리 알아 두면 좋습니다. 이 프로젝트는 **`config.properties` + `config.yml`** 방식을 씁니다. 즉, 값은 `config.properties` 에 적어 두고, 그 값을 `config.yml` 이라는 본문 설정 파일이 가져다 채워 넣는 구조입니다.
 
 > **보안 정책**: `/etc`·`/opt`·`/var` 에 파일을 추가하지 않는다. 애플리케이션·설정·로그·
-> 런타임을 모두 **`/data1/distributed-query-executor`** 아래에 두고, systemd 시스템 유닛 대신
-> **런처 스크립트(`bin/`)** 로 구동한다.
+> 런타임을 모두 **`/data1/distributed-query-executor`** 아래에 두고, 기본은 **런처 스크립트(`bin/`)**
+> 로 구동한다. systemd 를 쓰려면 `bin/` 의 유닛(`coordinator.service`·`executor@.service`)을
+> `systemctl link` 로 설치한다(`bin/install-systemd.sh`, /etc 에는 심볼릭 링크만 생성).
 
 이 정책이 왜 중요한지 한마디 덧붙이면, 시스템 공용 디렉터리를 건드리지 않기 때문에 권한 다툼이나 다른 소프트웨어와의 충돌 없이, 모든 것이 한 폴더 안에 깔끔하게 모여 있게 됩니다. 그래서 백업도 이동도 제거도 쉬워집니다.
 

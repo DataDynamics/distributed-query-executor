@@ -1,0 +1,42 @@
+# Distributed Query Executor — Coordinator systemd 유닛
+#
+# 이 저장소는 기본적으로 런처 스크립트(bin/start-*.sh, nohup+PID)로 구동하지만, systemd 로
+# 관리하고 싶을 때 쓰는 유닛이다. 파일은 배포 트리 bin/ 에 있으며(rsync 로 함께 배포됨),
+# /etc 에 실제 파일을 두지 않는 이 프로젝트 관례에 맞춰 `systemctl link` 로 설치하는 것을
+# 권장한다(/etc/systemd/system 에는 심볼릭 링크만 생김).
+#
+#   sudo systemctl link /data1/distributed-query-executor/bin/coordinator.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now coordinator.service
+#   # 로그·상태:  journalctl -u coordinator -f   /   systemctl status coordinator
+#   # (bin/install-systemd.sh 로 coordinator+executor 를 한 번에 설치할 수도 있다)
+#
+# 참고: 애플리케이션 로그는 /data1/distributed-query-executor/logs 에 파일로 남고(core.logging),
+# stdout/stderr(기동 배너·uvicorn access 등)는 journald 로 간다.
+
+[Unit]
+Description=Distributed Query Executor - Coordinator
+Documentation=file:///data1/distributed-query-executor/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gpadmin
+Group=gpadmin
+# env.sh 와 동일: 작업 디렉터리·설정 디렉터리·PYTHONPATH(src + 루트의 customs 패키지).
+WorkingDirectory=/data1/distributed-query-executor
+Environment=QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config
+Environment=PYTHONPATH=/data1/distributed-query-executor/src:/data1/distributed-query-executor
+# 선택: 운영자 재정의(예: COORDINATOR_EXECUTOR_MODE=local, STORE_BACKEND=postgres). 없으면 무시.
+EnvironmentFile=-/data1/distributed-query-executor/config/coordinator.env
+ExecStart=/data1/distributed-query-executor/.venv/bin/python -m coordinator
+# 인메모리 상태 → 단일 프로세스(워커 수는 코드에서 1로 고정). 죽으면 재기동.
+Restart=on-failure
+RestartSec=5
+# SIGTERM 으로 정상 종료(uvicorn graceful). 여유 있게 대기.
+KillSignal=SIGTERM
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target
