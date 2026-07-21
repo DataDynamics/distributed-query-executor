@@ -628,7 +628,11 @@ def create_app(
                 fn, req.sql, config=dict(settings.query_func_config), limit=limit
             )
         except Exception as e:  # 커스텀 함수 내부 오류(연결/인증/SQL 등) → 502 + 원인
-            logger.warning("커스텀 실행 함수(%s) 실패: %s", settings.query_func_module, e)
+            # 커스텀 함수가 자체 로깅을 하지 않아도 원인을 추적할 수 있도록
+            # 스택 트레이스까지 남긴다(WARNING 이상 → *-warn.log 에도 기록).
+            logger.warning(
+                "커스텀 실행 함수(%s) 실패: %s", settings.query_func_module, e, exc_info=True,
+            )
             raise HTTPException(status_code=502, detail=f"커스텀 실행 함수 실패: {e}")
         # 반환은 QueryResult 또는 {columns, rows, row_count, truncated, elapsed_ms} dict 를 허용한다.
         body = result.to_dict() if isinstance(result, QueryResult) else dict(result)

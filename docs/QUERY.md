@@ -337,6 +337,15 @@ config 의 `user`/`password` 값으로 바꿔치기해 입력을 공급한다(�
 로그인 결과는 프로세스당 1회만 만들어 캐시하고(실패 시 미캐시 → 다음 요청에서 재시도),
 전역 패치는 락으로 직렬화 후 finally 로 원복한다.
 
+**로깅**: 커스텀 함수는 executor 프로세스 안에서 실행되므로, 표준 `logging` 을 쓰면 별도
+설정 없이 executor 의 로그 파일(`executor-<포트>.log`, WARNING 이상은 `*-warn.log`)에
+그대로 남는다 — 파일 상단에 `logger = logging.getLogger(__name__)` 를 두고 쓴다.
+`print()` 는 로그 파일에 기록되지 않으니 쓰지 말 것. 오류는 `logger.exception(...)` 으로
+스택 트레이스까지 남긴 뒤 **다시 raise** 한다(executor 가 502 로 응답하며, executor 도
+실패 시 트레이스를 warn 로그에 남긴다). 접속 대상·실패한 SQL 앞부분·행수/경과 같은 추적
+정보를 남기되 **비밀값(password 등)은 절대 로그에 넣지 않는다** — 예제 `trino_runner.py`
+의 `logger.info`/`logger.exception` 사용을 참고.
+
 **이벤트 루프**: 커스텀 함수(또는 그 의존 라이브러리)가 `nest_asyncio` 처럼 이벤트 루프를
 패치하는 코드를 쓰면 uvloop(Cython 루프)에서는 `can't patch loop of type uvloop.Loop` 로
 실패한다. 그래서 executor 는 uvicorn 을 `loop="asyncio"`(순수 파이썬 루프)로 기동한다

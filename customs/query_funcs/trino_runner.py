@@ -41,11 +41,18 @@ import builtins
 import getpass
 import importlib
 import io
+import logging
 import sys
 import threading
 import time
 
 from core.dbprobe import QueryResult, _shape
+
+# 커스텀 함수는 executor 프로세스 안에서 실행되므로, 표준 logging 을 쓰면 별도 설정 없이
+# executor 의 로그 파일(executor-<포트>.log, WARNING 이상은 *-warn.log)에 그대로 남는다.
+# print() 는 로그 파일에 남지 않으니 쓰지 말 것. 오류는 logger.exception() 으로 남기고
+# 다시 raise 해야 스택 트레이스가 로그에 기록되고 executor 는 502 로 응답한다.
+logger = logging.getLogger(__name__)
 
 # ── 대화형 login() 의 비대화형 처리 ──────────────────────────────────────
 # 사내 인증 모듈의 login() 이 input()/getpass.getpass() 로 자격증명을 묻는 경우를 위한
@@ -89,7 +96,13 @@ def _login_noninteractive(config: dict):
         # input() 을 직접 쓰지 않고 sys.stdin.readline() 등으로 읽는 구현까지 커버한다.
         sys.stdin = io.StringIO(f"{user}\n{password}\n")
         try:
+            logger.info("커스텀 login 호출: %s (user=%s)", dotted, user)
             _login_session = login_fn()
+            logger.info("커스텀 login 성공: %s", dotted)
+        except Exception:
+            # 스택 트레이스까지 로그에 남기고 다시 raise — executor 가 502 로 응답한다.
+            logger.exception("커스텀 login 실패: %s (user=%s)", dotted, user)
+            raise
         finally:
             builtins.input, getpass.getpass, sys.stdin = orig
         return _login_session
@@ -131,14 +144,34 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
         elif low:
             kwargs["verify"] = verify  # CA 번들 파일 경로로 해석
 
-    conn = trino.dbapi.connect(**kwargs)
+    # 접속 대상을 로그로 남긴다 — 실패 시 어느 서버/카탈로그였는지 바로 확인할 수 있다.
+    # 비밀값(password)은 절대 로그에 넣지 않는다.
+    logger.info(
+        "trino 접속: %s://%s:%s catalog=%s schema=%s user=%s",
+        kwargs["http_scheme"], kwargs["host"], kwargs["port"],
+        kwargs["catalog"], kwargs["schema"], kwargs["user"],
+    )
+    try:
+        conn = trino.dbapi.connect(**kwargs)
+    except Exception:
+        logger.exception("trino 접속 실패: %s:%s", kwargs["host"], kwargs["port"])
+        raise
+
     try:
         cur = conn.cursor()
-        cur.execute(sql)
+        try:
+            cur.execute(sql)
+        except Exception:
+            # 어떤 SQL 이 실패했는지 앞부분만 잘라 함께 남긴다(전문은 장황할 수 있음).
+            logger.exception("trino 쿼리 실패: %.500s", sql)
+            raise
         if cur.description is None:
             return _shape([], [], limit, started)
         columns = [d[0] for d in cur.description]
         raw = cur.fetchmany(limit + 1)          # limit+1 로 잘림(truncated) 판정
-        return _shape(columns, raw, limit, started)
+        result = _shape(columns, raw, limit, started)
+        logger.info("trino 쿼리 완료: %d행(truncated=%s) %.0fms",
+                    result.row_count, result.truncated, result.elapsed_ms)
+        return result
     finally:
         conn.close()
