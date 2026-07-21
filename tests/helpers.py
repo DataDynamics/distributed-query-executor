@@ -2,7 +2,7 @@
 
 ``MockLocalStageBackend``: GP·Impala 없이 local_stage 파이프라인을 "파일 루프 닫힘"까지
 통합 검증하기 위한 백엔드 목. export 는 실제 CSV 파일을 쓰고, load 는 외부테이블 DDL 의
-``file://`` 경로를 파싱해 그 파일들을 읽어 인메모리 target 에 집계한다(docs/SCENARIO.md B 참고).
+``file://`` 경로를 파싱해 그 파일들을 읽어 인메모리 target 에 집계한다(docs/GUIDE.md(local_stage 절) 참고).
 """
 
 from __future__ import annotations

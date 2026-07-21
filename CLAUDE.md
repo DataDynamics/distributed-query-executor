@@ -1,7 +1,8 @@
 # CLAUDE.md
 
-이 저장소에서 작업하는 Claude Code(및 기타 에이전트)를 위한 안내. 자세한 사용법은
-[README.md](README.md), 설계는 [DESIGN.md](docs/DESIGN.md), 배포는 [packaging/README.md](packaging/README.md) 참고.
+이 저장소에서 작업하는 Claude Code(및 기타 에이전트)를 위한 안내. 개요·빠른 시작은
+[README.md](README.md), 설계 심화는 [docs/DESIGN.md](docs/DESIGN.md), 실행 모드 사용법은
+[docs/GUIDE.md](docs/GUIDE.md), 배포는 [packaging/README.md](packaging/README.md) 참고.
 
 ## 프로젝트 개요
 
@@ -76,8 +77,8 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   기존 요청 필드에 주입한다(이후 parser→splitter→dispatch 무변경). 커스텀 함수는
   `@template_filter`/`@template_global` 레지스트리(내장 `sql_str`/`sql_in`/`sql_ident`/`sql_num`/
   `date_range`) + 설정 `template.func_modules` 로 확장. `template_id` 미지정 시 기존 raw-SQL
-  방식 그대로(하위 호환). 예제: `templates/sales_migration/`. 자세히는 DESIGN §18.
-  **결과 반환 실행**(`POST /query-execute`, DESIGN §18.7): 같은 템플릿을 `render_query()`(select
+  방식 그대로(하위 호환). 예제: `templates/sales_migration/`. 자세히는 DESIGN.
+  **결과 반환 실행**(`POST /query-execute`, DESIGN): 같은 템플릿을 `render_query()`(select
   조각만 렌더)로 SELECT 만 만들어 실행하고 결과(상위 N행)를 동기 반환한다. coordinator 가 `/jobs` 와
   동일 정책으로 **가장 한가한 executor 를 골라 프록시**(클라이언트는 executor 를 모름), greenplum/
   history 는 직접 실행. `params` 는 이름-값 항목 배열. 응답에 `executed_by`(실행 executor, 직접이면 null).
@@ -85,17 +86,17 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   `/query-run` 하나로 프록시(greenplum/history 만 coordinator 직접). executor 가 `query.func.module`(dotted
   path, importlib 로딩) 함수를 `run(sql, config, limit)` 로 호출. `config` 는 `query.func.config.*` 를
   프리픽스로 모은 자유 설정 dict(`src/core/config.py` 의 `_collect_prefix`, raw properties 기반 — YAML 무관).
-  참조 구현·설정은 QUERY.md / `customs/query_funcs/trino_runner.py`. 임의 SQL 미리보기(`/datasources/
+  참조 구현·설정은 docs/GUIDE.md / `customs/query_funcs/trino_runner.py`. 임의 SQL 미리보기(`/datasources/
   {name}/query`)는 별개 운영 점검용으로 built-in 유지.
 - `src/coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
-  **날짜 태스크 컬럼 fan-out**(DESIGN §18.8): `/jobs` 에 `task_column`+`task_range`(오늘 기준 상대
+  **날짜 태스크 컬럼 fan-out**(DESIGN): `/jobs` 에 `task_column`+`task_range`(오늘 기준 상대
   일수, 양끝 포함)를 주면 IN 분할 대신 **날짜=1 task** 로 펼친다(`app.py` `_build_fanout`/`_compute_task_dates`,
   IN 파싱·split 우회). 날짜별 SELECT 만 `render_query` 로 렌더, INSERT/staging 은 날짜 독립이라 1회
   렌더해 job 공유. stage_insert 전용이며 **append** 적재(프레임워크는 대상에 DELETE 안 함 — 멱등이
   필요하면 대상 선비우기/날짜별 물리 테이블). 예제: `templates/daily_sales/`.
 - `src/coordinator/stage.py` — **`local_stage`(file:// 세그먼트 로컬 스테이징) Phase 2 SQL 조립**(순수
   함수): `file://` 외부테이블 DDL·staging 적재·멱등 DELETE·정리 SQL, 파일 예산 배분
-  (`plan_file_budget`, 호스트당 ≤ S_h), executor_url→gp_hostname 유도. 자세히는 DESIGN §17.
+  (`plan_file_budget`, 호스트당 ≤ S_h), executor_url→gp_hostname 유도. 자세히는 DESIGN.
 - `src/coordinator/job_store.py` — `InMemoryJobStore`(단일) / `SqlJobStore`(멀티 coordinator, JSONB).
 - `src/executor/backend.py` — `ImpalaToGreenplumBackend`(소스 impyla → psycopg) + `MockBackend`.
   소스는 Impala 전용이다. 소스 접속은 `_source_connect`/`_open_source_cursor`/`_source_execute` 에
@@ -105,7 +106,7 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   `exec_mode`: `copy`(COPY) / `statement`(INSERT 그대로 실행) / `stage_insert`(TEMP 경유) /
   `local_stage`(executor 가 로컬 CSV export → coordinator 가 `file://` 외부테이블로 세그먼트
   로컬 병렬 read → target INSERT, 2-phase). local_stage 는 executor 를 GP 세그먼트 호스트에
-  co-locate 해야 한다(DESIGN §17). export fetch 는 형변환을 꺼 timestamp/date 를 wire 문자열
+  co-locate 해야 한다(DESIGN). export fetch 는 형변환을 꺼 timestamp/date 를 wire 문자열
   그대로 받아 CSV 로 쓴다(재파싱 비용 제거 — impyla `convert_types=False`).
 - `src/executor/app.py` — task 상태머신(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED),
   `executor.max_concurrent_tasks` 세마포어.

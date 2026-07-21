@@ -1,4 +1,4 @@
-"""local_stage HTTP 멀티프로세스 통합 하니스 (docs/SCENARIO.md B-4).
+"""local_stage HTTP 멀티프로세스 통합 하니스 (docs/GUIDE.md(local_stage 절)).
 
 executor 를 실제 HTTP 서버(uvicorn 스레드)로 2대 띄우고, coordinator 는 HttpDispatcher 로
 그들에게 POST /tasks → 폴링 → /metrics 로 gp_hostname 수집 → GP file:// 적재(주입된 목) →
