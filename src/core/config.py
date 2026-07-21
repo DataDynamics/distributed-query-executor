@@ -163,10 +163,12 @@ class Settings:
         # ───────── 쿼리 템플릿 엔진 ─────────
         # SELECT/STAGING DDL/INSERT 를 서버 템플릿 파일로 런타임 생성(요청은 파라미터만 전달).
         self.template_enabled: bool = _to_bool(_get("template", "enabled", True))
-        # 템플릿 루트 디렉터리(하위 <template_id>/manifest.yml + *.sql.j2). 개발 시
-        # config/templates 를 QUERY_EXECUTOR_CONFIG_DIR 로 가리키면 그 아래를 쓴다.
+        # 템플릿 루트 디렉터리(하위 <template_id>/manifest.yml + *.sql.j2). config 와 같은
+        # 레벨의 templates/ 를 쓴다(설정 디렉터리의 형제). 기본값은 설정 디렉터리의 부모 아래
+        # templates — 배포 /data1/.../templates, 개발 <repo>/templates. 보통 config.yml/
+        # properties 의 template.dir 이 이 값을 덮어쓴다.
         self.template_dir: str = _get(
-            "template", "dir", str(_CONFIG_DIR / "templates")
+            "template", "dir", str(_CONFIG_DIR.parent / "templates")
         )
         # 파일 변경 자동 리로드(개발 편의). 운영에선 false 로 stat 비용 제거.
         self.template_auto_reload: bool = _to_bool(_get("template", "auto_reload", False))

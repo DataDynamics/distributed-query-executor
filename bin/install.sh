@@ -76,9 +76,11 @@ else
 fi
 
 echo "==> 설정 파일 배치 -> $CONF_DIR"
-# 소스 트리의 config/ 기본값(properties·yml·스키마·templates)을 실사용 설정 디렉터리
-# ($CONF_DIR)에 최초 1회만 통째로 시딩한다. rsync 는 위에서 '/config' 를 제외하므로
-# 운영자 편집·인증서는 업그레이드 때 보존된다(새 기본값 반영은 migrate-config.sh 로 별도 처리).
+# 소스 트리의 config/ 기본값(properties·yml·스키마)을 실사용 설정 디렉터리($CONF_DIR)에
+# 최초 1회만 통째로 시딩한다. rsync 는 위에서 '/config' 를 제외하므로 운영자 편집·인증서는
+# 업그레이드 때 보존된다(새 기본값 반영은 migrate-config.sh 로 별도 처리).
+# 템플릿(templates/)은 config 와 같은 레벨의 별도 디렉터리라 rsync 로 $APP_HOME/templates 에
+# 함께 실리며 업그레이드마다 갱신된다(시딩 대상 아님 — 버전 관리되는 시나리오 코드).
 mkdir -p "$CONF_DIR" "$LOG_DIR" "$RUN_DIR" "$BIN_DIR"
 if [[ ! -f "$CONF_DIR/config.yml" ]]; then
     cp -a "$SRC_DIR/config/." "$CONF_DIR/"

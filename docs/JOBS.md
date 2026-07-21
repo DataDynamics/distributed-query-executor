@@ -134,7 +134,7 @@ SQL 전문 대신 서버 템플릿을 `params` 로 렌더한다. 템플릿이 SE
 
 ## 4. 예제 템플릿: `sales_migration`
 
-`config/templates/sales_migration/` — 날짜 구간(start_dt~end_dt)의 IN 목록을 자동 생성하는
+`templates/sales_migration/` — 날짜 구간(start_dt~end_dt)의 IN 목록을 자동 생성하는
 stage_insert 템플릿.
 
 ### `manifest.yml`
@@ -180,7 +180,7 @@ SELECT user_id, amount, region, dt
 FROM {{ staging_table | sql_ident }}
 ```
 
-> 날짜별 fan-out 이 필요하면 `config/templates/daily_sales/`(SELECT 가 `WHERE dt = {{ task_date }}`
+> 날짜별 fan-out 이 필요하면 `templates/daily_sales/`(SELECT 가 `WHERE dt = {{ task_date }}`
 > 로 하루치만 조회)를 참고한다.
 
 ---

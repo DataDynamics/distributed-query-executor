@@ -14,7 +14,7 @@ query:
 # 템플릿 루트 아래 <template_id>/manifest.yml + *.sql.j2 조각으로 하나의 이관 시나리오를 이룬다.
 template:
   enabled: ${template.enabled:true}                       # 템플릿 기능 사용 여부
-  dir: ${template.dir:/data1/distributed-query-executor/config/templates}  # 템플릿 루트 디렉터리(개발: config/templates)
+  dir: ${template.dir:/data1/distributed-query-executor/templates}  # 템플릿 루트 디렉터리(config 와 같은 레벨, 개발: templates)
   auto_reload: ${template.auto_reload:false}              # 파일 변경 자동 리로드(개발 편의, 운영 off)
   func_modules: ${template.func_modules:}                 # 커스텀 함수 모듈(쉼표 구분 import 경로). 기동 시 import 되어 필터/글로벌 등록
   validate_ddl_single_stmt: ${template.validate_ddl_single_stmt:true}  # 렌더된 DDL/INSERT 를 단일 문으로 강제(다중 문 인젝션 방지)

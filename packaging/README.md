@@ -92,9 +92,11 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
 > 경로를 직접 지정하고 싶으면 `--old`(라이브)·`--new`(새 기본)·`--out`(기록 대상, 기본은 `--old`)을
 > 명시할 수도 있습니다. 병합 후 서비스를 재기동하면 새 설정이 적용됩니다.
 >
-> `config.yml`·스키마(`postgresql.sql`/`warehousepg.sql`)·템플릿(`config/templates/`)의 새 버전
-> 반영은 migrate-config 대상이 아닙니다(운영자 편집 보존을 위해 설치 경로가 덮어써지지 않으므로).
-> 새 버전 파일이 필요하면 새 소스 트리에서 해당 파일을 설치 경로로 직접 복사하세요.
+> `config/` 안의 `config.yml`·스키마(`postgresql.sql`/`warehousepg.sql`)는 migrate-config 대상이
+> 아닙니다(운영자 편집 보존을 위해 설치 경로 `config/` 가 덮어써지지 않으므로). 새 버전 파일이
+> 필요하면 새 소스 트리에서 해당 파일을 설치 경로로 직접 복사하세요. 반면 **템플릿(`templates/`)은
+> `config/` 와 같은 레벨의 별도 디렉터리**라 rsync 로 `$APP_HOME/templates` 에 함께 실려
+> **업그레이드마다 자동 갱신**됩니다(별도 복사 불필요 — 버전 관리되는 시나리오 코드).
 
 ## 사전 점검 (check-prereqs.sh)
 

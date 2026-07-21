@@ -208,7 +208,7 @@ def test_engine_multi_statement_ddl_rejected(tmp_path):
 def tmpl_client(runner, store, monkeypatch):
     """예제 템플릿 디렉터리를 가리키도록 설정을 조정한 coordinator 클라이언트."""
     from coordinator.config import settings
-    repo_templates = Path(__file__).resolve().parent.parent / "config" / "templates"
+    repo_templates = Path(__file__).resolve().parent.parent / "templates"
     monkeypatch.setattr(settings, "template_enabled", True, raising=False)
     monkeypatch.setattr(settings, "template_dir", str(repo_templates), raising=False)
     monkeypatch.setattr(settings, "template_auto_reload", False, raising=False)

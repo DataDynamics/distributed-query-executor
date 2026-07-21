@@ -39,7 +39,8 @@ src/
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
 bin/           # 런처·설치 스크립트(install/start/stop/status·env·check-prereqs·config-tui·dashboard-tui·migrate-config — /data1 배포 트리와 공용)
-config/        # config.properties + config.yml 기본값 + templates/ + 스키마(postgresql.sql / warehousepg.sql)
+config/        # config.properties + config.yml 기본값 + 스키마(postgresql.sql / warehousepg.sql)
+templates/     # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2) — config 와 같은 레벨의 별도 디렉터리
 customs/       # 사이트 커스텀 코드(customs.query_funcs.* — 커스텀 쿼리 함수, src 밖 최상위 패키지)
 packaging/     # 배포·패키징: README.md(배포 안내) + wheels/(에어갭 휠 번들 py39·py311). 설치는 bin/install.sh
 tests/         # pytest (coordinator·executor 검증/라이프사이클/admission/대시보드)
@@ -66,7 +67,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   기존 요청 필드에 주입한다(이후 parser→splitter→dispatch 무변경). 커스텀 함수는
   `@template_filter`/`@template_global` 레지스트리(내장 `sql_str`/`sql_in`/`sql_ident`/`sql_num`/
   `date_range`) + 설정 `template.func_modules` 로 확장. `template_id` 미지정 시 기존 raw-SQL
-  방식 그대로(하위 호환). 예제: `config/templates/sales_migration/`. 자세히는 DESIGN §18.
+  방식 그대로(하위 호환). 예제: `templates/sales_migration/`. 자세히는 DESIGN §18.
   **결과 반환 실행**(`POST /query-execute`, DESIGN §18.7): 같은 템플릿을 `render_query()`(select
   조각만 렌더)로 SELECT 만 만들어 실행하고 결과(상위 N행)를 동기 반환한다. coordinator 가 `/jobs` 와
   동일 정책으로 **가장 한가한 executor 를 골라 프록시**(클라이언트는 executor 를 모름), greenplum/
@@ -167,7 +168,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - 백엔드: `impala.host` + `greenplum.dsn` 둘 다 있으면 실제 백엔드, 아니면 `MockBackend`
   (소스는 Impala 전용). query-execute 의 소스 실행은 별개로 `/query-run` 커스텀 함수에 위임한다(예제
   `trino_runner`, 의존성 `trino` 는 이 예제용 — requirements-executor.txt).
-- 템플릿 엔진: `template.dir`(템플릿 루트, 개발 `config/templates`) / `template.enabled` /
+- 템플릿 엔진: `template.dir`(템플릿 루트, 개발 `templates`) / `template.enabled` /
   `template.auto_reload`(개발 편의) / `template.func_modules`(커스텀 함수 모듈) /
   `template.validate_ddl_single_stmt`. 의존성 `Jinja2`(requirements.txt).
 

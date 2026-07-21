@@ -152,7 +152,8 @@ src/                   # 파이썬 소스 루트(패키지: core / coordinator /
     app.py               REST API (POST /tasks, /query-run(커스텀 함수 위임), /datasources, GET /tasks·/tasks/{id}, /cancel, /health, /metrics)
     __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 bin/                 # 런처·설치 스크립트(install·start/stop/status[-coordinator|-executor]·env·check-prereqs·config-tui·dashboard-tui)
-config/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
+config/                # config.properties + config.yml 기본값 + 스키마(*.sql)
+templates/           # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2) — config 와 같은 레벨
 customs/            # 사이트 커스텀 코드(customs.query_funcs.* — 운영에서 직접 사용하는 커스텀 쿼리 함수)
 packaging/           # 배포·패키징 일체: README.md(배포 안내) + wheels/(에어갭 휠 번들). 설치는 bin/install.sh
   wheels/            #   에어갭 오프라인 설치용 휠 번들(파이썬 버전별 py39/·py311/ 두 벌)
@@ -538,7 +539,7 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
   (task 수 = 날짜 수).
 - 적재는 stage_insert **append** 입니다(각 task: 그 날짜 SELECT → staging(TEMP) → target INSERT).
   하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을
-  씁니다. 예제 템플릿: `config/templates/daily_sales/`.
+  씁니다. 예제 템플릿: `templates/daily_sales/`.
 
 ### 결과 반환 실행 (`POST /query-execute`)
 
@@ -870,8 +871,9 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 설치 스크립트가 무엇을 해 주는지도 알아 두면 좋습니다. `install.sh` 는 `gpadmin` 계정과
 `/data1/distributed-query-executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, TLS
 용 자리표시 파일(`config/impala-ca.pem`)을 생성합니다. 이때 설정 디렉터리(`config/`)는 소스
-트리의 기본값(`config.properties`·`config.yml`·스키마·`templates/`)에서 **없을 때만** 통째로
-시딩됩니다.
+트리의 기본값(`config.properties`·`config.yml`·스키마)에서 **없을 때만** 통째로 시딩됩니다.
+템플릿(`templates/`)은 `config/` 와 같은 레벨의 별도 디렉터리라 rsync 로 `$APP_HOME/templates`
+에 함께 실리며, 업그레이드마다 새 버전으로 갱신됩니다(설정과 달리 보존 대상이 아님).
 
 > **업그레이드(재설치) 시 설정**: `install.sh` 를 새 버전으로 다시 실행해도 기존
 > `/data1/distributed-query-executor/config/` 는 보존됩니다 — rsync 가 `config/` 를 제외하고
