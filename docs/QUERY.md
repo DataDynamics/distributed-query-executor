@@ -337,6 +337,12 @@ config 의 `user`/`password` 값으로 바꿔치기해 입력을 공급한다(�
 로그인 결과는 프로세스당 1회만 만들어 캐시하고(실패 시 미캐시 → 다음 요청에서 재시도),
 전역 패치는 락으로 직렬화 후 finally 로 원복한다.
 
+**이벤트 루프**: 커스텀 함수(또는 그 의존 라이브러리)가 `nest_asyncio` 처럼 이벤트 루프를
+패치하는 코드를 쓰면 uvloop(Cython 루프)에서는 `can't patch loop of type uvloop.Loop` 로
+실패한다. 그래서 executor 는 uvicorn 을 `loop="asyncio"`(순수 파이썬 루프)로 기동한다
+(`executor/__main__.py`). executor 의 데이터 경로는 스레드에서 돌고 루프는 제어 트래픽만
+처리하므로 성능 영향은 무시할 수준이다(coordinator 는 커스텀 함수를 실행하지 않아 해당 없음).
+
 ```python
 # examples/query_funcs/trino_runner.py (발췌)
 from core.dbprobe import QueryResult, _shape

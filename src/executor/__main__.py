@@ -63,6 +63,12 @@ def main() -> None:
         port=port,
         workers=1,  # 인메모리 Task 저장소 → 인스턴스당 단일 워커
         log_config=None,
+        # 순수 파이썬 asyncio 루프 고정(uvloop 미사용). 커스텀 쿼리 함수(query.func.module)가
+        # nest_asyncio 등으로 루프를 패치하는 라이브러리를 쓸 수 있는데, Cython 구현인
+        # uvloop 루프는 패치가 불가능해 "can't patch loop of type uvloop.Loop" 로 죽는다.
+        # executor 의 데이터 경로(Impala→GP)는 스레드에서 돌고 루프는 제어 트래픽만
+        # 처리하므로(초당 수십 요청 이하) uvloop 를 포기해도 성능 차이는 무시할 수준이다.
+        loop="asyncio",
     )
 
 
