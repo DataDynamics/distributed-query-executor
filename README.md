@@ -1,12 +1,12 @@
 # Distributed Query Executor
 
 Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분산 쿼리 실행기입니다. 한 대가 모든
-일을 하는 대신, 요청을 받아 작업을 나눠 주는 지휘자 **coordinator** 와 실제로 데이터를 읽고 쓰는
+일을 하는 대신, 요청을 받아 작업을 나눠 주는 **coordinator** 와 실제로 데이터를 읽고 쓰는
 여러 대의 **executor** 로 구성됩니다. 핵심 아이디어는 단순합니다. 하나의 Impala `SELECT` 을 그대로
-한 번에 실행하는 대신, 파티션 컬럼(날짜·지역처럼 데이터를 미리 나눠 둔 컬럼)의 `IN` 목록을 기준으로
-쿼리를 N조각으로 쪼개고, 각 조각을 여러 executor 가 동시에 읽어 Greenplum 에 적재합니다
-(**Impala → Greenplum 이관**). 데이터 자체는 coordinator 를 거치지 않고 각 executor 가 Impala 에서
-직접 읽어 Greenplum 으로 흘려보내며, coordinator 로는 상태와 행 수 같은 가벼운 정보만 오갑니다.
+한 번에 실행하는 대신, 파티션 컬럼(날짜처럼 데이터를 미리 나눠 둔 컬럼)의 `IN` 목록을 기준으로
+쿼리를 N조각으로 쪼개고, 각 조각을 여러 executor 가 동시에 읽어 Greenplum/WarehousePG 에 적재합니다
+(**Impala → Greenplum/WarehousePG 이관**). 데이터 자체는 coordinator 를 거치지 않고 각 executor 가 Impala 에서
+직접 읽어 Greenplum/WarehousePG 으로 흘려보내며, coordinator 로는 상태와 행 수 같은 가벼운 정보만 오갑니다.
 
 이 문서는 **소개 + 빠른 시작 + 핵심 개념 요약**에 집중하는 입구입니다. 깊은 내용은 아래 문서로
 이어집니다.
@@ -22,7 +22,7 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분�
 ## 아키텍처
 
 Client 가 쿼리를 보내면 coordinator 가 그것을 받아 검증·분할한 뒤, 오른쪽의 여러 executor 에게
-일을 나눠 줍니다. 데이터는 coordinator 를 거치지 않고 각 executor 가 Impala 에서 직접 읽어 Greenplum
+일을 나눠 줍니다. 데이터는 coordinator 를 거치지 않고 각 executor 가 Impala 에서 직접 읽어 Greenplum/WarehousePG
 으로 흘려보냅니다.
 
 ```mermaid
@@ -59,9 +59,9 @@ flowchart TB
     Client -- "⑤ GET /jobs/{id}/status" --> API
 ```
 
-요청 한살이는 이렇습니다. coordinator 는 `POST /jobs` 를 받자마자 쿼리를 검증(parser)하고 잘게
+Coordinator 는 `POST /jobs` 를 받자마자 쿼리를 검증(parser)하고 잘게
 나눈(splitter) 뒤 곧바로 `job_id` 를 돌려주고(202), 실제 적재는 백그라운드에서 진행됩니다. 각
-executor 는 받은 sub-query 를 Impala 에서 읽어 Greenplum 에 적재하며 상태·행수만 coordinator 로
+executor 는 받은 sub-query 를 Impala 에서 읽어 Greenplum/WarehousePG 에 적재하며 상태·행수만 coordinator 로
 보고합니다. 모든 task 가 끝나면 coordinator 가 최종 상태(DONE/PARTIAL/FAILED/CANCELLED)를 집계합니다.
 클라이언트는 나중에 `job_id` 로 진행 상태를 조회하면 됩니다. 이와 별개로 coordinator 는
 `monitor.health_interval_s` 마다 각 executor 의 `/health`·`/metrics`(CPU·메모리·디스크)를 폴링해
@@ -82,7 +82,7 @@ python3.9 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-executor 를 실제 Impala/Greenplum 에 붙이려면 드라이버를 추가로 설치합니다. impyla 의 SASL/TLS
+executor 를 실제 Impala/Greenplum(WarehousePG) 에 붙이려면 드라이버를 추가로 설치합니다. impyla 의 SASL/TLS
 빌드에는 시스템 패키지가 필요합니다.
 
 ```bash
@@ -136,7 +136,7 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 `bin/config-tui.sh` 로도 편집할 수 있습니다(항목·기본값·설명·enum 을 `config.yml` 에서 자동 추출,
 저장 시 `.bak` 백업 + 비밀값 마스킹).
 
-자주 손대는 핵심 항목은 다음과 같습니다.
+자주 변경하는 핵심 항목은 다음과 같습니다.
 
 - `coordinator.executors` — executor URL 목록
 - `coordinator.max_concurrent_jobs`(기본 16) / `coordinator.max_pending_jobs`(기본 100) —
@@ -178,9 +178,9 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 
 | `exec_mode` | 동작 | 적합한 경우 |
 |---|---|---|
-| `copy` (기본) | Impala 에서 읽어 Greenplum 에 `COPY` 적재 | 소스·타깃이 다른 엔진. COPY 는 대상 컬럼과 정확히 일치해야 하고, 래퍼는 행을 반환하는 SELECT 여야 함 |
+| `copy` (기본) | Impala 에서 읽어 Greenplum/WarehousePG 에 `COPY` 적재 | 소스·타깃이 다른 엔진. COPY 는 대상 컬럼과 정확히 일치해야 하고, 래퍼는 행을 반환하는 SELECT 여야 함 |
 | `statement` | wrapper SQL(예: `INSERT ... SELECT`)을 대상 DB 에서 그대로 실행 | 한 DB(Greenplum) 안에서 INSERT 로 적재. 컬럼 매핑은 INSERT/SELECT 가 담당 |
-| `stage_insert` | Impala SELECT 결과를 Greenplum staging(TEMP) 에 COPY → staging 을 FROM 으로 INSERT | SELECT 는 Impala, INSERT 는 Greenplum 처럼 서로 다른 엔진 |
+| `stage_insert` | Impala SELECT 결과를 Greenplum/WarehousePG staging(TEMP) 에 COPY → staging 을 FROM 으로 INSERT | SELECT 는 Impala, INSERT 는 Greenplum/WarehousePG 처럼 서로 다른 엔진 |
 | `local_stage` | executor 가 세그먼트 로컬 CSV 로 export → Greenplum 이 `file://` 외부테이블로 세그먼트별 병렬 read → target INSERT (2-phase) | executor 를 GP 세그먼트 호스트에 co-locate 한 대량 이관. 단일 COPY 소켓 병목을 세그먼트 병렬로 대체 |
 
 `stage_insert` 는 `staging_table`+`wrapper_query`(staging 을 FROM 으로 하는 INSERT)가 필수이고
@@ -218,7 +218,7 @@ coordinator·executor 가 같은 곳을 보게 하는 것입니다.
 `GET /cluster` 의 `assignment_counts` 로 확인합니다. 자세한 동작·운영은
 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) 를 참고하세요.
 
-> ⚠️ **스키마는 앱이 자동 생성하지 않습니다.** PostgreSQL 을 쓰기 전에 통합 스키마
+> **스키마는 자동 생성하지 않습니다.** PostgreSQL 을 쓰기 전에 통합 스키마
 > `config/postgresql.sql` 을 먼저 실행해 두어야 합니다(안 하면 "relation does not exist" 로 실패).
 > WarehousePG / Greenplum 7 에 메타 저장소를 둘 때는 `config/warehousepg.sql` 을 대신 적용합니다.
 > ```bash
