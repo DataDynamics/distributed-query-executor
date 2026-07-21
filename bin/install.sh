@@ -50,7 +50,8 @@ mkdir -p "$APP_HOME"
 rsync -a --delete \
     --exclude '.venv' --exclude '.git' --exclude '__pycache__' \
     --exclude '.pytest_cache' --exclude '*.egg-info' --exclude 'logs' \
-    --exclude '/config' --exclude '/run' --exclude '/logs' \
+    --exclude '/config' --exclude '/templates' --exclude '/customs' \
+    --exclude '/run' --exclude '/logs' \
     "$SRC_DIR"/ "$APP_HOME"/
 
 echo "==> 가상환경 및 의존성 설치"
@@ -75,18 +76,18 @@ else
     "$PIP" install -r "$REQ"
 fi
 
-echo "==> 설정 파일 배치 -> $CONF_DIR"
-# 소스 트리의 config/ 기본값(properties·yml·스키마)을 실사용 설정 디렉터리($CONF_DIR)에
-# 최초 1회만 통째로 시딩한다. rsync 는 위에서 '/config' 를 제외하므로 운영자 편집·인증서는
-# 업그레이드 때 보존된다(새 기본값 반영은 migrate-config.sh 로 별도 처리).
-# 템플릿(templates/)은 config 와 같은 레벨의 별도 디렉터리라 rsync 로 $APP_HOME/templates 에
-# 함께 실리며 업그레이드마다 갱신된다(시딩 대상 아님 — 버전 관리되는 시나리오 코드).
+echo "==> 설정·템플릿·커스텀 함수 배치(최초 1회 시딩) -> $APP_HOME"
+# config/·templates/·customs/ 는 모두 운영자 소유 자산이다(설정 편집·사이트 템플릿·커스텀 쿼리
+# 함수 추가). 그래서 위 rsync 에서 세 디렉터리를 제외하고, 최초 설치 때만 소스에서 통째로 시딩한다.
+# 업그레이드 시 새 버전 반영은 migrate-config.sh 가 담당한다(운영자 변경분·추가 파일 보존, .bak 백업).
 mkdir -p "$CONF_DIR" "$LOG_DIR" "$RUN_DIR" "$BIN_DIR"
 if [[ ! -f "$CONF_DIR/config.yml" ]]; then
-    cp -a "$SRC_DIR/config/." "$CONF_DIR/"
+    cp -a "$SRC_DIR/config/." "$CONF_DIR/"       # properties·yml·스키마
     # 로그 경로를 /data1 절대 경로로 고정(개발 기본값 logs -> $LOG_DIR)
     sed -i "s|^log.dir=.*|log.dir=$LOG_DIR|" "$CONF_DIR/config.properties"
 fi
+[[ -d "$APP_HOME/templates" ]] || cp -a "$SRC_DIR/templates" "$APP_HOME/templates"   # 예제 템플릿
+[[ -d "$APP_HOME/customs" ]]   || cp -a "$SRC_DIR/customs"   "$APP_HOME/customs"     # 커스텀 쿼리 함수
 
 # Impala TLS 자리표시 파일(실제 파일로 교체할 것). Greenplum 은 TLS 미적용.
 [[ -f "$CONF_DIR/impala-ca.pem" ]] || printf '# TLS CA 인증서(PEM) 자리표시 — 실제 Impala CA 로 교체할 것\n' > "$CONF_DIR/impala-ca.pem"

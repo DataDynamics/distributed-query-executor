@@ -56,47 +56,49 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
 그렇다면 `install.sh` 는 우리 대신 정확히 무엇을 해 주는 걸까요? 다음과 같은 일들을 차례로 처리합니다.
 
 - 서비스 계정 `gpadmin` 생성(홈 `/data1`)
-- 앱을 `/data1/distributed-query-executor` 로 복사(`.venv`/`.git`/`logs`/`config`/`run` 제외)
+- 앱을 `/data1/distributed-query-executor` 로 복사(`.venv`/`.git`/`logs`/`run`, 그리고 운영자 자산
+  `config`/`templates`/`customs` 제외)
 - `/data1/distributed-query-executor/.venv` 가상환경 + 의존성 설치(`WHEELHOUSE` 지정 시 오프라인)
-- `config/*` 를 `config/` 로 배치(없을 때만), 로그 경로를 `/data1/distributed-query-executor/logs` 로 설정
+- `config/`(설정·스키마)·`templates/`(템플릿)·`customs/`(커스텀 함수)를 소스에서 배치(**없을 때만**),
+  로그 경로를 `/data1/distributed-query-executor/logs` 로 설정
 - TLS 자리표시 파일 생성(`config/impala-ca.pem`)
 - 런처 스크립트를 `bin/` 으로 배치, 소유권/권한 설정
 
-> **업그레이드 시 설정 병합**: 재설치(재실행)해도 기존
-> `/data1/distributed-query-executor/config/` 는 보존됩니다 — rsync 가 `config/` 를 제외하고,
-> 설정 시딩도 "없을 때만" 하므로 운영자 편집·인증서가 그대로 유지됩니다. 뒤집어 말하면 새 버전이
-> 추가·변경한 기본값·키는 자동으로 반영되지 않습니다. 이때 `bin/migrate-config.sh` 로 병합하세요 —
-> 기존 설치 설정에서 운영자가 바꾼 값(새 기본값과 다른 값 + 직접 추가한 키)만 뽑아, 새 버전 기본
-> `config/config.properties` 위에 얹어 다시 기록합니다(주석·순서 보존, `.bak` 백업).
+> **업그레이드 시 자산 반영**: `config/`·`templates/`·`customs/` 는 모두 운영자가 편집·추가하는
+> 자산이라 rsync 에서 제외되고 "없을 때만" 시딩됩니다. 그래서 재설치해도 운영자 편집·인증서·직접
+> 추가한 템플릿·커스텀 함수가 보존되지만, **새 버전이 추가·변경한 기본값·설정 구조·예제도 자동으로
+> 반영되지 않습니다.** 이때 `bin/migrate-config.sh` 가 세 트리를 파일별 전략으로 반영합니다:
 >
-> **어디서 실행하나 (중요)**: 예전에는 배포 트리에 기본값 번들(`conf/`)이 실사용 설정(`config/`)과
-> 별도로 실려, 설치 경로에서 그대로 병합할 수 있었습니다. 지금은 둘이 **하나의 `config/` 로 통합**되어
-> 배포 트리에는 "새 기본값" 원본이 따로 남지 않습니다. 따라서 migrate-config 는 **새로 내려받은
-> (새 버전) 소스 트리에서** 실행해, 그 트리의 `config/config.properties` 를 새 기본값(`--new`)으로
-> 삼고 설치된 라이브 설정을 `--old` 로 가리켜야 합니다. `--old` 기본값이
-> `$QUERY_EXECUTOR_CONFIG_DIR/config.properties`(미설정 시
-> `/data1/distributed-query-executor/config/config.properties`)이므로, 환경변수로 라이브 경로만
-> 지정하면 됩니다.
+> | 대상 | 전략 |
+> |---|---|
+> | `config/config.properties` | 운영자 변경분만 새 기본값 위에 **병합**(값·주석·순서 보존, `.bak`) |
+> | `config/config.yml`·스키마(`*.sql`) | **새 버전으로 교체**(`.bak` 백업) |
+> | `templates/`·`customs/` | 예제는 새 버전 반영(바뀐 파일 `.bak`), **운영자 추가 파일은 보존** |
+>
+> `config.yml` 을 교체하는 이유가 중요합니다 — config.yml 은 값이 아니라 `${변수:기본값}` **구조**라,
+> 새 버전이 추가한 설정은 config.yml 에 자리(placeholder)가 생겨야 실제로 읽힙니다. 예전엔 config.yml
+> 이 반영되지 않아 새 설정이 무시됐는데, 이제 교체로 해결됩니다(운영자 값은 properties 에 있으므로 안전,
+> 만약 config.yml 을 직접 고쳤다면 `.bak` 에서 확인·복원).
+>
+> **어디서 실행하나**: 설치 트리에는 "새 버전 원본"이 없으므로 **새로 내려받은 소스 트리에서**
+> 실행해, 그 트리를 새 버전 기준(`--source-base`)으로 삼고 설치 트리(`--deploy-base`)에 반영합니다.
+> 기본값은 소스 트리 = 이 도구가 속한 트리, 설치 트리 = `$QUERY_EXECUTOR_CONFIG_DIR` 의 부모(미설정
+> 시 `/data1/distributed-query-executor`)라, 보통은 환경변수만 지정하면 됩니다.
 >
 > ```bash
 > # 새 버전 소스 트리로 이동해서 실행(install.sh 재실행으로 코드는 이미 갱신된 뒤).
 > cd <새-버전-소스-트리>
-> # 1) 무엇이 적용될지 먼저 확인(비밀값은 보고에서 마스킹)
+> # 1) 무엇이 반영될지 먼저 확인(비밀값은 보고에서 마스킹, 파일은 안 씀)
 > QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config \
 >   bin/migrate-config.sh --dry-run
-> # 2) 실제 병합(제자리 기록, 직전 설정은 .bak 로 백업)
+> # 2) 실제 반영(config+templates+customs 제자리, 바뀐 파일은 .bak 백업)
 > QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config \
 >   bin/migrate-config.sh
 > ```
 >
-> 경로를 직접 지정하고 싶으면 `--old`(라이브)·`--new`(새 기본)·`--out`(기록 대상, 기본은 `--old`)을
-> 명시할 수도 있습니다. 병합 후 서비스를 재기동하면 새 설정이 적용됩니다.
->
-> `config/` 안의 `config.yml`·스키마(`postgresql.sql`/`warehousepg.sql`)는 migrate-config 대상이
-> 아닙니다(운영자 편집 보존을 위해 설치 경로 `config/` 가 덮어써지지 않으므로). 새 버전 파일이
-> 필요하면 새 소스 트리에서 해당 파일을 설치 경로로 직접 복사하세요. 반면 **템플릿(`templates/`)은
-> `config/` 와 같은 레벨의 별도 디렉터리**라 rsync 로 `$APP_HOME/templates` 에 함께 실려
-> **업그레이드마다 자동 갱신**됩니다(별도 복사 불필요 — 버전 관리되는 시나리오 코드).
+> 트리 루트를 직접 지정하려면 `--deploy-base`(설치)·`--source-base`(새 소스)를 씁니다. config.properties
+> 한 파일만 병합하던 예전 방식(`--old`/`--new`/`--out`)도 하위 호환으로 남아 있습니다. 반영 후 서비스를
+> 재기동하면 적용됩니다.
 
 ## 사전 점검 (check-prereqs.sh)
 

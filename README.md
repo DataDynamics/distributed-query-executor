@@ -870,20 +870,26 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 
 설치 스크립트가 무엇을 해 주는지도 알아 두면 좋습니다. `install.sh` 는 `gpadmin` 계정과
 `/data1/distributed-query-executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, TLS
-용 자리표시 파일(`config/impala-ca.pem`)을 생성합니다. 이때 설정 디렉터리(`config/`)는 소스
-트리의 기본값(`config.properties`·`config.yml`·스키마)에서 **없을 때만** 통째로 시딩됩니다.
-템플릿(`templates/`)은 `config/` 와 같은 레벨의 별도 디렉터리라 rsync 로 `$APP_HOME/templates`
-에 함께 실리며, 업그레이드마다 새 버전으로 갱신됩니다(설정과 달리 보존 대상이 아님).
+용 자리표시 파일(`config/impala-ca.pem`)을 생성합니다. 이때 **운영자 소유 자산**인
+`config/`(설정·스키마)·`templates/`(템플릿)·`customs/`(커스텀 쿼리 함수) 세 디렉터리는 rsync 에서
+제외되고, 소스 기본값에서 **없을 때만** 통째로 시딩됩니다(운영자가 편집·추가한 내용을 업그레이드가
+덮어쓰지 않도록).
 
-> **업그레이드(재설치) 시 설정**: `install.sh` 를 새 버전으로 다시 실행해도 기존
-> `/data1/distributed-query-executor/config/` 는 보존됩니다 — rsync 가 `config/` 를 제외하고
-> 시딩도 "없을 때만" 하므로 운영자가 편집한 값·인증서가 유지됩니다. 대신 새 버전이 추가·변경한
-> 기본값·키는 자동으로 반영되지 않으므로, **새로 내려받은 소스 트리에서** `bin/migrate-config.sh`
-> 를 실행해 병합합니다(그 트리의 `config/config.properties` 를 새 기본값으로, `--old` 로 설치된
-> 라이브 설정을 가리킴). 예: `QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config
-> bin/migrate-config.sh --dry-run` 으로 먼저 확인한 뒤 인자 없이 실제 병합. `config.yml`·스키마·
-> 템플릿의 새 버전은 migrate-config 대상이 아니라 필요 시 수동 복사합니다. 자세한 절차는
-> [`packaging/README.md`](packaging/README.md) 를 참고하세요.
+> **업그레이드(재설치) 시 자산 반영**: `install.sh` 를 새 버전으로 다시 실행해도 기존
+> `config/`·`templates/`·`customs/` 는 rsync 제외 + "없을 때만" 시딩이라 운영자가 편집한 값·인증서,
+> 직접 추가한 템플릿·커스텀 함수가 그대로 유지됩니다. 대신 새 버전이 추가·변경한 기본값·설정
+> 구조·예제도 자동 반영되지 않으므로, **새로 내려받은 소스 트리에서** `bin/migrate-config.sh` 를
+> 실행해 반영합니다. 이 도구는 세 트리를 파일별 전략으로 재조정합니다:
+> - `config/config.properties` — 운영자 변경분만 새 기본값 위에 **병합**(값·주석·순서 보존)
+> - `config/config.yml`·스키마 — **새 버전으로 교체**(`.bak` 백업). config.yml 은 값이 아니라
+>   구조라, 이걸 갱신해야 **새 버전이 추가한 설정이 실제로 먹습니다**(예전엔 이게 안 돼 새 설정이
+>   무시됐음).
+> - `templates/`·`customs/` — 예제는 새 버전으로 반영(바뀐 파일 `.bak`), **운영자가 추가한 파일은
+>   보존**(삭제하지 않음)
+>
+> 예: `QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config bin/migrate-config.sh
+> --dry-run` 으로 먼저 무엇이 반영될지 확인한 뒤 인자 없이 실제 반영합니다(전부 `.bak` 백업).
+> 자세한 절차는 [`packaging/README.md`](packaging/README.md) 를 참고하세요.
 
 ### 에어갭(인터넷 차단) 설치
 

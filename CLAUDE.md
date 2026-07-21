@@ -128,11 +128,16 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   설정목록 index=allowlist 로만 지정 → SSRF 방지, `/datasources` 프록시와 동일 관례). `/cluster`·
   `/executors` 엔트리에 드릴인 키 `index` 를 붙인다(`_annotate_executor_index`). 순수 포매터는
   curses 무관(테스트 대상), config-tui 와 같은 에어갭 stdlib curses.
-- `src/core/config_migrate.py` — **업그레이드용 설정 마이그레이션**(`python -m core.config_migrate`,
-  `bin/migrate-config.sh`). 기존 설치 경로의 config.properties 에서 운영자 변경분(새 기본값과
-  다른 값 + 새 파일에 없는 키)을 찾아 새 기본 config/config.properties 위에 얹어 기록한다
-  (`merge_properties_lines` 재사용 — 주석·순서 보존, 없는 키는 마커 아래 추가, `.bak` 백업,
-  `--dry-run` 보고, 비밀값은 보고에서 마스킹).
+- `src/core/config_migrate.py` — **업그레이드용 자산 마이그레이션**(`python -m core.config_migrate`,
+  `bin/migrate-config.sh`). 새 소스 트리를 기준으로 설치 트리의 **세 운영자 자산 트리(config/·
+  templates/·customs/)**를 파일별 전략으로 반영한다(`migrate_tree`/`migrate_all`): `config.properties`
+  는 운영자 변경분만 새 기본값 위에 **병합**(`merge_properties_lines` — 주석·순서 보존, 없는 키는
+  마커 아래 추가), `config.yml`·스키마·예제(templates/customs)는 **새 버전으로 교체**(`.bak` 백업),
+  **설치 트리에만 있는 파일(운영자 추가 템플릿·커스텀 함수·인증서)은 보존**(삭제 안 함). config.yml
+  을 교체해야 새 버전이 추가한 설정 구조가 실제로 반영된다(안 하면 새 설정이 무시됨 — 이 버그를 해결).
+  `--dry-run` 보고, 비밀값 마스킹. 기본 트리 루트는 `$QUERY_EXECUTOR_CONFIG_DIR` 의 부모(설치)와
+  이 도구가 속한 트리(소스), `--deploy-base`/`--source-base` 로 지정. `--old`/`--new`/`--out` 단일
+  파일 병합은 하위 호환. 이 세 트리는 install.sh rsync 에서 제외되고 최초 1회만 시딩된다.
 - `src/core/version.py` + `src/core/banner.py` — **버전 단일 소스 + 기동 배너**. 버전은
   `version.py` 의 `__version__` **한 줄이 유일 소스**이고, `pyproject.toml` 이 `dynamic`
   + `attr` 로 그 값을 읽는다(버전 올릴 때 이 한 줄만 수정). `banner.py` 는 coordinator/

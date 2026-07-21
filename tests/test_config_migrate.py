@@ -2,13 +2,21 @@
 
 기존 설치본 config.properties 의 사용자 변경분(새 기본값과 다른 값 + 사용자 추가 키)을
 새 기본 파일 위에 얹는 동작을 본다 — 주석·순서 보존, 백업, dry-run, CLI 오류 처리.
+멀티 타깃 모드(config/templates/customs 트리 반영: 신규·갱신·병합·운영자 파일 보존)도 본다.
 """
 
 from pathlib import Path
 
 import pytest
 
-from core.config_migrate import build_plan, main, merge_files, migrate
+from core.config_migrate import (
+    build_plan,
+    main,
+    merge_files,
+    migrate,
+    migrate_all,
+    migrate_tree,
+)
 
 # 새 버전 기본 파일: 주석/빈 줄 포함, 기본값이 바뀐 키(log.level)와 새 키(template.enabled) 포함.
 NEW_TEMPLATE = """\
@@ -102,3 +110,95 @@ def test_main_out_지정_시_별도_경로에_기록한다(paths, tmp_path):
     assert main(["--old", str(old), "--new", str(new), "--out", str(out)]) == 0
     assert "log.level=DEBUG" in out.read_text(encoding="utf-8")
     assert old.read_text(encoding="utf-8") == OLD_INSTALLED          # 원본 무변경
+
+
+# ── 멀티 타깃(디렉터리 트리) 마이그레이션 ───────────────────────────────────
+
+def _mk(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+@pytest.fixture
+def trees(tmp_path: Path) -> tuple[Path, Path]:
+    """소스(새 버전)·설치(운영) 두 트리를 config/templates/customs 로 구성한다."""
+    src, dep = tmp_path / "src", tmp_path / "deploy"
+    # config: properties(운영자 변경) + yml(새 버전 구조 변경) + schema(동일)
+    _mk(src / "config/config.properties", "log.level=INFO\nnew.key=1\n")
+    _mk(dep / "config/config.properties", "log.level=DEBUG\nquery.func.config.pw=secret\n")
+    _mk(src / "config/config.yml", "app:\n  new_section: ${new.key:0}\n")   # 새 버전 구조
+    _mk(dep / "config/config.yml", "app:\n  old_only: 1\n")                 # 구버전
+    _mk(src / "config/postgresql.sql", "CREATE TABLE t();\n")
+    _mk(dep / "config/postgresql.sql", "CREATE TABLE t();\n")               # 동일
+    # 운영자만 가진 인증서(보존돼야 함)
+    _mk(dep / "config/impala-ca.pem", "CERT\n")
+    # templates: 예제 1개 갱신 + 운영자 추가 템플릿 보존
+    _mk(src / "templates/sales/select.sql.j2", "SELECT 1\n")
+    _mk(dep / "templates/sales/select.sql.j2", "SELECT 0\n")               # 바뀜 → 갱신
+    _mk(dep / "templates/mysite/select.sql.j2", "SELECT 99\n")             # 운영자 → 보존
+    # customs(query function): 예제 신규 + 운영자 모듈 보존
+    _mk(src / "customs/query_funcs/trino_runner.py", "def run(): pass\n")
+    _mk(dep / "customs/query_funcs/my_runner.py", "def run(): 1\n")        # 운영자 → 보존
+    return src, dep
+
+
+def test_migrate_tree_config_병합_교체_보존(trees):
+    src, dep = trees
+    r = migrate_tree(src / "config", dep / "config",
+                     merge_props=frozenset({"config.properties"}))
+    # config.properties 는 병합(운영자 log.level=DEBUG 보존 + 새 키 반영)
+    assert "config.properties" in r.merged
+    merged = (dep / "config/config.properties").read_text(encoding="utf-8")
+    assert "log.level=DEBUG" in merged and "new.key=1" in merged
+    assert "query.func.config.pw=secret" in merged           # 운영자 추가 키 보존
+    # config.yml 은 새 버전으로 교체(+백업)
+    assert "config.yml" in r.updated
+    assert "new_section" in (dep / "config/config.yml").read_text(encoding="utf-8")
+    assert (dep / "config/config.yml.bak").read_text(encoding="utf-8") == "app:\n  old_only: 1\n"
+    # 동일 schema 는 그대로, 운영자 인증서는 보존 대상으로 보고
+    assert "postgresql.sql" in r.unchanged
+    assert "impala-ca.pem" in r.operator_only
+
+
+def test_migrate_tree_templates_and_customs_preserve_operator(trees):
+    src, dep = trees
+    rt = migrate_tree(src / "templates", dep / "templates")
+    assert "sales/select.sql.j2" in rt.updated                # 예제 갱신
+    assert "SELECT 1" in (dep / "templates/sales/select.sql.j2").read_text()
+    assert "mysite/select.sql.j2" in rt.operator_only         # 운영자 템플릿 보존
+    assert (dep / "templates/mysite/select.sql.j2").exists()  # 삭제 안 됨
+
+    rc = migrate_tree(src / "customs", dep / "customs")
+    assert "query_funcs/trino_runner.py" in rc.new            # 예제 신규 복사
+    assert (dep / "customs/query_funcs/my_runner.py").exists()  # 운영자 모듈 보존
+
+
+def test_migrate_tree_dry_run_writes_nothing(trees):
+    src, dep = trees
+    before = (dep / "config/config.yml").read_text(encoding="utf-8")
+    r = migrate_tree(src / "config", dep / "config",
+                     merge_props=frozenset({"config.properties"}), dry_run=True)
+    assert r.change_count > 0                                 # 반영 예정은 집계됨
+    assert (dep / "config/config.yml").read_text(encoding="utf-8") == before  # 그러나 안 씀
+    assert not (dep / "config/config.yml.bak").exists()
+
+
+def test_main_multi_target_mode(trees, capsys):
+    src, dep = trees
+    rc = main(["--deploy-base", str(dep), "--source-base", str(src)])
+    assert rc == 0
+    # 세 트리 모두 반영됐는지 결과 파일로 확인
+    assert "log.level=DEBUG" in (dep / "config/config.properties").read_text()
+    assert "new_section" in (dep / "config/config.yml").read_text()
+    assert "SELECT 1" in (dep / "templates/sales/select.sql.j2").read_text()
+    assert (dep / "customs/query_funcs/trino_runner.py").exists()
+    assert (dep / "templates/mysite/select.sql.j2").exists()  # 운영자 보존
+    out = capsys.readouterr().out
+    assert "config" in out and "templates" in out and "customs" in out
+
+
+def test_migrate_all_returns_three_trees(trees):
+    src, dep = trees
+    results = migrate_all(dep_base := dep, src, dry_run=True)  # noqa: F841
+    labels = [rep.label for _, _, rep in results]
+    assert labels == ["config", "templates", "customs"]
