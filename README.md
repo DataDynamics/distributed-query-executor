@@ -371,8 +371,9 @@ QUERY_EXECUTOR_CONFIG_DIR=config \
 ## 버전 & 기동 배너
 
 coordinator·executor 는 뜰 때 Spring Boot 처럼 콘솔에 ASCII 배너와 **버전·역할·포트**를
-찍습니다. 로그 파일을 열지 않고도 어떤 버전이 어느 포트에서 떴는지 부팅 로그에서 바로
-보입니다.
+찍고, 이어서 **실제로 로딩한 설정 파일(`config.properties`·`config.yml`)의 절대 경로**를
+보여 줍니다. 로그 파일을 열지 않고도 어떤 버전이 어느 포트에서, **어떤 설정 파일로** 떴는지
+부팅 로그에서 바로 보입니다.
 
 ```
 ██████╗  ██████╗ ███████╗
@@ -383,7 +384,22 @@ coordinator·executor 는 뜰 때 Spring Boot 처럼 콘솔에 ASCII 배너와 *
 ╚═════╝  ╚══▀▀═╝ ╚══════╝
  Distributed Query Executor  (v0.3.0+g860f3cd)
  :: executor:8087 ::   Python 3.9.25
+ 로딩한 설정 파일(절대 경로):
+   config.properties: /data1/distributed-query-executor/config/config.properties
+   config.yml       : /data1/distributed-query-executor/config/config.yml
 ```
+
+설정 경로를 절대 경로로 찍는 이유는 "설정이 제대로 로딩됐는지" 를 바로 확인하기 위함입니다.
+경로 오지정·빈 디렉터리·`QUERY_EXECUTOR_CONFIG_DIR` 오설정으로 파일을 못 찾으면 해당 줄 뒤에
+`← 파일 없음(로딩 실패)!` 마커가 붙어, 잘못된 설정으로 뜬 상황을 즉시 알 수 있습니다.
+
+> **`.out` 과 `.log` 양쪽에 남습니다**: 이 배너는 `print()` 로 표준출력(stdout)에 나가는데,
+> 런처(`bin/env.sh`)가 프로세스의 stdout/stderr 를 `logs/<name>.out` 으로 리다이렉트하므로
+> 배너는 우선 `.out` 파일에서 보입니다. 여기에 더해, 기동 시 **같은 배너 전체(아트 + 버전 +
+> 설정 파일 절대 경로)를 `.log` 파일에도 한 레코드로** 남깁니다(`banner.log_startup`). 그래서
+> `.out` 을 못 봐도 애플리케이션 로그(`logs/<name>.log`)에서 배너와 로딩한 설정 경로를 그대로
+> 확인할 수 있습니다. 로그 레코드의 첫 줄은 grep 하기 좋은 요약(`executor 기동 (version=…
+> port=…)`)입니다.
 
 버전 관리는 **단일 소스** 원칙입니다. `src/core/version.py` 의 `__version__` **한 줄**이
 유일한 버전 정의이고, `pyproject.toml` 은 `dynamic`+`attr` 로 그 값을 그대로 읽습니다.
