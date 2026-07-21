@@ -13,7 +13,7 @@ import sys
 
 import uvicorn
 
-from core.banner import print_banner
+from core.banner import print_banner, print_config_sources
 from core.config import settings
 from core.logging import setup_logging
 from core.version import version_string
@@ -28,15 +28,20 @@ def main() -> None:
 
     # Spring Boot 처럼 기동 배너를 콘솔에 먼저 찍는다(버전·역할 표시).
     print_banner("coordinator", settings.coordinator_port)
+    # 배너 바로 아래에 실제 로딩한 설정 파일의 절대 경로(+ 존재 여부)를 찍어,
+    # 설정이 제대로 로딩됐는지 콘솔에서 바로 확인할 수 있게 한다.
+    print_config_sources(settings.config_properties_path, settings.config_yaml_path)
 
     # 앱 임포트보다 먼저 로깅을 세팅해, 기동 단계 로그도 동일한 포맷/핸들러로 남도록 한다.
     setup_logging(
         program_name="query-coordinator-server",
         filename=settings.coordinator_log_filename,
     )
-    # 버전은 로그 파일에도 한 줄 남겨, 콘솔을 못 봐도 이력에서 확인 가능하게 한다.
+    # 버전·설정 경로는 로그 파일에도 한 줄 남겨, 콘솔을 못 봐도 이력에서 확인 가능하게 한다.
     logging.getLogger(__name__).info(
-        "coordinator 기동 — version=%s port=%s", version_string(), settings.coordinator_port
+        "coordinator 기동 — version=%s port=%s config_properties=%s config_yaml=%s",
+        version_string(), settings.coordinator_port,
+        settings.config_properties_path.resolve(), settings.config_yaml_path.resolve(),
     )
     uvicorn.run(
         "coordinator.app:app",

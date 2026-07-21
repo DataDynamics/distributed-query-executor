@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import core
-from core.banner import render_banner
+from core.banner import render_banner, render_config_sources
 from core.version import __version__, git_revision, version_string
 
 
@@ -65,3 +66,34 @@ def test_banner_txt_override_with_placeholders(tmp_path):
     assert ":8087" in out
     # 내장 아트는 오버라이드 시 나타나지 않는다.
     assert "██" not in out
+
+
+# ── 설정 파일 경로 표시 ─────────────────────────────────────────────────────
+
+def test_render_config_sources_shows_absolute_paths(tmp_path):
+    # 실제 존재하는 설정 파일이면 절대 경로만 보이고 경고 마커는 없다.
+    props = tmp_path / "config.properties"
+    yml = tmp_path / "config.yml"
+    props.write_text("a=1\n", encoding="utf-8")
+    yml.write_text("app: {}\n", encoding="utf-8")
+    out = render_config_sources(props, yml)
+    assert str(props.resolve()) in out
+    assert str(yml.resolve()) in out
+    assert "config.properties" in out and "config.yml" in out
+    assert "파일 없음" not in out
+
+
+def test_render_config_sources_resolves_relative_paths(tmp_path, monkeypatch):
+    # 상대 경로(개발 시 QUERY_EXECUTOR_CONFIG_DIR=config 등)도 절대 경로로 펼쳐진다.
+    (tmp_path / "config.properties").write_text("a=1\n", encoding="utf-8")
+    (tmp_path / "config.yml").write_text("app: {}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    out = render_config_sources(Path("config.properties"), Path("config.yml"))
+    assert str((tmp_path / "config.properties").resolve()) in out
+    assert "파일 없음" not in out
+
+
+def test_render_config_sources_marks_missing_file(tmp_path):
+    # 파일이 없으면(경로 오지정·빈 디렉터리 등) 경고 마커로 로딩 실패를 알린다.
+    out = render_config_sources(tmp_path / "nope.properties", tmp_path / "nope.yml")
+    assert out.count("파일 없음(로딩 실패)!") == 2

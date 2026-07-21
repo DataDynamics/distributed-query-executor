@@ -82,3 +82,36 @@ def print_banner(role: str, port: int | None = None, *, config_dir: Path | None 
     except Exception:
         # 배너는 부가 기능 — 어떤 이유로든(인코딩·파일 등) 실패해도 서비스 기동은 계속한다.
         pass
+
+
+def render_config_sources(properties_path: Path, yaml_path: Path) -> str:
+    """로딩한 설정 파일들의 **절대 경로**(+ 존재 여부)를 보여주는 문자열을 만든다.
+
+    config.properties / config.yml 을 실제로 어느 파일에서 읽었는지 배너 바로 아래에
+    노출해, 경로 오지정·빈 디렉터리·QUERY_EXECUTOR_CONFIG_DIR 오설정 같은 로딩 문제를
+    콘솔에서 바로 눈치챌 수 있게 한다. 파일이 없으면 경로 뒤에 경고 마커를 붙인다.
+
+    인자:
+        properties_path: 로딩한 config.properties 경로(``settings.config_properties_path``).
+        yaml_path: 로딩한 config.yml 경로(``settings.config_yaml_path``).
+    """
+    def _line(label: str, p: Path) -> str:
+        # resolve() 로 상대 경로(개발 시 QUERY_EXECUTOR_CONFIG_DIR=config 등)도 절대 경로로 만든다.
+        abs_path = p.resolve()
+        mark = "" if p.is_file() else "   ← 파일 없음(로딩 실패)!"
+        return f"   {label:<17}: {abs_path}{mark}"
+
+    return (
+        " 로딩한 설정 파일(절대 경로):\n"
+        + _line("config.properties", properties_path) + "\n"
+        + _line("config.yml", yaml_path) + "\n"
+    )
+
+
+def print_config_sources(properties_path: Path, yaml_path: Path) -> None:
+    """로딩한 설정 파일 경로를 표준출력(콘솔)에 찍는다. 실패해도 기동을 막지 않는다."""
+    try:
+        print(render_config_sources(properties_path, yaml_path), flush=True)
+    except Exception:
+        # 배너와 마찬가지로 부가 정보 — 실패해도 서비스 기동은 계속한다.
+        pass

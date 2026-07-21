@@ -13,7 +13,7 @@ from pathlib import Path
 
 import uvicorn
 
-from core.banner import print_banner
+from core.banner import print_banner, print_config_sources
 from core.config import settings
 from core.logging import setup_logging
 from core.version import version_string
@@ -49,13 +49,18 @@ def main() -> None:
     port = int(os.getenv("EXECUTOR_PORT", "8087"))
     # Spring Boot 처럼 기동 배너를 콘솔에 먼저 찍는다(버전·역할·포트 표시).
     print_banner("executor", port)
+    # 배너 바로 아래에 실제 로딩한 설정 파일의 절대 경로(+ 존재 여부)를 찍어,
+    # 설정이 제대로 로딩됐는지 콘솔에서 바로 확인할 수 있게 한다.
+    print_config_sources(settings.config_properties_path, settings.config_yaml_path)
 
     setup_logging(
         program_name="query-executor-server",
         filename=_log_filename(),
     )
     logging.getLogger(__name__).info(
-        "executor 기동 — version=%s port=%s", version_string(), port
+        "executor 기동 — version=%s port=%s config_properties=%s config_yaml=%s",
+        version_string(), port,
+        settings.config_properties_path.resolve(), settings.config_yaml_path.resolve(),
     )
     uvicorn.run(
         "executor.app:app",
