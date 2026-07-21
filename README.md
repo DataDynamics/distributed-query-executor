@@ -836,7 +836,19 @@ sudo -u gpadmin $B/stop-executor.sh  8086   # executor 8086만 중지
 
 설치 스크립트가 무엇을 해 주는지도 알아 두면 좋습니다. `install.sh` 는 `gpadmin` 계정과
 `/data1/distributed-query-executor` 트리(`config`·`logs`·`run`·`bin`·`.venv`)를 만들고, TLS
-용 자리표시 파일(`config/impala-ca.pem`)을 생성합니다.
+용 자리표시 파일(`config/impala-ca.pem`)을 생성합니다. 이때 설정 디렉터리(`config/`)는 소스
+트리의 기본값(`config.properties`·`config.yml`·스키마·`templates/`)에서 **없을 때만** 통째로
+시딩됩니다.
+
+> **업그레이드(재설치) 시 설정**: `install.sh` 를 새 버전으로 다시 실행해도 기존
+> `/data1/distributed-query-executor/config/` 는 보존됩니다 — rsync 가 `config/` 를 제외하고
+> 시딩도 "없을 때만" 하므로 운영자가 편집한 값·인증서가 유지됩니다. 대신 새 버전이 추가·변경한
+> 기본값·키는 자동으로 반영되지 않으므로, **새로 내려받은 소스 트리에서** `bin/migrate-config.sh`
+> 를 실행해 병합합니다(그 트리의 `config/config.properties` 를 새 기본값으로, `--old` 로 설치된
+> 라이브 설정을 가리킴). 예: `QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config
+> bin/migrate-config.sh --dry-run` 으로 먼저 확인한 뒤 인자 없이 실제 병합. `config.yml`·스키마·
+> 템플릿의 새 버전은 migrate-config 대상이 아니라 필요 시 수동 복사합니다. 자세한 절차는
+> [`packaging/README.md`](packaging/README.md) 를 참고하세요.
 
 ### 에어갭(인터넷 차단) 설치
 
