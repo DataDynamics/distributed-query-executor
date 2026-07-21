@@ -20,19 +20,7 @@
 데이터가 coordinator 를 통과하지 않으므로 처리량 천장은 coordinator 가 아니라 executor 의 수와 그
 뒤의 Impala·Greenplum 용량으로 정해집니다. coordinator 를 아무리 키워도 처리량은 늘지 않습니다.
 
-```mermaid
-flowchart LR
-    Client["클라이언트<br/>POST /jobs"] --> Coord["Coordinator<br/>검증·분할·디스패치·상태추적<br/>(제어 평면)"]
-    Coord -- "POST /tasks (제어)" --> E1["Executor 1"]
-    Coord -- "POST /tasks (제어)" --> E2["Executor 2"]
-    Coord -- "POST /tasks (제어)" --> EN["Executor N"]
-    Impala[("Impala<br/>source")] -. "읽기 (데이터)" .-> E1
-    Impala -. "읽기 (데이터)" .-> E2
-    Impala -. "읽기 (데이터)" .-> EN
-    E1 == "적재 (데이터)" ==> GP[("Greenplum<br/>target")]
-    E2 == "적재 (데이터)" ==> GP
-    EN == "적재 (데이터)" ==> GP
-```
+![0. 큰 그림 — 데이터 평면과 제어 평면 분리](images/performance-01.svg)
 
 읽기(점선)와 적재(굵은 화살표)가 모두 executor 와 DB 사이에서만 오가고 coordinator 를 비껴갑니다.
 결론은 둘입니다. 처리량을 늘리려면 executor 수 또는 executor 당 동시 task 수를 늘리고(Scale Out),
@@ -84,19 +72,7 @@ coordinator 가 한 대뿐이면 그 한 대가 죽는 순간 시스템 전체�
 중앙 스케줄러는 없습니다. 대신 각 coordinator 가 공유 DB 에 적힌 부하 상황(실시간보다 살짝 늦은,
 약간 stale 한 뷰)을 보고 독립적으로 결정합니다.
 
-```mermaid
-flowchart TB
-    LB["로드밸런서 / VIP"] --> CA["Coordinator A"]
-    LB --> CB["Coordinator B"]
-    CA <--> PG[("공유 PostgreSQL<br/>jobs · *_history<br/>executor_status<br/>executor_reservation<br/>coordinator_status")]
-    CB <--> PG
-    EX1["Executor 1"] -- "self-report (heartbeat)" --> PG
-    EX2["Executor 2"] -- "self-report (heartbeat)" --> PG
-    CA -. "P2C 선택·디스패치" .-> EX1
-    CA -.-> EX2
-    CB -.-> EX1
-    CB -.-> EX2
-```
+![2. 고가용성 (HA)](images/performance-02.svg)
 
 두 coordinator 가 같은 공유 PostgreSQL 을 바라보고, executor 는 자기 상태를 그 DB 에 직접
 보고하며(self-report/heartbeat), 어느 coordinator 든 살아 있는 executor 누구에게나 task 를 보낼 수

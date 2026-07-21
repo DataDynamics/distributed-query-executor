@@ -1,0 +1,8 @@
+flowchart LR
+    Q[원본 SQL] --> P[AST 파싱] --> F{파티션 IN 절 발견?}
+    F -- No --> R[4xx 거부]
+    F -- Yes --> S[IN 값 N등분]
+    S --> G1[sub-query 1<br/>IN v1..vk]
+    S --> G2[sub-query 2<br/>IN vk+1..]
+    S --> G3[sub-query N]
+    G1 & G2 & G3 --> ST[(Task에 전문 저장)]

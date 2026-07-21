@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant CO as Coordinator
+    participant JS as JobStore
+    participant EX as Executor k (N개)
+    participant IM as Impala
+    participant GP as Greenplum
+    participant PG as PostgreSQL
+
+    C->>CO: POST /jobs {sql, partition_column, target_table, exec_mode, ...}
+    CO->>CO: Parser 검증 + Splitter 분할 (+ wrapper 적용)
+    CO->>CO: admission.try_admit() — 용량 초과면 429
+    CO->>JS: Job 생성(SPLITTING) · 각 Task에 sub-query 전문 저장
+    CO-->>C: 202 {job_id}
+
+    Note over CO,PG: 백그라운드 run(job) — 슬롯 대기(PENDING) 후 RUNNING
+    CO->>PG: job_history (RUNNING)
+
+    par 각 executor 병렬 디스패치 (max_dispatch_concurrency)
+        CO->>EX: POST /tasks {task_id, sub_query, exec_mode, ...}
+        EX->>PG: task_history (QUEUED→READING→WRITING)
+        EX->>IM: sub-query 실행(배치 스트리밍)
+        IM-->>EX: rows
+        EX->>GP: COPY/INSERT 적재
+        EX->>PG: task_history (DONE, rows_written)
+        EX-->>CO: 상태/행수 (polling)
+    end
+
+    CO->>JS: 모든 task 종료 → finalize_job (DONE/PARTIAL/FAILED/CANCELLED)
+    CO->>PG: job_history (최종 상태)
+
+    C->>CO: GET /jobs/{job_id}/status
+    CO-->>C: {status, progress_percent, completed/total, total_rows_written}

@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant CO as Coordinator
+    participant EX as Executor@segN
+    participant DISK as 세그먼트 로컬 디스크
+    participant GP as Greenplum master
+
+    C->>CO: POST /jobs (local_stage)
+    CO->>CO: 검증(external_columns/staging/insert 필수) + IN 4분할 + out_path 확정
+    CO-->>C: 202 {job_id}
+    Note over CO: run(): PENDING→RUNNING
+    CO->>GP: segment_host_counts() — {host:S_h}
+    CO->>CO: _plan_local_stage: 파일 4개를 호스트당 ≤S_h 로 배분(executor_url/out_path 재확정)
+    par Phase 1 (병렬 export)
+        CO->>EX: POST /tasks (exec_mode=local_stage, out_path, csv_options)
+        EX->>EX: Impala SELECT(자기 슬라이스) 배치 fetch
+        EX->>DISK: {stage.local_dir}/{job_id}/f{i}.csv 로 CSV write
+        EX-->>CO: 상태 폴링(READING→WRITING→DONE, rows_written)
+    end
+    Note over CO: 배리어(모든 export DONE)
+    CO->>EX: GET /metrics — gp_hostname 수집(host 매핑)
+    CO->>GP: segment_hosts() 로 file:// 호스트 검증
+    CO->>GP: CREATE EXTERNAL TABLE ext_job... LOCATION('file://segN/...') FORMAT 'CSV'
+    CO->>GP: INSERT INTO stg_sales SELECT * FROM ext_job...  (세그먼트가 자기 로컬 CSV 병렬 read)
+    CO->>GP: DELETE FROM target WHERE dt IN(...)  (overwrite)  + INSERT INTO target ... + COMMIT
+    CO->>GP: DROP EXTERNAL TABLE ext_job...
+    CO->>EX: POST /stage/{job_id}/cleanup — 로컬 CSV 삭제
+    CO->>CO: finalize → DONE
+    C->>CO: GET /jobs/{job_id}/status → DONE

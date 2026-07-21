@@ -25,39 +25,7 @@ Client 가 쿼리를 보내면 coordinator 가 그것을 받아 검증·분할�
 일을 나눠 줍니다. 데이터는 coordinator 를 거치지 않고 각 executor 가 Impala 에서 직접 읽어 Greenplum/WarehousePG
 으로 흘려보냅니다.
 
-```mermaid
-flowchart TB
-    Client([Client])
-    Impala[(Impala<br/>source)]
-    GP[(Greenplum<br/>target)]
-    PG[(PostgreSQL<br/>이력·메트릭)]
-
-    subgraph Coordinator["Coordinator (FastAPI)"]
-        direction TB
-        API["REST API<br/>POST /jobs · /query-execute · GET /jobs/{id}/status<br/>/executors · /health · /metrics"]
-        Parser["Parser (sqlglot)<br/>검증 + 파티션 IN 탐지"]
-        Splitter["Splitter<br/>IN 목록 N분할 + wrapper"]
-        Dispatcher["Dispatcher<br/>비동기 디스패치/polling + admission"]
-        JobStore[("JobStore<br/>in-memory / postgres")]
-    end
-
-    subgraph Executors["Executor Pool (N개, 독립 서비스)"]
-        direction LR
-        E1["Executor :8087<br/>/tasks · /health · /metrics"]
-        E2["Executor :8086"]
-        E3["Executor :800N"]
-    end
-
-    Client -- "① SELECT + partition_column" --> API
-    API --> Parser --> Splitter --> Dispatcher
-    Dispatcher <--> JobStore
-    Dispatcher -- "② POST /tasks (sub-query)" --> E1 & E2 & E3
-    E1 & E2 & E3 -- "③ read (TLS+LDAP)" --> Impala
-    E1 & E2 & E3 -- "④ COPY 적재" --> GP
-    Dispatcher -- "job_history" --> PG
-    E1 & E2 & E3 -- "task_history" --> PG
-    Client -- "⑤ GET /jobs/{id}/status" --> API
-```
+![아키텍처](docs/images/readme-01.svg)
 
 Coordinator 는 `POST /jobs` 를 받자마자 쿼리를 검증(parser)하고 잘게
 나눈(splitter) 뒤 곧바로 `job_id` 를 돌려주고(202), 실제 적재는 백그라운드에서 진행됩니다. 각

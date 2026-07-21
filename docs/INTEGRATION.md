@@ -37,19 +37,7 @@ Coordinator 와 주고받는 것은 상태와 적재된 행 수(row count) 뿐�
 이관(`/jobs`)은 SQL 전문 또는 서버 템플릿(2.2)으로 제출하고, 결과 행이 필요한 동기 조회는
 `POST /query-execute`(9장)로 처리합니다. 전체 호출 흐름은 다음과 같습니다.
 
-```mermaid
-sequenceDiagram
-    participant App as CSharp 앱
-    participant Co as Coordinator
-    App->>Co: POST /jobs (쿼리 + 분할 설정)
-    Co-->>App: 202 { job_id }
-    loop 종료 상태가 될 때까지 (폴링)
-        App->>Co: GET /jobs/{job_id}/status
-        Co-->>App: 200 { status, progress_percent, ... }
-    end
-    App->>Co: GET /jobs/{job_id}/result
-    Co-->>App: 200 { total_rows_written, per_task[] }
-```
+![1. 비동기 작업 모델](images/integration-01.svg)
 
 ## 2. 작업 제출 (`POST /jobs`)
 
@@ -98,11 +86,7 @@ executor 가 COPY 전에 그 DDL 로 테이블을 만들고, **생략하면 테�
 각 분할 파티션(task)마다 executor 는 하나의 Greenplum 세션 안에서 세 단계를 순서대로 수행합니다.
 ①은 `staging_ddl` 을 줬을 때만 실행되고, 생략하면 건너뜁니다.
 
-```mermaid
-flowchart LR
-    A["① staging_ddl 실행 (선택)<br/>CREATE TEMP TABLE 생성"] --> B["② Impala SELECT(분할 sub_query)<br/>결과를 staging 으로 COPY"]
-    B --> C["③ wrapper_query 실행<br/>INSERT INTO target SELECT ... FROM staging"]
-```
+![2.1 stage_insert 가 내부에서 하는 일](images/integration-02.svg)
 
 `staging_ddl` 은 ①에서 그대로 실행되므로 뒤따르는 COPY 가 채울 컬럼을 가진 테이블을 만들어야
 합니다(예시의 `CREATE TEMP TABLE stg_sales (LIKE warehouse.sales)` 처럼 대상 컬럼을 복제하면

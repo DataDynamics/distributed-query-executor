@@ -1,0 +1,3 @@
+flowchart LR
+    A["① staging_ddl 실행 (선택)<br/>CREATE TEMP TABLE 생성"] --> B["② Impala SELECT(분할 sub_query)<br/>결과를 staging 으로 COPY"]
+    B --> C["③ wrapper_query 실행<br/>INSERT INTO target SELECT ... FROM staging"]

@@ -1,0 +1,9 @@
+stateDiagram-v2
+    [*] --> EXPORTING: export task F개 팬아웃(호스트별 executor가 로컬 CSV write)
+    EXPORTING --> LOADING: 모든 export DONE (배리어)
+    LOADING --> INSERTING: file:// 외부테이블 → staging 적재(세그먼트 로컬 병렬 read)
+    INSERTING --> CLEANUP: target INSERT 커밋
+    CLEANUP --> [*]: 외부테이블 DROP · staging 정리 · 각 호스트 로컬 파일 삭제
+    EXPORTING --> FAILED: export 실패(정책)
+    LOADING --> FAILED: 외부테이블/적재 오류
+    INSERTING --> FAILED: INSERT 오류

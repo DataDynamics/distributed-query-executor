@@ -1,0 +1,6 @@
+flowchart LR
+    C([Client: template_id + params]) --> R[템플릿 렌더<br/>coordinator/template.py]
+    T[(서버 템플릿 파일<br/>manifest.yml + *.sql.j2)] --> R
+    F[커스텀 함수<br/>template_funcs.py] --> R
+    R -->|sql/staging_ddl/insert_sql 주입| V[validate_and_parse]
+    V --> S[split] --> D[dispatch]

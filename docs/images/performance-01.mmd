@@ -1,0 +1,11 @@
+flowchart LR
+    Client["클라이언트<br/>POST /jobs"] --> Coord["Coordinator<br/>검증·분할·디스패치·상태추적<br/>(제어 평면)"]
+    Coord -- "POST /tasks (제어)" --> E1["Executor 1"]
+    Coord -- "POST /tasks (제어)" --> E2["Executor 2"]
+    Coord -- "POST /tasks (제어)" --> EN["Executor N"]
+    Impala[("Impala<br/>source")] -. "읽기 (데이터)" .-> E1
+    Impala -. "읽기 (데이터)" .-> E2
+    Impala -. "읽기 (데이터)" .-> EN
+    E1 == "적재 (데이터)" ==> GP[("Greenplum<br/>target")]
+    E2 == "적재 (데이터)" ==> GP
+    EN == "적재 (데이터)" ==> GP

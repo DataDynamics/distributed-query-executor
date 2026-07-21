@@ -1,0 +1,14 @@
+flowchart LR
+    subgraph src[Impala]
+        P1[(partition v1..vk)]
+        P2[(partition vk+1..)]
+    end
+    subgraph ex[Executor k]
+        R[impyla cursor<br/>배치 fetch] --> B[배치 변환] --> W[psycopg COPY/INSERT]
+    end
+    subgraph dst[Greenplum]
+        T[(target_table)]
+    end
+    P1 --> R
+    P2 --> R
+    W --> T

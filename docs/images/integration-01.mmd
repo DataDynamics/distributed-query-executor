@@ -1,0 +1,11 @@
+sequenceDiagram
+    participant App as CSharp 앱
+    participant Co as Coordinator
+    App->>Co: POST /jobs (쿼리 + 분할 설정)
+    Co-->>App: 202 { job_id }
+    loop 종료 상태가 될 때까지 (폴링)
+        App->>Co: GET /jobs/{job_id}/status
+        Co-->>App: 200 { status, progress_percent, ... }
+    end
+    App->>Co: GET /jobs/{job_id}/result
+    Co-->>App: 200 { total_rows_written, per_task[] }

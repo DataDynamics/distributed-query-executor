@@ -1,0 +1,29 @@
+flowchart TB
+    Client([Client])
+    Impala[(Impala<br/>source)]
+    GPM[(Greenplum<br/>Master)]
+
+    subgraph Ctrl["Coordinator (독립 컨트롤 노드 · master 아님)"]
+        API["REST API + 분할 + 2-phase 오케스트레이션"]
+    end
+
+    subgraph Seg1["Segment Host h1"]
+        Ex1["Executor(들)"]
+        D1[["local dir<br/>{job}/f0.csv, f1.csv ..."]]
+        SG1["primary seg 0..S1"]
+    end
+    subgraph Seg2["Segment Host h2"]
+        Ex2["Executor(들)"]
+        D2[["local dir<br/>{job}/fk.csv ..."]]
+        SG2["primary seg 0..S2"]
+    end
+
+    Client -- "SELECT + partition_column + local_stage" --> API
+    API -- "① export task (sub-query + out_path)" --> Ex1 & Ex2
+    Ex1 & Ex2 -- "② impyla read" --> Impala
+    Ex1 --> D1
+    Ex2 --> D2
+    API -- "④ file:// 외부테이블 + INSERT (배리어 후 1회)" --> GPM
+    SG1 -- "⑤ 로컬 read" --> D1
+    SG2 -- "⑤ 로컬 read" --> D2
+    GPM --- SG1 & SG2

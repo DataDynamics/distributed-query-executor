@@ -1,0 +1,14 @@
+flowchart TB
+    subgraph L1["입구: Job admission (coordinator 인스턴스별)"]
+        direction LR
+        Slots["실행 슬롯<br/>max_concurrent_jobs (16)"]
+        Queue["대기 큐<br/>max_pending_jobs (100)"]
+        Reject["초과 → 429"]
+    end
+    subgraph L2["디스패치: Task 동시성 (job 실행 중)"]
+        Disp["max_dispatch_concurrency (32)<br/>per-dispatcher Semaphore"]
+    end
+    subgraph L3["executor: Task 동시성 (executor별)"]
+        ExSem["executor.max_concurrent_tasks (8)<br/>Semaphore"]
+    end
+    L1 --> L2 --> L3

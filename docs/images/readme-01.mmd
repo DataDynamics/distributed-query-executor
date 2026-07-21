@@ -1,0 +1,31 @@
+flowchart TB
+    Client([Client])
+    Impala[(Impala<br/>source)]
+    GP[(Greenplum<br/>target)]
+    PG[(PostgreSQL<br/>이력·메트릭)]
+
+    subgraph Coordinator["Coordinator (FastAPI)"]
+        direction TB
+        API["REST API<br/>POST /jobs · /query-execute · GET /jobs/{id}/status<br/>/executors · /health · /metrics"]
+        Parser["Parser (sqlglot)<br/>검증 + 파티션 IN 탐지"]
+        Splitter["Splitter<br/>IN 목록 N분할 + wrapper"]
+        Dispatcher["Dispatcher<br/>비동기 디스패치/polling + admission"]
+        JobStore[("JobStore<br/>in-memory / postgres")]
+    end
+
+    subgraph Executors["Executor Pool (N개, 독립 서비스)"]
+        direction LR
+        E1["Executor :8087<br/>/tasks · /health · /metrics"]
+        E2["Executor :8086"]
+        E3["Executor :800N"]
+    end
+
+    Client -- "① SELECT + partition_column" --> API
+    API --> Parser --> Splitter --> Dispatcher
+    Dispatcher <--> JobStore
+    Dispatcher -- "② POST /tasks (sub-query)" --> E1 & E2 & E3
+    E1 & E2 & E3 -- "③ read (TLS+LDAP)" --> Impala
+    E1 & E2 & E3 -- "④ COPY 적재" --> GP
+    Dispatcher -- "job_history" --> PG
+    E1 & E2 & E3 -- "task_history" --> PG
+    Client -- "⑤ GET /jobs/{id}/status" --> API

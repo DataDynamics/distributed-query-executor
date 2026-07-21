@@ -37,45 +37,7 @@ Impala의 큰 `SELECT` 한 건을 여러 executor에게 나눠 병렬로 읽히�
 
 **coordinator**는 요청을 받아 전체를 지휘하는 한 대의 서비스, **executor**는 실제로 읽고 적재하는 N대의 일꾼 서비스다.
 
-```mermaid
-flowchart TB
-    Client([Client])
-    Impala[(Impala<br/>source)]
-    GP[(Greenplum<br/>target)]
-    PG[(PostgreSQL<br/>이력·공유 store·상태·메트릭)]
-
-    subgraph Coordinator["Coordinator (FastAPI)"]
-        direction TB
-        API["REST API + 대시보드(/)"]
-        Parser["Parser (sqlglot)<br/>검증 + 파티션 IN 탐지"]
-        Splitter["Splitter<br/>IN 목록 N분할 + wrapper"]
-        Admission["JobAdmission<br/>동시 슬롯 + 대기 큐(429)"]
-        Dispatcher["Dispatcher<br/>비동기 디스패치/polling"]
-        Monitor["HealthMonitor<br/>executor /health·/metrics 폴링"]
-        JobStore[("JobStore<br/>memory | file | postgres")]
-    end
-
-    subgraph Executors["Executor Pool (N개, 독립 서비스)"]
-        direction LR
-        E1["Executor :8087<br/>/tasks · /metrics · 대시보드(/)"]
-        E2["Executor :8086"]
-        E3["Executor :800N"]
-    end
-
-    Client -- "① SELECT + partition_column (+ exec_mode/wrapper)" --> API
-    API --> Parser --> Splitter --> Admission --> Dispatcher
-    Dispatcher <--> JobStore
-    Dispatcher -- "② POST /tasks (sub-query 전문)" --> E1 & E2 & E3
-    Monitor -- "주기 폴링" --> E1 & E2 & E3
-
-    E1 & E2 & E3 -- "③ read (TLS+LDAP)" --> Impala
-    E1 & E2 & E3 -- "④ COPY/INSERT 적재" --> GP
-
-    Dispatcher -- "job_history + 공유 jobs store" --> PG
-    Monitor -- "executor_health_metrics" --> PG
-    E1 & E2 & E3 -- "task_history + executor_status(self-report)" --> PG
-    Client -- "⑤ GET /jobs/{id}/status" --> API
-```
+![2. 전체 아키텍처](images/design-01.svg)
 
 클라이언트가 쿼리를 보내면(①) API가 Parser로 검사하고 Splitter로 나눈 뒤 Admission으로 수용 여부를 판단하고, Dispatcher가 각 executor에 일을 보낸다(②). executor는 Impala에서 읽어(③) 곧바로 Greenplum에 적재하며(④), 클라이언트는 접수증으로 진행 상황을 조회한다(⑤). PostgreSQL은 이력과 상태를 적어 두는 공통 장부다.
 
@@ -118,22 +80,7 @@ flowchart TB
 
 ## 4. 데이터 흐름 (Impala → Executor → Greenplum)
 
-```mermaid
-flowchart LR
-    subgraph src[Impala]
-        P1[(partition v1..vk)]
-        P2[(partition vk+1..)]
-    end
-    subgraph ex[Executor k]
-        R[impyla cursor<br/>배치 fetch] --> B[배치 변환] --> W[psycopg COPY/INSERT]
-    end
-    subgraph dst[Greenplum]
-        T[(target_table)]
-    end
-    P1 --> R
-    P2 --> R
-    W --> T
-```
+![4. 데이터 흐름 (Impala → Executor → Greenplum)](images/design-02.svg)
 
 executor는 sub-query 결과를 **스트리밍(배치 fetch)** 해 전체를 메모리에 올리지 않으므로 데이터가 아무리 커도 안전하다. 적재는 `COPY`로 배치 단위 수행하며(INSERT 다건보다 훨씬 빠르다), `exec_mode`에 따라 INSERT/staging 경유도 가능하다(§9). 각 executor가 서로 다른 파티션 값 집합을 담당하므로 Greenplum 쓰기 충돌이 없고 병합도 불필요하다.
 
@@ -143,47 +90,7 @@ executor는 sub-query 결과를 **스트리밍(배치 fetch)** 해 전체를 메
 
 핵심은 작업 전체를 나타내는 **Job**과 그 아래 매달리는 하나하나의 일감 **Task** 두 구조다. 특히 **원본 쿼리와 각 executor로 보낸 sub-query 전문을 모두 저장**해 감사·디버깅에 쓴다.
 
-```mermaid
-classDiagram
-    class Job {
-        +str job_id
-        +str original_sql        // 원본 쿼리 전문
-        +str partition_column
-        +str target_table        // Greenplum 적재 대상
-        +str write_mode          // append | overwrite_partitions
-        +str exec_mode           // copy | statement | stage_insert | local_stage(§17)
-        +int parallelism
-        +str split_strategy      // contiguous | round_robin
-        +str failure_policy      // fail_fast | best_effort
-        +str username            // 제출자(이력/대시보드 표시)
-        +str staging_table       // stage_insert 전용
-        +str staging_ddl         // stage_insert 전용(선택 — 없으면 생성 건너뜀)
-        +str insert_sql          // stage_insert INSERT 문
-        +bool cancel_requested
-        +str retry_of            // 재실행으로 생성된 job이면 원본 job_id
-        +JobStatus status
-        +int total_rows_written  // 모든 task 합산
-        +datetime created_at
-        +datetime started_at
-        +datetime finished_at
-        +str error
-        +Task[] tasks
-    }
-
-    class Task {
-        +str task_id
-        +str job_id
-        +str executor_url        // 어느 executor로 보냈는지
-        +str sub_query           // ★ 보낸 sub-query 전문
-        +list partition_values   // 이 task가 담당한 IN 값들
-        +TaskStatus status
-        +int rows_written        // 이 task가 적재한 행 수
-        +int attempt
-        +str error
-    }
-
-    Job "1" o-- "N" Task
-```
+![5. 데이터 모델](images/design-03.svg)
 
 진행률은 `completed / total`로 계산하되 **완료에는 성공·실패·취소가 모두 포함**된다("끝난 일감이 전체 중 얼마인가"이지 성공률이 아니다). `progress_percent`·`completed`·`total`은 Job에서 파생된다.
 
@@ -195,21 +102,7 @@ coordinator는 Job 상태를, executor는 Task 상태를 관리한다.
 
 ### 6.1 Coordinator — Job 상태
 
-```mermaid
-stateDiagram-v2
-    [*] --> SPLITTING: POST /jobs (검증+분할 완료, 작업 생성)
-    SPLITTING --> PENDING: 백그라운드 run() — 실행 슬롯 대기
-    PENDING --> RUNNING: admission 슬롯 확보 → 디스패치
-    RUNNING --> DONE: 모든 Task DONE
-    RUNNING --> PARTIAL: 일부 Task FAILED (정책=best_effort)
-    RUNNING --> FAILED: Task FAILED (정책=fail_fast)
-    PENDING --> CANCELLED: 대기 중 취소
-    RUNNING --> CANCELLED: 실행 중 취소
-    DONE --> [*]
-    FAILED --> [*]
-    PARTIAL --> [*]
-    CANCELLED --> [*]
-```
+![6.1 Coordinator — Job 상태](images/design-04.svg)
 
 검증·분할은 `POST /jobs` 핸들러에서 **동기로** 끝나므로 문제가 있으면 즉시 4xx로 거절되고, 통과하면 작업이 `SPLITTING`으로 생성돼 백그라운드 `run()`이 이어받는다. `run()`은 admission 실행 슬롯이 빌 때까지 job을 `PENDING`으로 두었다가 슬롯을 잡으면 `RUNNING`으로 전이한다(입구에서 용량 초과면 애초에 `429`로 거부돼 job이 생성되지 않는다 — §10). 최종 상태는 `finalize_job()`이 하위 task를 집계해 결정한다: **취소 우선 → 실패 없음=DONE → best_effort=PARTIAL → 그 외=FAILED**.
 
@@ -224,20 +117,7 @@ stateDiagram-v2
 
 Task의 "진짜" 상태는 executor가 들고, coordinator는 폴링으로 따라 적는 미러를 갖는다.
 
-```mermaid
-stateDiagram-v2
-    [*] --> QUEUED: POST /tasks 수신
-    QUEUED --> READING: Impala sub-query 실행
-    READING --> WRITING: 배치 fetch → Greenplum 적재
-    WRITING --> DONE: 적재 완료
-    READING --> FAILED: Impala 읽기 에러
-    WRITING --> FAILED: Greenplum 적재 에러
-    QUEUED --> CANCELLED: 시작 전 취소
-    WRITING --> CANCELLED: 실행 중 취소(작업 완료 후 마감)
-    DONE --> [*]
-    FAILED --> [*]
-    CANCELLED --> [*]
-```
+![6.2 Task 상태 (Coordinator 미러 ↔ Executor 원본)](images/design-05.svg)
 
 **Executor**는 위 상태와 누적 `rows_written`을 인메모리에 기록해 `GET /tasks/{id}`로 노출하고, 상태 전이마다 `task_history`에 append한다. **Coordinator**의 Dispatcher는 폴링으로 각 Task 상태/row count를 미러링하고, Job 상태는 Task 집계로 결정한다. `started_at`/`finished_at`은 executor가 READING 진입·종료 시점에 기록한다(대시보드 소요 시간 표시).
 
@@ -245,42 +125,7 @@ stateDiagram-v2
 
 ## 7. 요청 처리 시퀀스
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client
-    participant CO as Coordinator
-    participant JS as JobStore
-    participant EX as Executor k (N개)
-    participant IM as Impala
-    participant GP as Greenplum
-    participant PG as PostgreSQL
-
-    C->>CO: POST /jobs {sql, partition_column, target_table, exec_mode, ...}
-    CO->>CO: Parser 검증 + Splitter 분할 (+ wrapper 적용)
-    CO->>CO: admission.try_admit() — 용량 초과면 429
-    CO->>JS: Job 생성(SPLITTING) · 각 Task에 sub-query 전문 저장
-    CO-->>C: 202 {job_id}
-
-    Note over CO,PG: 백그라운드 run(job) — 슬롯 대기(PENDING) 후 RUNNING
-    CO->>PG: job_history (RUNNING)
-
-    par 각 executor 병렬 디스패치 (max_dispatch_concurrency)
-        CO->>EX: POST /tasks {task_id, sub_query, exec_mode, ...}
-        EX->>PG: task_history (QUEUED→READING→WRITING)
-        EX->>IM: sub-query 실행(배치 스트리밍)
-        IM-->>EX: rows
-        EX->>GP: COPY/INSERT 적재
-        EX->>PG: task_history (DONE, rows_written)
-        EX-->>CO: 상태/행수 (polling)
-    end
-
-    CO->>JS: 모든 task 종료 → finalize_job (DONE/PARTIAL/FAILED/CANCELLED)
-    CO->>PG: job_history (최종 상태)
-
-    C->>CO: GET /jobs/{job_id}/status
-    CO-->>C: {status, progress_percent, completed/total, total_rows_written}
-```
+![7. 요청 처리 시퀀스](images/design-06.svg)
 
 클라이언트가 `POST /jobs`를 보내면 coordinator는 그 자리에서 검증·분할하고(필요시 wrapper 적용) admission으로 수용 여부를 판단한다(초과면 429). 통과하면 Job을 `SPLITTING`으로 만들어 각 Task에 sub-query 전문을 저장하고 즉시 `202 {job_id}`를 돌려준다. 이후 백그라운드 `run(job)`이 슬롯을 기다렸다 RUNNING으로 넘어가 여러 executor에 task를 병렬 디스패치하며(`max_dispatch_concurrency`로 제한), 모든 task가 끝나면 `finalize_job`이 최종 상태를 정한다.
 
@@ -313,16 +158,7 @@ WHERE dt IN ('2026-01-01','2026-01-02', ... ,'2026-06-25')   -- partition_column
 4. **값 분할**: IN 값 `[v1..vM]`를 `parallelism`개 청크로 분할(`contiguous` 기본 / skew 심하면 `round_robin`). `contiguous`는 앞에서부터 연속으로, `round_robin`은 한 개씩 번갈아 나눈다.
 5. **sub-query 재작성**: 각 청크로 **IN 값 목록 구간만** 문자열 치환해 N개의 완전한 SQL 생성(원문 포맷 보존, 단순 치환이 어려우면 AST 재생성으로 폴백).
 
-```mermaid
-flowchart LR
-    Q[원본 SQL] --> P[AST 파싱] --> F{파티션 IN 절 발견?}
-    F -- No --> R[4xx 거부]
-    F -- Yes --> S[IN 값 N등분]
-    S --> G1[sub-query 1<br/>IN v1..vk]
-    S --> G2[sub-query 2<br/>IN vk+1..]
-    S --> G3[sub-query N]
-    G1 & G2 & G3 --> ST[(Task에 전문 저장)]
-```
+![8. 쿼리 분할 (Splitting)](images/design-07.svg)
 
 > **lenient 결과 보존 가정**: 분할 기준 컬럼이 출력 행을 실제로 나누는 위치(주로 소스 스캔 필터)에
 > 있어야 한다. 분할 기준 위에서 집계/DISTINCT 하면 나눠 처리한 결과가 한꺼번에 처리한 결과와 달라질 수 있다.
@@ -363,22 +199,7 @@ flowchart LR
 
 한계를 넘는 요청이 몰릴 때 모두가 함께 무너지지 않도록, admission control을 세 층위로 두어 입구부터 안쪽까지 단계적으로 과부하를 거른다.
 
-```mermaid
-flowchart TB
-    subgraph L1["입구: Job admission (coordinator 인스턴스별)"]
-        direction LR
-        Slots["실행 슬롯<br/>max_concurrent_jobs (16)"]
-        Queue["대기 큐<br/>max_pending_jobs (100)"]
-        Reject["초과 → 429"]
-    end
-    subgraph L2["디스패치: Task 동시성 (job 실행 중)"]
-        Disp["max_dispatch_concurrency (32)<br/>per-dispatcher Semaphore"]
-    end
-    subgraph L3["executor: Task 동시성 (executor별)"]
-        ExSem["executor.max_concurrent_tasks (8)<br/>Semaphore"]
-    end
-    L1 --> L2 --> L3
-```
+![10. 동시성 모델 (admission control)](images/design-08.svg)
 
 - **Level 1 — Job admission(`JobAdmission`)**: `max_concurrent_jobs`개 실행 슬롯 + `max_pending_jobs`개 대기 큐. 슬롯이 비면 즉시 RUNNING, 차면 PENDING으로 줄을 세우고, **실행+대기 합(capacity)을 넘는 요청은 `429 Too Many Requests`(`Retry-After`)로 거부**한다. `max_concurrent_jobs<=0`이면 무제한. 이 한도는 **coordinator 인스턴스별(인메모리)** 이라 멀티 coordinator에선 합산된다.
 - **Level 2 — Task 디스패치 동시성**: `max_dispatch_concurrency` 세마포어로 한 coordinator가 동시에 띄우는 executor task 수를 제한(모든 job 통틀어).
@@ -594,37 +415,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 
 coordinator가 export 팬아웃과 GP load를 모두 지휘하지만, 실제 DB 분배는 GP master가 하고 coordinator는 그 master에 클라이언트로 접속할 뿐이다("master처럼 보이지만 master는 아니다").
 
-```mermaid
-flowchart TB
-    Client([Client])
-    Impala[(Impala<br/>source)]
-    GPM[(Greenplum<br/>Master)]
-
-    subgraph Ctrl["Coordinator (독립 컨트롤 노드 · master 아님)"]
-        API["REST API + 분할 + 2-phase 오케스트레이션"]
-    end
-
-    subgraph Seg1["Segment Host h1"]
-        Ex1["Executor(들)"]
-        D1[["local dir<br/>{job}/f0.csv, f1.csv ..."]]
-        SG1["primary seg 0..S1"]
-    end
-    subgraph Seg2["Segment Host h2"]
-        Ex2["Executor(들)"]
-        D2[["local dir<br/>{job}/fk.csv ..."]]
-        SG2["primary seg 0..S2"]
-    end
-
-    Client -- "SELECT + partition_column + local_stage" --> API
-    API -- "① export task (sub-query + out_path)" --> Ex1 & Ex2
-    Ex1 & Ex2 -- "② impyla read" --> Impala
-    Ex1 --> D1
-    Ex2 --> D2
-    API -- "④ file:// 외부테이블 + INSERT (배리어 후 1회)" --> GPM
-    SG1 -- "⑤ 로컬 read" --> D1
-    SG2 -- "⑤ 로컬 read" --> D2
-    GPM --- SG1 & SG2
-```
+![17.1 토폴로지 — 세 계층의 분리](images/design-09.svg)
 
 ### 17.2 `file://` 규칙과 파일 레이아웃 계획
 
@@ -644,17 +435,7 @@ flowchart TB
 
 `local_stage`는 **모든 export가 끝나기를 기다리는 배리어**와 그 뒤의 **job 단위 GP load 단계**가 추가된다.
 
-```mermaid
-stateDiagram-v2
-    [*] --> EXPORTING: export task F개 팬아웃(호스트별 executor가 로컬 CSV write)
-    EXPORTING --> LOADING: 모든 export DONE (배리어)
-    LOADING --> INSERTING: file:// 외부테이블 → staging 적재(세그먼트 로컬 병렬 read)
-    INSERTING --> CLEANUP: target INSERT 커밋
-    CLEANUP --> [*]: 외부테이블 DROP · staging 정리 · 각 호스트 로컬 파일 삭제
-    EXPORTING --> FAILED: export 실패(정책)
-    LOADING --> FAILED: 외부테이블/적재 오류
-    INSERTING --> FAILED: INSERT 오류
-```
+![17.3 Job 라이프사이클 — 2-phase(배리어)](images/design-10.svg)
 
 Phase 2에서 coordinator가 GP master에 실행하는 SQL(한 트랜잭션):
 
@@ -749,14 +530,7 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 
 `POST /jobs` 처리 초입에서 coordinator가 `template_id`로 지정된 서버 템플릿을 `params`로 런타임 렌더링해 완성된 SQL을 만들고, 그 결과를 기존 요청 필드(`sql`/`staging_ddl`/`insert_sql`/ `external_columns`/`wrapper_query`)에 주입한다. 이후 검증(parser)·분할(splitter)·디스패치 파이프라인은 하나도 바뀌지 않는다 — 렌더는 얇은 선행 단계다.
 
-```mermaid
-flowchart LR
-    C([Client: template_id + params]) --> R[템플릿 렌더<br/>coordinator/template.py]
-    T[(서버 템플릿 파일<br/>manifest.yml + *.sql.j2)] --> R
-    F[커스텀 함수<br/>template_funcs.py] --> R
-    R -->|sql/staging_ddl/insert_sql 주입| V[validate_and_parse]
-    V --> S[split] --> D[dispatch]
-```
+![18.1 핵심 아이디어](images/design-11.svg)
 
 파티션 `IN` 분할과도 합성된다: 템플릿이 `WHERE dt IN ( {{ date_range(start_dt, end_dt) | sql_in }} )` 처럼 IN 목록을 만들고 splitter가 그 목록을 N분할한다.
 

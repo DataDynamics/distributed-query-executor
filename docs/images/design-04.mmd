@@ -1,0 +1,13 @@
+stateDiagram-v2
+    [*] --> SPLITTING: POST /jobs (검증+분할 완료, 작업 생성)
+    SPLITTING --> PENDING: 백그라운드 run() — 실행 슬롯 대기
+    PENDING --> RUNNING: admission 슬롯 확보 → 디스패치
+    RUNNING --> DONE: 모든 Task DONE
+    RUNNING --> PARTIAL: 일부 Task FAILED (정책=best_effort)
+    RUNNING --> FAILED: Task FAILED (정책=fail_fast)
+    PENDING --> CANCELLED: 대기 중 취소
+    RUNNING --> CANCELLED: 실행 중 취소
+    DONE --> [*]
+    FAILED --> [*]
+    PARTIAL --> [*]
+    CANCELLED --> [*]

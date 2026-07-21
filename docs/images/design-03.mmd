@@ -1,0 +1,39 @@
+classDiagram
+    class Job {
+        +str job_id
+        +str original_sql        // 원본 쿼리 전문
+        +str partition_column
+        +str target_table        // Greenplum 적재 대상
+        +str write_mode          // append | overwrite_partitions
+        +str exec_mode           // copy | statement | stage_insert | local_stage(§17)
+        +int parallelism
+        +str split_strategy      // contiguous | round_robin
+        +str failure_policy      // fail_fast | best_effort
+        +str username            // 제출자(이력/대시보드 표시)
+        +str staging_table       // stage_insert 전용
+        +str staging_ddl         // stage_insert 전용(선택 — 없으면 생성 건너뜀)
+        +str insert_sql          // stage_insert INSERT 문
+        +bool cancel_requested
+        +str retry_of            // 재실행으로 생성된 job이면 원본 job_id
+        +JobStatus status
+        +int total_rows_written  // 모든 task 합산
+        +datetime created_at
+        +datetime started_at
+        +datetime finished_at
+        +str error
+        +Task[] tasks
+    }
+
+    class Task {
+        +str task_id
+        +str job_id
+        +str executor_url        // 어느 executor로 보냈는지
+        +str sub_query           // ★ 보낸 sub-query 전문
+        +list partition_values   // 이 task가 담당한 IN 값들
+        +TaskStatus status
+        +int rows_written        // 이 task가 적재한 행 수
+        +int attempt
+        +str error
+    }
+
+    Job "1" o-- "N" Task
