@@ -13,7 +13,7 @@ from pathlib import Path
 
 import uvicorn
 
-from core.banner import print_banner, print_config_sources
+from core.banner import log_startup, print_banner, print_config_sources
 from core.config import settings
 from core.logging import setup_logging
 from core.version import version_string
@@ -57,10 +57,10 @@ def main() -> None:
         program_name="query-executor-server",
         filename=_log_filename(),
     )
-    logging.getLogger(__name__).info(
-        "executor 기동 — version=%s port=%s config_properties=%s config_yaml=%s",
-        version_string(), port,
-        settings.config_properties_path.resolve(), settings.config_yaml_path.resolve(),
+    # 배너 전체(버전·설정 경로 포함)를 로그 파일에도 남겨, .out 을 못 봐도 .log 에서 확인 가능하게 한다.
+    log_startup(
+        logging.getLogger(__name__), "executor", port,
+        settings.config_properties_path, settings.config_yaml_path,
     )
     uvicorn.run(
         "executor.app:app",

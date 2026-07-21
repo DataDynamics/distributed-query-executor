@@ -14,6 +14,7 @@ Spring Boot 가 시작 시 콘솔에 ASCII 배너와 버전을 찍는 것을 흉
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 from pathlib import Path
@@ -114,4 +115,35 @@ def print_config_sources(properties_path: Path, yaml_path: Path) -> None:
         print(render_config_sources(properties_path, yaml_path), flush=True)
     except Exception:
         # 배너와 마찬가지로 부가 정보 — 실패해도 서비스 기동은 계속한다.
+        pass
+
+
+def log_startup(
+    logger: logging.Logger,
+    role: str,
+    port: int | None,
+    properties_path: Path,
+    yaml_path: Path,
+    *,
+    config_dir: Path | None = None,
+) -> None:
+    """기동 배너 **전체**(아트 + 설정 파일 경로)를 로그 파일에도 한 번 남긴다.
+
+    ``print_banner``/``print_config_sources`` 는 stdout 으로만 나가고, 런처가 이를
+    ``logs/<name>.out`` 으로 리다이렉트한다(``bin/env.sh``). 그래서 ``.log`` 만 보는
+    경우 배너를 볼 수 없다. 이 함수는 ``setup_logging`` 이후에 호출되어, 같은 배너를
+    로그 파일에도 하나의 레코드로 남긴다.
+
+    첫 줄은 grep 하기 좋은 요약(역할·버전·포트)이고, 이어서 배너 아트와 로딩한 설정
+    파일의 절대 경로 블록이 붙는다. 부가 정보이므로 어떤 이유로든 실패해도 기동을 막지 않는다.
+    """
+    try:
+        banner = render_banner(role, port, config_dir=config_dir)
+        sources = render_config_sources(properties_path, yaml_path)
+        logger.info(
+            "%s 기동 (version=%s port=%s)\n%s\n%s",
+            role, version_string(), port if port is not None else "",
+            banner.rstrip("\n"), sources.rstrip("\n"),
+        )
+    except Exception:
         pass

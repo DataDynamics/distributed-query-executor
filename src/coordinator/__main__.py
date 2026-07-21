@@ -13,7 +13,7 @@ import sys
 
 import uvicorn
 
-from core.banner import print_banner, print_config_sources
+from core.banner import log_startup, print_banner, print_config_sources
 from core.config import settings
 from core.logging import setup_logging
 from core.version import version_string
@@ -37,11 +37,10 @@ def main() -> None:
         program_name="query-coordinator-server",
         filename=settings.coordinator_log_filename,
     )
-    # 버전·설정 경로는 로그 파일에도 한 줄 남겨, 콘솔을 못 봐도 이력에서 확인 가능하게 한다.
-    logging.getLogger(__name__).info(
-        "coordinator 기동 — version=%s port=%s config_properties=%s config_yaml=%s",
-        version_string(), settings.coordinator_port,
-        settings.config_properties_path.resolve(), settings.config_yaml_path.resolve(),
+    # 배너 전체(버전·설정 경로 포함)를 로그 파일에도 남겨, .out 을 못 봐도 .log 에서 확인 가능하게 한다.
+    log_startup(
+        logging.getLogger(__name__), "coordinator", settings.coordinator_port,
+        settings.config_properties_path, settings.config_yaml_path,
     )
     uvicorn.run(
         "coordinator.app:app",

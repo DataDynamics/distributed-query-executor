@@ -5,8 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import logging
+
 import core
-from core.banner import render_banner, render_config_sources
+from core.banner import log_startup, render_banner, render_config_sources
 from core.version import __version__, git_revision, version_string
 
 
@@ -97,3 +99,27 @@ def test_render_config_sources_marks_missing_file(tmp_path):
     # 파일이 없으면(경로 오지정·빈 디렉터리 등) 경고 마커로 로딩 실패를 알린다.
     out = render_config_sources(tmp_path / "nope.properties", tmp_path / "nope.yml")
     assert out.count("파일 없음(로딩 실패)!") == 2
+
+
+# ── 배너를 로그 파일에도 기록 ────────────────────────────────────────────────
+
+def test_log_startup_emits_full_banner_to_log(tmp_path, caplog):
+    # log_startup 은 배너 아트 + 설정 경로 + grep 용 요약을 하나의 로그 레코드로 남긴다.
+    props = tmp_path / "config.properties"
+    yml = tmp_path / "config.yml"
+    props.write_text("a=1\n", encoding="utf-8")
+    yml.write_text("app: {}\n", encoding="utf-8")
+    with caplog.at_level(logging.INFO):
+        log_startup(logging.getLogger("test.startup"), "coordinator", 8088, props, yml,
+                    config_dir=tmp_path)
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].getMessage()
+    assert "coordinator 기동 (version=" in msg   # grep 용 첫 줄
+    assert "██" in msg                            # 배너 아트
+    assert str(props.resolve()) in msg            # 로딩한 설정 파일 절대 경로
+    assert str(yml.resolve()) in msg
+
+
+def test_log_startup_never_raises(caplog):
+    # 부가 정보이므로 잘못된 입력에도 예외를 던지지 않는다(기동을 막지 않음).
+    log_startup(logging.getLogger("test.startup"), "executor", None, None, None)  # type: ignore[arg-type]
