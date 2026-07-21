@@ -17,7 +17,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 434개.
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 440개.
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -38,9 +38,9 @@ src/
   core/        # 공용: 설정 로더/설정/로깅/메트릭 (coordinator·executor 공유)
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
-bin/           # 런처·설치 스크립트(install/start/stop/status·env·check-prereqs·config-tui·dashboard-tui — /data1 배포 트리와 공용)
+bin/           # 런처·설치 스크립트(install/start/stop/status·env·check-prereqs·config-tui·dashboard-tui·migrate-config — /data1 배포 트리와 공용)
 conf/          # config.properties + config.yml 기본값 + templates/ + 스키마(postgresql.sql / warehousepg.sql)
-examples/      # 예제 코드(examples.query_funcs.* — 커스텀 쿼리 함수, src 밖 최상위 패키지)
+customs/       # 사이트 커스텀 코드(customs.query_funcs.* — 커스텀 쿼리 함수, src 밖 최상위 패키지)
 packaging/     # 배포·패키징: README.md(배포 안내) + wheels/(에어갭 휠 번들 py39·py311). 설치는 bin/install.sh
 tests/         # pytest (coordinator·executor 검증/라이프사이클/admission/대시보드)
 ```
@@ -75,7 +75,7 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   `/query-run` 하나로 프록시(greenplum/history 만 coordinator 직접). executor 가 `query.func.module`(dotted
   path, importlib 로딩) 함수를 `run(sql, config, limit)` 로 호출. `config` 는 `query.func.config.*` 를
   프리픽스로 모은 자유 설정 dict(`src/core/config.py` 의 `_collect_prefix`, raw properties 기반 — YAML 무관).
-  참조 구현·설정은 QUERY.md / `examples/query_funcs/trino_runner.py`. 임의 SQL 미리보기(`/datasources/
+  참조 구현·설정은 QUERY.md / `customs/query_funcs/trino_runner.py`. 임의 SQL 미리보기(`/datasources/
   {name}/query`)는 별개 운영 점검용으로 built-in 유지.
 - `src/coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
   **날짜 태스크 컬럼 fan-out**(DESIGN §18.8): `/jobs` 에 `task_column`+`task_range`(오늘 기준 상대
@@ -119,6 +119,11 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
   설정목록 index=allowlist 로만 지정 → SSRF 방지, `/datasources` 프록시와 동일 관례). `/cluster`·
   `/executors` 엔트리에 드릴인 키 `index` 를 붙인다(`_annotate_executor_index`). 순수 포매터는
   curses 무관(테스트 대상), config-tui 와 같은 에어갭 stdlib curses.
+- `src/core/config_migrate.py` — **업그레이드용 설정 마이그레이션**(`python -m core.config_migrate`,
+  `bin/migrate-config.sh`). 기존 설치 경로의 config.properties 에서 운영자 변경분(새 기본값과
+  다른 값 + 새 파일에 없는 키)을 찾아 새 기본 conf/config.properties 위에 얹어 기록한다
+  (`merge_properties_lines` 재사용 — 주석·순서 보존, 없는 키는 마커 아래 추가, `.bak` 백업,
+  `--dry-run` 보고, 비밀값은 보고에서 마스킹).
 - `src/core/version.py` + `src/core/banner.py` — **버전 단일 소스 + 기동 배너**. 버전은
   `version.py` 의 `__version__` **한 줄이 유일 소스**이고, `pyproject.toml` 이 `dynamic`
   + `attr` 로 그 값을 읽는다(버전 올릴 때 이 한 줄만 수정). `banner.py` 는 coordinator/

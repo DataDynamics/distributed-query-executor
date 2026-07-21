@@ -279,7 +279,7 @@ greenplum.dsn=postgresql://gpadmin:pw@gp-master:5432/warehouse
 # query-execute 의 trino 실행 = 커스텀 함수 위임 (#1). executor 는 Trino 를 직접 모른다.
 #   query.func.module   : 실행 함수 dotted path
 #   query.func.config.* : 함수에 넘길 자유 설정 dict(접두어를 뗀 키로 통째 전달, 값은 문자열)
-query.func.module=examples.query_funcs.trino_runner:run
+query.func.module=customs.query_funcs.trino_runner:run
 query.func.config.host=trino.example.com
 query.func.config.port=8080
 query.func.config.user=query-executor
@@ -325,7 +325,7 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
 
 ### 참조 구현
 
-`examples/query_funcs/trino_runner.py` 에 Trino 예제 구현이 있다(표준 `dbprobe._shape`
+`customs/query_funcs/trino_runner.py` 에 Trino 예제 구현이 있다(표준 `dbprobe._shape`
 로 정형). 그대로 쓰거나, 본문을 조직 표준 접속으로 바꿔 사용한다.
 
 **대화형 login() 처리**: 사내 인증 모듈의 `login()` 이 `input()`/`getpass()` 로 자격증명을
@@ -344,7 +344,7 @@ config 의 `user`/`password` 값으로 바꿔치기해 입력을 공급한다(�
 처리하므로 성능 영향은 무시할 수준이다(coordinator 는 커스텀 함수를 실행하지 않아 해당 없음).
 
 ```python
-# examples/query_funcs/trino_runner.py (발췌)
+# customs/query_funcs/trino_runner.py (발췌)
 from core.dbprobe import QueryResult, _shape
 import time, trino
 

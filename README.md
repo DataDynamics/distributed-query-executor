@@ -152,7 +152,7 @@ src/                   # 파이썬 소스 루트(패키지: core / coordinator /
     __main__.py          실행 진입점 (EXECUTOR_PORT=8087 python -m executor)
 bin/                 # 런처·설치 스크립트(install·start/stop/status[-coordinator|-executor]·env·check-prereqs·config-tui·dashboard-tui)
 conf/                # config.properties + config.yml 기본값 + 스키마(*.sql) + templates/
-examples/            # 커스텀 쿼리 함수 등 예제 코드(examples.query_funcs.*)
+customs/            # 사이트 커스텀 코드(customs.query_funcs.* — 운영에서 직접 사용하는 커스텀 쿼리 함수)
 packaging/           # 배포·패키징 일체: README.md(배포 안내) + wheels/(에어갭 휠 번들). 설치는 bin/install.sh
   wheels/            #   에어갭 오프라인 설치용 휠 번들(파이썬 버전별 py39/·py311/ 두 벌)
 tests/               # coordinator·executor 검증 + 라이프사이클 + admission/대시보드 테스트
@@ -540,7 +540,7 @@ curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
   `422 + error_code`.
 - **소스 실행 = 커스텀 함수**: query-execute 의 소스 실행은 executor 가 소스(Trino 등)에 **직접 접속하지
   않고** `query.func.module` 로 지정한 외부 함수에 위임합니다. 접속·기타 파라미터는 config.properties 의
-  `query.func.config.*`(자유 정의)로 넘어갑니다. 참조 구현 `examples/query_funcs/trino_runner.py`.
+  `query.func.config.*`(자유 정의)로 넘어갑니다. 참조 구현 `customs/query_funcs/trino_runner.py`.
 - **이관과 실행 소스 분리**: `source.type=impala`(이관은 Impala 읽기 → Greenplum 적재)로 두고,
   query-execute 의 소스 실행은 `query.func.module` 커스텀 함수(예: Trino)로 위임 — 둘은 독립적입니다.
 

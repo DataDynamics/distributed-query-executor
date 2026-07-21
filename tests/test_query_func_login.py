@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-import examples.query_funcs.trino_runner as tr
+import customs.query_funcs.trino_runner as tr
 
 CONFIG = {"login_module": "fake_auth:login", "user": "svc-user", "password": "svc-pass"}
 

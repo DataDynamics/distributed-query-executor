@@ -6,7 +6,7 @@ query-execute 의 trino 경로가 이 함수에 실행을 위임한다(프레임
 
 설정 예(config.properties)::
 
-    query.func.module=examples.query_funcs.trino_runner:run
+    query.func.module=customs.query_funcs.trino_runner:run
     query.func.config.host=trino.example.com
     query.func.config.port=8080
     query.func.config.user=query-executor
