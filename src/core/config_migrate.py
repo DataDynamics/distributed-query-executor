@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="기존(운영) config.properties (기본: $QUERY_EXECUTOR_CONFIG_DIR "
                              "또는 /data1/distributed-query-executor/config)")
     parser.add_argument("--new", type=Path, default=None,
-                        help="새 기본 config.properties (기본: 트리 루트의 conf/config.properties)")
+                        help="새 기본 config.properties (기본: 트리 루트의 config/config.properties)")
     parser.add_argument("--out", type=Path, default=None,
                         help="병합 결과 기록 경로 (기본: --old 와 동일, 제자리 업그레이드)")
     parser.add_argument("--dry-run", action="store_true", help="보고만 하고 기록하지 않는다")

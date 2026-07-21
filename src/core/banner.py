@@ -6,7 +6,7 @@ Spring Boot 가 시작 시 콘솔에 ASCII 배너와 버전을 찍는 것을 흉
 
 ## 커스터마이즈(Spring Boot `banner.txt` 방식)
 
-설정 디렉터리(`QUERY_EXECUTOR_CONFIG_DIR`, 개발은 `conf/`)에 ``banner.txt`` 를 두면
+설정 디렉터리(`QUERY_EXECUTOR_CONFIG_DIR`, 개발은 `config/`)에 ``banner.txt`` 를 두면
 내장 기본 아트 대신 그 파일을 쓴다. 파일 안에서는 다음 자리표시자를 치환한다:
 ``${version}``(버전), ``${role}``(coordinator|executor), ``${port}``(수신 포트),
 ``${python}``(파이썬 버전). 파일이 없으면 아래 내장 블록체(ANSI Shadow) 배너를 쓴다.

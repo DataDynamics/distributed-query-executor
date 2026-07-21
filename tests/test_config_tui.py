@@ -1,7 +1,7 @@
 """config_tui 의 순수 로직(스키마 파싱·diff-write·검증·마스킹) 테스트.
 
 curses UI 는 대화형이라 여기서 다루지 않고, 스키마 추출과 파일 병합처럼 회귀
-위험이 큰 부분만 검증한다. 실제 저장소 conf/config.yml 을 그대로 파싱해 드리프트도 잡는다.
+위험이 큰 부분만 검증한다. 실제 저장소 config/config.yml 을 그대로 파싱해 드리프트도 잡는다.
 """
 
 from __future__ import annotations
