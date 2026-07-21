@@ -51,10 +51,18 @@ tests/         # pytest (coordinator·executor 검증/라이프사이클/admissi
 (`pyproject.toml` 의 `package-dir`), 실행 시 `PYTHONPATH=src` 가 필요하다(테스트는
 루트 `conftest.py` 가 `src/` 와 저장소 루트를 sys.path 에 넣는다).
 
-요청 흐름: `POST /jobs` → parser 검증 + splitter 분할(동기, 실패 시 즉시 4xx) →
-admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운드 `run()` 이 슬롯
+요청 흐름: `POST /jobs` → (멱등 사전확인: `Idempotency-Key` 헤더 있으면 기존 job 재생/409) →
+parser 검증 + splitter 분할(동기, 실패 시 즉시 4xx) → admission `try_admit`(초과 시 429) →
+Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → 백그라운드 `run()` 이 슬롯
 대기(PENDING) 후 RUNNING → executor 에 `POST /tasks` 병렬 디스패치 + polling → `finalize_job`
 으로 종료 상태 집계(DONE/PARTIAL/FAILED/CANCELLED).
+
+**멱등성 두 층위**: (1) **요청 멱등** — `Idempotency-Key` 헤더로 중복 제출을 흡수(같은 키 → 기존 job
+재생 200+`Idempotency-Replayed`, 다른 본문 → 409). Job 에 `idempotency_key`+`request_fingerprint`
+(sha256) 저장, `store.claim_and_add` 원자 선점(InMemory 프로세스 락, Sql 은 JSONB `data->>'idempotency_key'`
+조회 + postgresql.sql 부분 UNIQUE 인덱스 backstop, WarehousePG 는 분산키 제약으로 best-effort). app.py
+`_request_fingerprint`/`_idempotent_replay_response`. (2) **데이터 멱등** — `write_mode:overwrite_partitions`
+가 적재 전 파티션 값 DELETE→insert(`stage.py`/`backend.py`)라 재실행 중복 없음(append 는 비멱등).
 
 ### 핵심 모듈
 - `src/coordinator/dispatcher.py` — **동시성의 중심**. `JobAdmission`(실행 슬롯 + 대기 큐, 429),

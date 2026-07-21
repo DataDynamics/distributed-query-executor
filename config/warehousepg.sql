@@ -62,6 +62,12 @@ DISTRIBUTED BY (job_id);
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON public.jobs (status);
 CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON public.jobs (updated_at);
+-- 요청 멱등(Idempotency-Key): 조회 가속용 표현식 인덱스. WarehousePG(GP)는 UNIQUE 인덱스가
+-- 분산키(job_id)를 포함해야 하는데 idempotency_key 는 분산키가 아니라 UNIQUE 를 걸 수 없다.
+-- 그래서 여기서는 비-UNIQUE 로 두고, 멱등 보장은 앱 레벨 조회(get_by_idempotency_key)로만 한다
+-- (단일 coordinator 는 완전, 멀티 coordinator 는 best-effort — 강한 보장이 필요하면 메타DB를 PostgreSQL 로).
+CREATE INDEX IF NOT EXISTS idx_jobs_idempotency_key
+    ON public.jobs ((data->>'idempotency_key'));
 
 
 -- ─────────────────────────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 
 from core.timeutil import now_iso
@@ -44,10 +45,39 @@ class InMemoryJobStore:
     def __init__(self) -> None:
         # job_id를 키로 Job 객체 참조를 보관한다.
         self._jobs: dict[str, Job] = {}
+        # 멱등 키 → job_id 인덱스. FastAPI 는 sync 핸들러를 스레드풀에서 돌리므로,
+        # 같은 키의 동시 제출 경쟁을 막기 위해 _by_key 접근과 add 를 이 락으로 감싼다.
+        self._by_key: dict[str, str] = {}
+        self._lock = threading.RLock()
 
     def add(self, job: Job) -> None:
-        """새 Job을 등록한다(같은 id면 덮어쓴다)."""
-        self._jobs[job.job_id] = job
+        """새 Job을 등록한다(같은 id면 덮어쓴다). 멱등 키가 있으면 인덱스에도 등록."""
+        with self._lock:
+            self._jobs[job.job_id] = job
+            if job.idempotency_key:
+                self._by_key[job.idempotency_key] = job.job_id
+
+    def get_by_idempotency_key(self, key: str) -> Optional[Job]:
+        """멱등 키로 기존 Job 을 조회한다(없으면 None)."""
+        with self._lock:
+            job_id = self._by_key.get(key)
+            return self._jobs.get(job_id) if job_id else None
+
+    def claim_and_add(self, job: Job) -> Optional[Job]:
+        """멱등 키를 원자적으로 선점하며 Job 을 등록한다.
+
+        같은 키의 Job 이 이미 있으면 저장하지 않고 **기존 Job 을 반환**한다(경쟁에서 진 쪽).
+        없으면 저장하고 ``None`` 을 반환한다(선점 성공). 키가 없으면 그냥 저장 후 None.
+        락 안에서 검사+저장을 함께 하므로 동시 제출에도 job 이 하나만 생성된다.
+        """
+        with self._lock:
+            key = job.idempotency_key
+            if key:
+                existing_id = self._by_key.get(key)
+                if existing_id:
+                    return self._jobs.get(existing_id)
+            self.add(job)  # RLock 이라 재진입 안전
+            return None
 
     def save(self, job: Job) -> None:
         """변경된 Job을 반영한다.
@@ -114,6 +144,8 @@ class FileJobStore(InMemoryJobStore):
             try:
                 job = Job.from_record(rec)
                 self._jobs[job.job_id] = job
+                if job.idempotency_key:   # 멱등 키 인덱스도 복원
+                    self._by_key[job.idempotency_key] = job.job_id
             except Exception:
                 logger.exception("job 레코드 복원 실패(건너뜀)")
         logger.info("job 스냅샷 복원: %d개 (%s)", len(self._jobs), self.path)
@@ -241,6 +273,51 @@ class SqlJobStore:
                      job.cancel_requested, data),
                 )
             conn.commit()
+
+    def get_by_idempotency_key(self, key: str) -> Optional[Job]:
+        """멱등 키로 기존 Job 을 조회한다(JSONB ``data->>'idempotency_key'`` 매칭).
+
+        멀티 coordinator 공유 저장소에서도 어느 인스턴스가 만든 job 이든 찾도록
+        DB 를 직접 조회한다(postgresql.sql 의 표현식 인덱스가 조회를 받쳐 준다).
+        """
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT data FROM {self.table} "
+                    "WHERE data->>'idempotency_key' = %s LIMIT 1",
+                    (key,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        data = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        return Job.from_record(data)
+
+    def claim_and_add(self, job: Job) -> Optional[Job]:
+        """멱등 키를 선점하며 Job 을 저장한다(멀티 coordinator 안전).
+
+        키가 있으면 먼저 조회하고, 없으면 저장한다. 조회~저장 사이의 좁은 경쟁으로
+        다른 coordinator 가 같은 키를 먼저 넣었다면, PostgreSQL 의 부분 UNIQUE 표현식
+        인덱스가 저장을 막고 예외를 낸다 → 그 예외를 잡아 기존 Job 을 다시 읽어 돌려준다
+        (WarehousePG 는 분산키 제약으로 UNIQUE 를 못 걸어 best-effort — 조회 기반).
+        키가 없으면 그냥 저장 후 None.
+        """
+        key = job.idempotency_key
+        if not key:
+            self.add(job)
+            return None
+        existing = self.get_by_idempotency_key(key)
+        if existing is not None:
+            return existing
+        try:
+            self.add(job)
+            return None
+        except Exception:
+            # 경쟁: 다른 coordinator 가 같은 키를 먼저 저장(UNIQUE 위반). 기존 것을 돌려준다.
+            existing = self.get_by_idempotency_key(key)
+            if existing is not None:
+                return existing
+            raise
 
     def get(self, job_id: str) -> Optional[Job]:
         """job_id로 Job 스냅샷을 읽어 객체로 복원한다(없으면 None).

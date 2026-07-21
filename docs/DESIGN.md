@@ -273,6 +273,8 @@ stateDiagram-v2
 - 최종 상태는 `finalize_job()`이 하위 task를 집계해 결정한다: 취소 우선 → 실패 없음=DONE → best_effort=PARTIAL → 그 외=FAILED.
 - **재기동 정합(크래시 복구)**: 영속 저장소(`file`/`postgres`)면 기동 시 `reconcile_interrupted_jobs()`가 비종료(PENDING/SPLITTING/RUNNING)로 남은 job을 `FAILED`로 정합한다(실행 루프가 사라졌으므로). 진행 중이던 task도 FAILED로 표시돼 `retry` 대상이 된다.
 - **실패 파티션 재실행**: 종료된 job에 `POST /jobs/{id}/retry` → FAILED/CANCELLED task만 담은 **새 job**(`retry_of`=원본)이 SPLITTING부터 동일 흐름으로 실행된다.
+- **요청 멱등(`Idempotency-Key` 헤더)**: `POST /jobs` 에 키를 주면 중복 제출(타임아웃 재시도 등)을 흡수한다. 같은 키의 job 이 이미 있으면 재검증·분할 없이 **기존 job 을 재생**(200 + `Idempotency-Replayed: true`), 같은 키를 다른 본문으로 쓰면 409. 저장소가 키를 **원자적으로 선점**(`claim_and_add`)해 동시 제출에도 job 은 하나만 생긴다(InMemory=프로세스 락, Sql=조회 + PostgreSQL 부분 UNIQUE 인덱스 backstop, WarehousePG 는 분산키 제약으로 best-effort). 요청 본문의 sha256 지문으로 키 오용을 감지한다. 키가 없으면 기존 동작 그대로.
+- **데이터 멱등(`write_mode: overwrite_partitions`)**: 적재 전에 대상 테이블에서 해당 파티션 값을 먼저 DELETE 한 뒤 넣으므로(`stage.py`/`backend.py`), 같은 파티션 재실행이 중복 적재되지 않는다(재시도·재연결 재실행 안전). `append` 는 설계상 누적이라 멱등이 아니다.
 
 ### 6.2 Task 상태 (Coordinator 미러 ↔ Executor 원본)
 

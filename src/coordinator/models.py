@@ -279,6 +279,11 @@ class Job:
     cancel_requested: bool = False
     # 재실행으로 생성된 job 이면 원본 job_id 를 가리킨다(실패 파티션 재실행 추적용).
     retry_of: Optional[str] = None
+    # 요청 멱등(Idempotency-Key): 클라이언트가 헤더로 준 키와, 그때 요청 본문의 지문(sha256).
+    # 같은 키로 다시 POST /jobs 하면 새 job 을 만들지 않고 이 job 을 그대로 돌려준다(중복 적재 방지).
+    # 지문은 같은 키를 다른 본문으로 재사용했는지 감지(불일치 시 409)하는 데 쓴다.
+    idempotency_key: Optional[str] = None
+    request_fingerprint: Optional[str] = None
 
     @property
     def total_rows_written(self) -> int:
@@ -380,6 +385,8 @@ class Job:
             "finished_at": self.finished_at,
             "cancel_requested": self.cancel_requested,
             "retry_of": self.retry_of,
+            "idempotency_key": self.idempotency_key,
+            "request_fingerprint": self.request_fingerprint,
             "tasks": [t.to_record() for t in self.tasks],
         }
 
@@ -420,6 +427,8 @@ class Job:
             finished_at=d.get("finished_at"),
             cancel_requested=d.get("cancel_requested", False),
             retry_of=d.get("retry_of"),
+            idempotency_key=d.get("idempotency_key"),
+            request_fingerprint=d.get("request_fingerprint"),
         )
         job.tasks = [Task.from_record(t) for t in d.get("tasks", [])]
         return job

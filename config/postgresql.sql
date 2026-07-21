@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS public.jobs (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON public.jobs (status);
 CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON public.jobs (updated_at);
+-- 요청 멱등(Idempotency-Key): data->>'idempotency_key' 로 기존 job 을 빠르게 찾고,
+-- 부분 UNIQUE 로 멀티 coordinator 동시 제출 시에도 같은 키의 job 이 하나만 생기게 강제한다
+-- (키가 없는 job 은 인덱스에서 제외 → WHERE 절).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_idempotency_key
+    ON public.jobs ((data->>'idempotency_key'))
+    WHERE data->>'idempotency_key' IS NOT NULL;
 
 
 -- ─────────────────────────────────────────────────────────────────────────

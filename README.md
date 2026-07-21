@@ -487,13 +487,23 @@ curl -s localhost:8088/jobs/$JOB
 
 | 엔드포인트 | 설명 |
 |---|---|
-| `POST /jobs` | 작업 제출 → `{job_id}` 반환 (`username` 선택 인자 지원) |
+| `POST /jobs` | 작업 제출 → `{job_id}` 반환 (`username` 선택). **`Idempotency-Key` 헤더**로 중복 제출 흡수 |
 | `GET /jobs/{job_id}/status` | **진행 상태/진행률**(경량, 태스크 제외) |
 | `GET /jobs/{job_id}` | 전체 상태(태스크 목록 포함) |
 | `GET /jobs/{job_id}/result` | 적재 결과 요약 |
 | `POST /jobs/{job_id}/cancel` | 작업 취소(각 executor에 전파). 이미 종료면 409 |
 | `POST /jobs/{job_id}/retry` | **실패 파티션만 재실행**: 종료된 작업의 FAILED/CANCELLED task 만 새 작업으로 재실행 → 새 `job_id` 반환 |
 | `POST /query-execute` | **템플릿+파라미터로 SELECT 실행 → 결과(상위 N행) 반환**. 이관이 아니라 결과를 동기로 돌려받는 미리보기성 실행(DESIGN §18.7) |
+
+> **멱등성(중복 방지)** — 두 층위로 나뉩니다.
+> - **요청 멱등(`Idempotency-Key` 헤더)**: `POST /jobs` 에 키를 주면, 클라이언트가 타임아웃 등으로
+>   같은 요청을 재전송해도 **새 job 을 만들지 않고 기존 job 을 그대로 재생**합니다(응답 `200` +
+>   `Idempotency-Replayed: true`, 본문은 같은 `job_id`). 같은 키를 **다른 본문**으로 쓰면 `409`.
+>   저장소 레벨에서 원자적으로 선점하므로 동시 재전송에도 job 은 하나만 생깁니다(멀티 coordinator 는
+>   PostgreSQL 메타DB의 부분 UNIQUE 인덱스가, 단일은 프로세스 락이 보장). 키가 없으면 기존대로 매번 새 job.
+> - **데이터 멱등(`write_mode: overwrite_partitions`)**: 적재 전에 대상 테이블에서 **해당 파티션 값을
+>   먼저 DELETE** 한 뒤 넣으므로, 같은 파티션을 다시 실행해도 중복 적재되지 않습니다(재실행·재시도 안전).
+>   `append` 는 설계상 누적이라 멱등이 아닙니다 — 재실행 안전이 필요하면 `overwrite_partitions` 를 쓰세요.
 
 ### dry-run (쿼리 미리보기)
 

@@ -22,7 +22,9 @@ executor가 수행하고, 여기서는 분배·상태추적·집계만 담당한
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import itertools
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -244,6 +246,31 @@ def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
         req.external_columns = result.external_columns
 
 
+def _request_fingerprint(req: "CreateJobRequest") -> str:
+    """요청 본문의 안정적 지문(sha256 hex).
+
+    같은 ``Idempotency-Key`` 를 **다른 본문**으로 재사용했는지 감지하는 데 쓴다. 키를
+    쓸 때만 계산하며(비용 절약), 키가 없으면 호출하지 않는다. dict 를 정렬 직렬화해
+    필드 순서에 무관하게 같은 요청이면 같은 지문이 나오도록 한다.
+    """
+    canonical = json.dumps(req.model_dump(mode="json"), sort_keys=True,
+                           ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _idempotent_replay_response(job_id: str) -> JSONResponse:
+    """멱등 재생 응답: 기존 job_id 를 200 으로 돌려주고 재생임을 헤더로 표시한다.
+
+    새 job 생성은 202 인데, 재생은 새로 만든 게 아니므로 200 + ``Idempotency-Replayed: true``
+    헤더로 구분한다(클라이언트가 '이미 접수된 것'임을 알 수 있게).
+    """
+    return JSONResponse(
+        status_code=200,
+        content={"job_id": job_id},
+        headers={"Idempotency-Replayed": "true"},
+    )
+
+
 def create_app(
     runner: Optional[JobRunner] = None,
     store: Optional[JobStore] = None,
@@ -435,16 +462,20 @@ def create_app(
         "dry_run=true 면 executor 호출 없이 생성된 쿼리만 반환한다(200). "
         "검증 실패 시 422(error_code 포함).",
     )
-    def create_job(req: CreateJobRequest, background: BackgroundTasks):
+    def create_job(req: CreateJobRequest, background: BackgroundTasks, request: Request):
         # POST /jobs 의 얇은 진입 래퍼.
         # 실제 처리에 앞서 job_id 를 먼저 발급하고 로깅 컨텍스트에 바인딩하여,
         # 검증 실패로 작업이 저장되지 않더라도 이 요청에서 찍히는 모든 로그에
         # [job_id] 가 일관되게 붙도록 한다(요청 추적성 확보).
         job_id = new_job_id()
+        # 요청 멱등: 클라이언트가 Idempotency-Key 헤더를 주면 중복 제출(타임아웃 재시도 등)을
+        # 흡수해 같은 job 을 돌려준다(중복 적재 방지). 미지정이면 기존 동작 그대로.
+        idempotency_key = request.headers.get("Idempotency-Key") or None
         with job_log_context(job_id):
-            return _create_job(req, background, job_id)
+            return _create_job(req, background, job_id, idempotency_key)
 
-    def _create_job(req: CreateJobRequest, background: BackgroundTasks, job_id: str):
+    def _create_job(req: CreateJobRequest, background: BackgroundTasks, job_id: str,
+                    idempotency_key: Optional[str] = None):
         """작업 생성 본체: 검증 → 분할 → (dry-run 분기) → admission → 디스패치.
 
         흐름 요약:
@@ -456,7 +487,26 @@ def create_app(
         4. admission control 로 동시 실행/대기 용량을 확인하고, 초과면 429로 거부한다.
         5. 수용되면 Job/Task 를 store 에 저장하고 background 로 runner.run 을 예약한 뒤
            202(job_id)를 반환한다.
+
+        요청 멱등(idempotency_key)이 있으면 (0) 먼저 같은 키의 job 이 있는지 확인해 재검증
+        없이 바로 돌려주고(200 재생), 없으면 아래 흐름을 타되 저장 단계에서 키를 원자적으로
+        선점한다(동시 제출 경쟁에서도 job 하나만 생성).
         """
+        # (0) 요청 멱등 사전 확인: 같은 키의 job 이 이미 있으면 재검증/분할 없이 바로 재생한다.
+        # 지문은 이 시점(템플릿 적용 전, 클라이언트 원본 요청)에서 계산해야 재시도 간 일관된다.
+        fingerprint = _request_fingerprint(req) if idempotency_key else None
+        if idempotency_key and not req.dry_run:
+            existing = store.get_by_idempotency_key(idempotency_key)
+            if existing is not None:
+                if fingerprint and existing.request_fingerprint and \
+                        existing.request_fingerprint != fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="같은 Idempotency-Key 로 다른 요청 본문이 접수되었습니다.",
+                    )
+                logger.info("멱등 재생: 기존 job %s 반환(Idempotency-Key 사전확인)", existing.job_id)
+                return _idempotent_replay_response(existing.job_id)
+
         # 날짜 태스크 컬럼 fan-out 모드: task_column 이 있으면 IN 값 분할 대신 '날짜별 1 task' 로
         # 펼친다(_build_fanout 이 날짜 목록 생성 + 날짜별 SELECT 렌더 + req 필드 주입까지 끝낸다).
         fanout = bool(req.task_column)
@@ -656,6 +706,8 @@ def create_app(
                 csv_null=req.csv_null,
                 csv_quote=req.csv_quote,
                 status=JobStatus.SPLITTING,
+                idempotency_key=idempotency_key,
+                request_fingerprint=fingerprint,
             )
             # local_stage: 각 task 가 쓸 로컬 CSV 경로를 확정한다({local_dir}/{job_id}/f{idx}.csv).
             # 이 경로가 executor 의 write 대상이자 coordinator 의 file:// URI 조립 근거가 된다.
@@ -676,7 +728,26 @@ def create_app(
                 for idx, (sq, url) in enumerate(zip(sub_queries, executor_urls))
             ]
             # 분할 결과를 Task 목록으로 펼쳐 Job 에 담고 저장소에 등록한다.
-            store.add(job)
+            # 멱등 키가 있으면 원자적 선점(claim_and_add): 사전확인을 통과한 동시 요청 둘이
+            # 여기서 만나도 job 은 하나만 생성되고, 진 쪽은 기존 job 을 돌려받는다.
+            if idempotency_key:
+                winner = store.claim_and_add(job)
+            else:
+                store.add(job)
+                winner = None
+            if winner is not None:
+                # 같은 키로 이미 다른 요청이 job 을 만들었다(동시 제출 경쟁).
+                if fingerprint and winner.request_fingerprint and \
+                        winner.request_fingerprint != fingerprint:
+                    # 409 는 아래 except 가 슬롯을 반납한다(중복 반납 방지 위해 여기서 release 안 함).
+                    raise HTTPException(
+                        status_code=409,
+                        detail="같은 Idempotency-Key 로 다른 요청 본문이 접수되었습니다.",
+                    )
+                if admission is not None:
+                    admission.release()  # 점유한 실행 슬롯 반납 — 우리는 run 하지 않는다
+                logger.info("멱등 재생: 기존 job %s 반환(claim 경쟁)", winner.job_id)
+                return _idempotent_replay_response(winner.job_id)
 
             logger.info(
                 "job %s 생성: %d개 sub-query로 분할 (partition=%s, target=%s)",
