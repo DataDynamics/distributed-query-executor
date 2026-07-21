@@ -62,12 +62,39 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
 - TLS 자리표시 파일 생성(`config/impala-ca.pem`)
 - 런처 스크립트를 `bin/` 으로 배치, 소유권/권한 설정
 
-> **업그레이드 시 설정 병합**: 재설치(재실행)해도 기존 `config/` 는 보존됩니다("없을 때만"
-> 복사). 다만 새 버전이 추가한 설정 키는 기존 파일에 없으므로,
-> `bin/migrate-config.sh` 로 병합하세요 — 기존 설치 설정에서 운영자가 바꾼 값(새 기본값과
-> 다른 값 + 직접 추가한 키)을 찾아 새 기본 `config/config.properties` 위에 얹어 다시
-> 기록합니다(주석·순서 보존, `.bak` 백업). `--dry-run` 으로 무엇이 적용될지 먼저 확인할 수
-> 있습니다.
+> **업그레이드 시 설정 병합**: 재설치(재실행)해도 기존
+> `/data1/distributed-query-executor/config/` 는 보존됩니다 — rsync 가 `config/` 를 제외하고,
+> 설정 시딩도 "없을 때만" 하므로 운영자 편집·인증서가 그대로 유지됩니다. 뒤집어 말하면 새 버전이
+> 추가·변경한 기본값·키는 자동으로 반영되지 않습니다. 이때 `bin/migrate-config.sh` 로 병합하세요 —
+> 기존 설치 설정에서 운영자가 바꾼 값(새 기본값과 다른 값 + 직접 추가한 키)만 뽑아, 새 버전 기본
+> `config/config.properties` 위에 얹어 다시 기록합니다(주석·순서 보존, `.bak` 백업).
+>
+> **어디서 실행하나 (중요)**: 예전에는 배포 트리에 기본값 번들(`conf/`)이 실사용 설정(`config/`)과
+> 별도로 실려, 설치 경로에서 그대로 병합할 수 있었습니다. 지금은 둘이 **하나의 `config/` 로 통합**되어
+> 배포 트리에는 "새 기본값" 원본이 따로 남지 않습니다. 따라서 migrate-config 는 **새로 내려받은
+> (새 버전) 소스 트리에서** 실행해, 그 트리의 `config/config.properties` 를 새 기본값(`--new`)으로
+> 삼고 설치된 라이브 설정을 `--old` 로 가리켜야 합니다. `--old` 기본값이
+> `$QUERY_EXECUTOR_CONFIG_DIR/config.properties`(미설정 시
+> `/data1/distributed-query-executor/config/config.properties`)이므로, 환경변수로 라이브 경로만
+> 지정하면 됩니다.
+>
+> ```bash
+> # 새 버전 소스 트리로 이동해서 실행(install.sh 재실행으로 코드는 이미 갱신된 뒤).
+> cd <새-버전-소스-트리>
+> # 1) 무엇이 적용될지 먼저 확인(비밀값은 보고에서 마스킹)
+> QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config \
+>   bin/migrate-config.sh --dry-run
+> # 2) 실제 병합(제자리 기록, 직전 설정은 .bak 로 백업)
+> QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config \
+>   bin/migrate-config.sh
+> ```
+>
+> 경로를 직접 지정하고 싶으면 `--old`(라이브)·`--new`(새 기본)·`--out`(기록 대상, 기본은 `--old`)을
+> 명시할 수도 있습니다. 병합 후 서비스를 재기동하면 새 설정이 적용됩니다.
+>
+> `config.yml`·스키마(`postgresql.sql`/`warehousepg.sql`)·템플릿(`config/templates/`)의 새 버전
+> 반영은 migrate-config 대상이 아닙니다(운영자 편집 보존을 위해 설치 경로가 덮어써지지 않으므로).
+> 새 버전 파일이 필요하면 새 소스 트리에서 해당 파일을 설치 경로로 직접 복사하세요.
 
 ## 사전 점검 (check-prereqs.sh)
 
