@@ -107,16 +107,19 @@ cat <<EOF
   - 설정:        $CONF_DIR/config.properties , $CONF_DIR/config.yml
   - Impala TLS:  $CONF_DIR/impala-ca.pem        (실제 CA 인증서로 교체)
 
-기동/중지/상태(전체):
+기동/중지/재기동/상태(전체):
   sudo -u $APP_USER $BIN_DIR/start.sh
   sudo -u $APP_USER $BIN_DIR/stop.sh
+  sudo -u $APP_USER $BIN_DIR/restart.sh
   sudo -u $APP_USER $BIN_DIR/status.sh
 
 역할별(coordinator / executor 구분):
   sudo -u $APP_USER $BIN_DIR/start-coordinator.sh
-  sudo -u $APP_USER $BIN_DIR/start-executor.sh [PORT...]   # 포트 생략 시 EXECUTOR_PORTS 전체
+  sudo -u $APP_USER $BIN_DIR/start-executor.sh   [PORT...]   # 포트 생략 시 EXECUTOR_PORTS 전체
   sudo -u $APP_USER $BIN_DIR/stop-coordinator.sh
-  sudo -u $APP_USER $BIN_DIR/stop-executor.sh  [PORT...]
+  sudo -u $APP_USER $BIN_DIR/stop-executor.sh    [PORT...]
+  sudo -u $APP_USER $BIN_DIR/restart-coordinator.sh
+  sudo -u $APP_USER $BIN_DIR/restart-executor.sh [PORT...]   # 중지→종료 대기→기동
   sudo -u $APP_USER $BIN_DIR/status-coordinator.sh
   sudo -u $APP_USER $BIN_DIR/status-executor.sh
 EOF

@@ -847,6 +847,7 @@ sudo ./bin/install.sh                                    # 에어갭: WHEELHOUSE
 B=/data1/distributed-query-executor/bin
 sudo -u gpadmin $B/start.sh      # 전체 기동(executor 들 + coordinator)
 sudo -u gpadmin $B/status.sh     # 상태(프로세스 + health)
+sudo -u gpadmin $B/restart.sh    # 전체 재기동(중지 → 종료 대기 → 기동)
 sudo -u gpadmin $B/stop.sh       # 전체 중지
 ```
 
@@ -857,10 +858,14 @@ sudo -u gpadmin $B/stop.sh       # 전체 중지
 
 | 스크립트 | 설명 |
 |---|---|
-| `start.sh` / `stop.sh` / `status.sh` | 전체(coordinator + executor 전부) 기동/중지/상태 |
-| `start-coordinator.sh` / `stop-coordinator.sh` / `status-coordinator.sh` | **coordinator만** 제어 |
-| `start-executor.sh [PORT...]` / `stop-executor.sh [PORT...]` / `status-executor.sh` | **executor만** 제어(포트 인자 생략 시 `EXECUTOR_PORTS` 전체, 특정 포트만도 가능) |
-| `env.sh` | 런처 공통 환경(경로·포트)을 source |
+| `start.sh` / `stop.sh` / `restart.sh` / `status.sh` | 전체(coordinator + executor 전부) 기동/중지/재기동/상태 |
+| `start-coordinator.sh` / `stop-coordinator.sh` / `restart-coordinator.sh` / `status-coordinator.sh` | **coordinator만** 제어 |
+| `start-executor.sh [PORT...]` / `stop-executor.sh [PORT...]` / `restart-executor.sh [PORT...]` / `status-executor.sh` | **executor만** 제어(포트 인자 생략 시 `EXECUTOR_PORTS`/실행 중 전체, 특정 포트만도 가능) |
+| `env.sh` | 런처 공통 환경(경로·포트) + 헬퍼(`start_proc`/`stop_proc`/`wait_pid_gone` 등)를 source |
+
+재기동은 **중지 → 종료 대기 → 기동** 순으로 동작합니다. 특히 executor 는 종료 시 진행 중 task 를
+정리하는 graceful drain(기본 25초)이 있어, 재기동 스크립트는 옛 프로세스가 완전히 죽어 포트를
+놓을 때까지 기다린 뒤(`wait_pid_gone`, 제한 시간 초과 시 SIGKILL) 새 프로세스를 띄웁니다.
 
 예를 들어 coordinator 만 따로 켜거나, 특정 포트의 executor 만 켜고 끄는 일은 아래처럼
 합니다.

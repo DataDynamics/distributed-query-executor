@@ -54,6 +54,25 @@ stop_proc() {
     fi
 }
 
+# 주어진 PID 가 종료될 때까지 대기한다($2 초, 기본 40). 재기동(restart) 시 옛 프로세스가
+# 포트를 놓기 전에 새 프로세스를 띄우면 바인드에 실패하므로, 중지 후 이 함수로 기다린다.
+# executor 는 graceful drain(executor.shutdown_drain_timeout_s, 기본 25초)이 걸릴 수 있어
+# 넉넉히 기다리고, 제한 시간 내 안 죽으면 SIGKILL 로 강제 종료해 포트를 확실히 비운다.
+wait_pid_gone() {
+    local pid="$1" timeout="${2:-40}" waited=0
+    [[ -z "$pid" ]] && return 0
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( waited >= timeout )); then
+            echo "경고: pid $pid 가 ${timeout}s 내 종료되지 않아 강제 종료(SIGKILL)"
+            kill -9 "$pid" 2>/dev/null || true
+            sleep 1
+            return 0
+        fi
+        sleep 1; (( waited++ ))
+    done
+    return 0
+}
+
 # 프로세스 상태 한 줄.
 proc_status() {
     local name="$1"
