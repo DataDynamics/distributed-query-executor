@@ -127,10 +127,18 @@ admission `try_admit`(초과 시 429) → Job 생성(SPLITTING) → 백그라운
 - `src/core/version.py` + `src/core/banner.py` — **버전 단일 소스 + 기동 배너**. 버전은
   `version.py` 의 `__version__` **한 줄이 유일 소스**이고, `pyproject.toml` 이 `dynamic`
   + `attr` 로 그 값을 읽는다(버전 올릴 때 이 한 줄만 수정). `banner.py` 는 coordinator/
-  executor 가 뜰 때 Spring Boot 식 ASCII 배너(버전·역할·포트)를 stdout 에 찍고, 설정 디렉터리에
-  `banner.txt` 가 있으면 그걸 우선(자리표시자 `${version}`/`${role}`/`${port}`/`${python}` 치환).
+  executor 가 뜰 때 Spring Boot 식 ASCII 배너(버전·역할·포트)를 stdout 에 찍고, 이어서
+  `print_config_sources` 로 **실제 로딩한 `config.properties`·`config.yml` 의 절대 경로**(+ 파일
+  없으면 `← 파일 없음(로딩 실패)!` 마커)를 찍어 설정 로딩 여부를 콘솔에서 바로 확인하게 한다
+  (경로는 `settings.config_properties_path`/`config_yaml_path`). 설정 디렉터리에 `banner.txt` 가
+  있으면 그걸 우선(자리표시자 `${version}`/`${role}`/`${port}`/`${python}` 치환).
   `python -m coordinator|executor --version` 은 버전만 출력하고 종료. 배포 트리엔 `.git` 이
   없어 git sha 는 있으면 `+g<sha>` 로 붙이는 best-effort(환경변수 `QUERY_EXECUTOR_GIT_SHA` 로 각인 가능).
+  **배너는 `.out` 과 `.log` 양쪽에 남는다**: stdout `print()` 는 런처(`bin/env.sh`)가
+  `logs/<name>.out` 으로 리다이렉트하고, `setup_logging` 뒤 `banner.log_startup()` 이 같은 배너
+  전체(아트 + 버전 + 설정 절대 경로)를 `.log` 에도 한 레코드로 남긴다(첫 줄은 grep 용 요약
+  `<role> 기동 (version=… port=…)`). 순수 렌더 함수(`render_banner`/`render_config_sources`)는
+  I/O 무관이라 테스트 대상(`tests/test_banner_version.py`).
 
 ## 설정
 
