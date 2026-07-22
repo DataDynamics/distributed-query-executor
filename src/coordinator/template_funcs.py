@@ -106,6 +106,22 @@ def sql_ident(value) -> str:
     return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
+@template_filter("sql_sign")
+def sql_sign(value) -> str:
+    """부호 토큰(``+``/``-``)만 허용해 SQL 연산자 자리에 그대로 렌더한다.
+
+    날짜 fan-out 에서 ``current_date() {{ from_date_no_sign | sql_sign }} interval
+    {{ from_date_no | sql_num }} day`` 처럼 **연산자 방향을 데이터로** 표현할 때 쓴다
+    (Impala ``interval`` 은 절대값만 받으므로 부호는 값이 아니라 연산자로 나가야 한다).
+    값이 아니라 SQL 토큰을 직접 찍는 유일한 필터라, ``+``/``-`` 외에는 ``ValueError`` 로
+    막아 임의 문자열이 SQL 로 새어 나가지 못하게 한다(요청 스키마의 Literal 과 이중 방어).
+    """
+    text = str(value).strip()
+    if text not in ("+", "-"):
+        raise ValueError(f"sign 은 '+' 또는 '-' 만 허용합니다: {value!r}")
+    return text
+
+
 @template_filter("sql_in")
 def sql_in(values: Iterable) -> str:
     """리스트를 ``IN (...)`` 안에 넣을 **콤마 구분 리터럴 목록**으로 만든다.

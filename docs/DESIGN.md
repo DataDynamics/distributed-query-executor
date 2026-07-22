@@ -597,16 +597,21 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 
 **테스트**: `tests/test_query_execute.py`(render_query·coordinator 직접 실행·trino→/query-run 프록시· failover·오류 전파) + `tests/test_datasource_query.py`(executor `/query-run` 커스텀 함수·dict 반환·미설정 400·함수 예외 502·`_load_query_func`·`_collect_prefix`)를 실 DB 없이 검증.
 
-### 18.8 날짜 태스크 컬럼 fan-out (`/jobs`, IN 분할 대체)
+### 18.8 날짜 fan-out (`/jobs`, IN 분할 대체)
 
-기본 분할(§8)이 파티션 컬럼 `IN` 값 목록을 N등분하는 데 더해, `/jobs`는 **날짜 하나 = task 하나**로 펼치는 fan-out 모드를 지원한다(일별 배치 이관에 자연스럽다).
+기본 분할(§8)이 파티션 컬럼 `IN` 값 목록을 N등분하는 데 더해, `/jobs`는 **하루 = task 하나**로 펼치는 fan-out 모드를 지원한다(일별 배치 이관에 자연스럽다).
 
-- **요청**: 템플릿 stage_insert에 `task_column`(날짜 컬럼) + `task_range`(오늘 기준 상대 일수, **양끝 포함**)를 추가한다. 예: `task_column:"dt", task_range:[-7,0]` → 오늘 포함 8일. `partition_column`/ `parallelism`/`split_strategy`는 이 모드에서 쓰이지 않는다(task 수 = 날짜 수).
-- **분할**(`src/coordinator/app.py` `_build_fanout`, IN 파싱·`split` 우회): 서버 오늘(KST) 기준 날짜 목록을 만들고(`_compute_task_dates`), 날짜마다 SELECT 조각만 `render_query()`로 렌더해(컨텍스트에 `task_column`·`task_date` 주입) 하루치 sub-query를 만든다. `INSERT`/`staging_ddl`은 날짜 독립이라 대표 날짜로 1회 렌더해 job-level로 공유한다. 각 task `partition_values`에는 그 날짜를 담는다(관측용).
+- **요청**: `task_params`로 **구간의 두 끝을 담은 파라미터 두 개**를 지목한다. 예: `params:[{name:"from_date_no",value:7,sign:"-"},{name:"to_date_no",value:1,sign:"+"}]` + `task_params:["from_date_no","to_date_no"]` → 구간 `[-7,+1]` → 9 task. `partition_column`/`parallelism`/`split_strategy`는 이 모드에서 쓰이지 않는다(task 수 = 날짜 수).
+- **`sign` = 값의 부호가 아니라 SQL 연산자의 방향**: Impala `interval`은 절대값만 받으므로 `current_date() - interval 7 day`처럼 방향이 SQL 텍스트에 박힌다. 그래서 값(7)만으로는 "오늘 기준 -7일"을 복원할 수 없다. 그 방향을 클라이언트가 명시하는 자리가 `sign`이고, 렌더 컨텍스트에는 `<name>_sign`으로 노출되어 템플릿이 `{{ from_date_no_sign | sql_sign }}`으로 연산자를 찍는다. `sign`이 없으면 값 자체의 부호를 쓴다(`value:-7` == `value:7, sign:"-"`). `sign`을 값에 다시 적용하지는 **않는다**(이중 적용 방지).
+- **분할**(`src/coordinator/app.py` `_build_fanout`, IN 파싱·`split` 우회): 두 끝의 오프셋(`_param_offset`)에서 구간을 얻어 `_compute_task_offsets`가 하루 단위 쌍으로 자른다. task마다 두 파라미터를 **같은 날로 좁혀**(값=`|오프셋|`, 부호=방향 — `_offset_value_sign`) SELECT 조각만 `render_query()`로 렌더하므로 `BETWEEN`이 하루로 붕괴한다. 템플릿 SQL은 fan-out 여부와 무관하게 동일하다(fan-out이 아니면 요청이 보낸 값·부호 그대로 구간 전체를 읽는다). `INSERT`/`staging_ddl`은 날짜 독립이라 대표 구간으로 1회 렌더해 job-level로 공유하고, 각 task `partition_values`에 그 날짜를 담는다(관측용). 절대 날짜/오프셋(`task_date`·`task_date_end`·`task_offset`·`task_offset_end`)도 컨텍스트에 노출해, `WHERE dt = {{ task_date | sql_str }}`처럼 날짜 리터럴로 하루를 고르는 템플릿도 같은 경로로 지원한다.
+- **`task_bound` — task 하나의 폭**: `point`(기본) = `(d, d)`로 `BETWEEN a AND b`(양끝 포함)·`= a` 비교용, task 수 = 날짜 수. `pair` = `(d, d+1)`로 `>= a AND < b`(반열림) 비교용, task 수 = 날짜 수 - 1. 어느 쪽인지는 **컬럼 타입/비교식**이 정한다 — DATE + `BETWEEN`에 `pair`를 쓰면 경계 날짜가 두 task에 겹쳐 중복 적재되고, TIMESTAMP + 반열림에 `point`를 쓰면 자정 정각 행만 읽어 사실상 0행이 된다. manifest가 자기 SQL에 맞는 값을 못 박아 두는 것을 권한다.
+- **안전장치(`_validate_sign_contract`)**: select 조각이 task 파라미터를 참조하면서 `<name>_sign`을 쓰지 않으면 `422 TEMPLATE_MISSING_SIGN_VAR`로 거부한다. 부호가 SQL에 고정된 템플릿에 절대값을 넣으면 `d=-3` task가 `BETWEEN today-3 AND today+3`(7일치)을 읽어 **모든 task가 겹친 채 append**되는데, 오류 없이 데이터만 틀리는 실패라 접수 시점에 막는다. 문자열 grep이 아니라 Jinja2 AST(`TemplateEngine.referenced_variables`, `jinja2.meta`)를 본다. 파라미터를 아예 참조하지 않는 템플릿(날짜 리터럴 방식)은 구간 도출에만 쓰는 것이므로 통과.
+- **상한**: task 수 > 366이면 `422 TASK_RANGE_TOO_LARGE`(오타로 수만 개의 task가 생기는 것을 차단).
 - **적재 방식**: stage_insert는 **append**다(그 날짜 SELECT → staging(TEMP) COPY → target INSERT). 하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을 쓴다 — 프레임워크는 대상에 DELETE를 하지 않는다.
-- **템플릿 계약**: SELECT 조각은 `WHERE {{ task_column | sql_ident }} = {{ task_date | sql_str }}`처럼 하루치를 조회하고, INSERT/staging은 날짜를 참조하지 않는다. 예제: `templates/daily_sales/`.
+- **방언 주의**: 렌더된 SELECT는 구조 검증(단일 SELECT)을 위해 sqlglot으로 한 번 파싱된다. sqlglot에 impala 방언이 없고 기본값 `hive`는 인자 1개짜리 `trunc(date)`를 거부하므로, `trunc()`+`interval`을 쓰는 템플릿은 manifest에 `sql_dialect`(예: `trino`)를 지정한다. 실행은 그대로 Impala가 하며 이 값은 파싱에만 쓰인다.
+- **예제**: `templates/daily_sales_interval/`(상대 일수 interval + sign 방식), `templates/daily_sales/`(절대 날짜 리터럴 방식).
 
-**테스트**: `tests/test_task_fanout.py` — `_compute_task_dates`(양끝 포함·역순·포맷·오류), dry-run(날짜별 1 task·partition_values·IN 없음·INSERT 공유), 템플릿/exec_mode/range 검증(422).
+**테스트**: `tests/test_task_fanout.py` — `_param_offset`/`_compute_task_offsets`/`_offset_value_sign`/`_split_params`(순수 함수), dry-run(두 방식 모두 하루=1 task·절대값만 렌더·음수 interval 없음·partition_values·INSERT 공유·pair 모드), 부호 계약 위반·task_params/템플릿/exec_mode 검증(422).
 
 ---
 

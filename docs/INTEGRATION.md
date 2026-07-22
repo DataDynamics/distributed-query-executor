@@ -143,20 +143,29 @@ SQL 전문을 직접 담는 대신 **서버에 보관된 쿼리 템플릿**을 �
 템플릿은 **422**(`error_code` 로 원인 구분: `TEMPLATE_PARAM_ERROR`, `TEMPLATE_NOT_FOUND` 등, 5.2)로
 거부됩니다. `template_id` 를 넣지 않으면 지금까지처럼 raw-SQL 모드로 동작합니다(하위 호환).
 
-**날짜별 분할** — 일별 이관에서는 파티션 `IN` 분할 대신 **날짜 하나 = task 하나**로 펼칠 수
-있습니다. 템플릿 stage_insert 요청에 `task_column`(날짜 컬럼)과 `task_range`(오늘 기준 상대 일수,
-양끝 포함)를 넣으면 서버가 날짜 목록을 만들어 날짜별로 SELECT 를 렌더해 실행합니다(executor 당
-하루씩). 적재는 stage_insert append 이고, 응답·폴링·재시도는 일반 `/jobs` 와 동일합니다(자세한
-규약은 DESIGN §18.8).
+**날짜별 분할** — 일별 이관에서는 파티션 `IN` 분할 대신 **하루 = task 하나**로 펼칠 수 있습니다.
+템플릿 stage_insert 요청의 `params` 를 배열로 보내 각 항목에 `sign`(SQL 연산자의 방향)을 싣고,
+`task_params` 로 **구간의 두 끝을 담은 파라미터 두 개**를 지목하면 서버가 그 구간을 하루씩 나눠
+task 로 펼칩니다(executor 당 하루씩). 적재는 stage_insert append 이고, 응답·폴링·재시도는 일반
+`/jobs` 와 동일합니다(자세한 규약은 DESIGN §18.8).
 
 ```jsonc
 {
-  "template_id": "daily_sales",
-  "params": { "region": "KR" },
-  "task_column": "dt",
-  "task_range": [-7, 0]     // 오늘 포함 8일 → 8 task (executor 당 1일)
+  "template_id": "daily_sales_interval",
+  "params": [
+    { "name": "from_date_no", "value": 7, "sign": "-" },   // → 오프셋 -7
+    { "name": "to_date_no",   "value": 1, "sign": "+" },   // → 오프셋 +1
+    { "name": "region",       "value": "KR" }
+  ],
+  "task_params": ["from_date_no", "to_date_no"]            // 구간 [-7, +1] → 9 task
 }
 ```
+
+`sign` 은 **값의 부호가 아니라 SQL 연산자의 방향**입니다. Impala `interval` 은 절대값만 받아
+`current_date() - interval 7 day` 처럼 방향이 SQL 텍스트에 박히므로, 값(7)만으로는 "오늘 기준
+-7일" 을 복원할 수 없기 때문입니다. 서버는 task 마다 두 파라미터를 같은 날로 좁혀 렌더하므로
+`BETWEEN` 이 하루로 붕괴하고, `interval` 뒤에는 언제나 절대값만 들어갑니다. 비교식이 반열림
+(`>= a AND < b`)이면 `"task_bound": "pair"` 를 함께 보냅니다(기본 `point`).
 
 ## 3. 완료될 때까지 대기 (폴링)
 
@@ -324,12 +333,13 @@ public class CreateJobRequest
     [JsonProperty("sql")] public string Sql { get; set; }
     [JsonProperty("partition_column")] public string PartitionColumn { get; set; }
     [JsonProperty("target_table")] public string TargetTable { get; set; }
-    // 템플릿 모드(선택) — ‼ 여기서 params 는 "이름→값 map" 이다(/query-execute 의 배열과 다름 — 9장).
+    // 템플릿 모드(선택) — params 는 "이름→값 map" 또는 [{name, value, sign}] 배열. sign(연산자 방향)이
+    // 필요한 날짜 fan-out 은 배열을 쓴다. 둘 중 하나만 채운다(Object 로 두어 어느 쪽이든 직렬화).
     [JsonProperty("template_id")] public string TemplateId { get; set; }
-    [JsonProperty("params")] public Dictionary<string, object> Params { get; set; }
-    // 날짜 fan-out(선택, stage_insert 템플릿 전용) — task_range 는 오늘 기준 상대 일수 [start, end](양끝 포함).
-    [JsonProperty("task_column")] public string TaskColumn { get; set; }
-    [JsonProperty("task_range")] public int[] TaskRange { get; set; }
+    [JsonProperty("params")] public object Params { get; set; }
+    // 날짜 fan-out(선택, stage_insert 템플릿 전용) — 구간의 두 끝을 담은 params 이름 2개.
+    [JsonProperty("task_params")] public string[] TaskParams { get; set; }
+    [JsonProperty("task_bound")] public string TaskBound { get; set; }   // point(기본) | pair
     [JsonProperty("username")] public string Username { get; set; }
     // 값 타입은 null 이 없어 항상 직렬화되므로 서버 기본값과 같은 값을 둔다.
     [JsonProperty("parallelism")] public int Parallelism { get; set; } = 4;
@@ -521,9 +531,9 @@ using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30)))
 
 SQL 전문 대신 **서버 템플릿 + 파라미터**로 같은 작업을 제출할 수 있습니다(2.2). 요청 본문만
 다르고 이후 흐름은 동일하므로 위 `SubmitAsync`/`WaitForCompletionAsync` 를 그대로 재사용합니다.
-여기서 **`Params` 는 이름→값 map** 이라는 점만 `/query-execute`(9장, 배열)와 다릅니다. 날짜별
-fan-out 이 필요하면 `TaskColumn`·`TaskRange` 만 더하면 되고(IN 분할 대신 날짜 목록, stage_insert
-append), 실행 전 렌더 계획만 보려면 `"dry_run": true` 를 넣습니다(필드가 필요하면
+`Params` 는 이름→값 map 과 `/query-execute`(9장)와 같은 `[{name, value, sign}]` 배열을 모두
+받습니다(sign 은 배열에서만 쓸 수 있습니다). 날짜별 fan-out 이 필요하면 배열 params + `TaskParams`
+로 구간의 두 끝을 지목하면 되고(IN 분할 대신 하루=1 task, stage_insert append), 실행 전 렌더 계획만 보려면 `"dry_run": true` 를 넣습니다(필드가 필요하면
 `CreateJobRequest` 에 `[JsonProperty("dry_run")] public bool DryRun { get; set; }` 추가). 필수
 파라미터 누락·없는 템플릿은 **422**(`TEMPLATE_PARAM_ERROR`/`TEMPLATE_NOT_FOUND`)로 거부되어
 `SubmitAsync` 가 예외를 던집니다.
@@ -546,13 +556,18 @@ var req = new CreateJobRequest
 var jobId = await client.SubmitAsync(req);
 var result = await client.WaitForCompletionAsync(jobId);
 
-// 날짜별 fan-out — TaskColumn + TaskRange 만 더한다.
+// 날짜별 fan-out — params 를 배열로 보내고(각 항목에 sign) TaskParams 로 구간의 두 끝을 지목한다.
+// sign 은 값의 부호가 아니라 SQL 연산자의 방향이다(Impala interval 은 절대값만 받으므로).
 var daily = new CreateJobRequest
 {
-    TemplateId = "daily_sales",
-    Params = new Dictionary<string, object> { ["region"] = "KR" },
-    TaskColumn = "dt",
-    TaskRange = new[] { -7, 0 },   // 오늘 포함 8일 → 8 task
+    TemplateId = "daily_sales_interval",
+    Params = new[]
+    {
+        new { name = "from_date_no", value = (object)7, sign = "-" },   // → -7일
+        new { name = "to_date_no",   value = (object)1, sign = "+" },   // → +1일
+        new { name = "region",       value = (object)"KR", sign = (string)null },
+    },
+    TaskParams = new[] { "from_date_no", "to_date_no" },   // 구간 [-7, +1] → 9 task
     Username = "etl-bot",
 };
 var dailyJobId = await client.SubmitAsync(daily);

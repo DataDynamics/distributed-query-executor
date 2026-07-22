@@ -83,22 +83,59 @@ SQL 전문 대신 서버 템플릿을 `params`(**object**)로 렌더한다. 템�
 }
 ```
 
-### 요청 — 날짜 태스크 컬럼 fan-out (stage_insert 전용)
+### 요청 — 날짜 fan-out (stage_insert 전용)
 
-파티션 `IN` 분할 대신 **날짜 하나 = task 하나**로 펼쳐 executor 당 하루씩 맡긴다(일별 배치용).
+파티션 `IN` 분할 대신 **하루 = task 하나**로 펼쳐 executor 당 하루씩 맡긴다(일별 배치용).
+`task_params` 로 **구간의 두 끝을 담은 파라미터 두 개**를 지목한다.
 
 ```jsonc
 {
-  "template_id": "daily_sales",
-  "params": { "region": "KR" },
-  "task_column": "dt",          // 날짜 컬럼(partition_column 대체)
-  "task_range": [-7, 0]         // 오늘 기준 상대 일수, 양끝 포함 → 오늘 포함 8일 = 8 task
+  "template_id": "daily_sales_interval",
+  "params": [                                       // fan-out 은 배열 형태(sign 필요)
+    { "name": "from_date_no", "value": 7, "sign": "-" },   // → 오프셋 -7
+    { "name": "to_date_no",   "value": 1, "sign": "+" },   // → 오프셋 +1
+    { "name": "region",       "value": "KR" }
+  ],
+  "task_params": ["from_date_no", "to_date_no"],    // 이 둘이 구간의 두 끝
+  "task_bound": "point"                             // 선택: point(기본) | pair
 }
 ```
 
-`task_range:[-7,0]` + 오늘(2026-07-21) → `2026-07-14 … 2026-07-21`(8일). 정확히 7일이면
-`[-7,-1]`/`[-6,0]`. 이 모드에서는 `partition_column`/`parallelism`/`split_strategy` 를 쓰지
-않는다(task 수 = 날짜 수).
+오늘이 2026-07-22 면 구간 `[-7, +1]` → `2026-07-15 … 2026-07-23` **9 task**. 이 모드에서는
+`partition_column`/`parallelism`/`split_strategy` 를 쓰지 않는다(task 수 = 날짜 수).
+
+**`sign` 은 값의 부호가 아니라 SQL 연산자의 방향이다.** Impala `interval` 은 절대값만 받아
+`current_date() - interval 7 day` 처럼 방향이 SQL 에 박히므로, 값(7)만으로는 "-7일" 을 알 수
+없다. 그래서 방향을 `sign` 으로 받아 템플릿에 `<name>_sign` 으로 넘긴다. 생략하면 값 자체의
+부호를 쓴다(`value:-7` == `value:7, sign:"-"`).
+
+```sql
+-- select.sql.j2 — 방향을 연산자 자리에 찍는다(sql_sign 은 +/- 외에는 거부)
+WHERE dt BETWEEN trunc(current_date() {{ from_date_no_sign | sql_sign }} interval {{ from_date_no | sql_num }} day)
+             AND trunc(current_date() {{ to_date_no_sign   | sql_sign }} interval {{ to_date_no  | sql_num }} day)
+```
+
+task 마다 coordinator 가 두 파라미터를 **같은 날로 좁혀**(값=절대값, 부호=방향) 렌더하므로
+`BETWEEN` 이 하루로 붕괴한다 — task 5 는 `BETWEEN trunc(current_date() - interval 3 day) AND
+trunc(current_date() - interval 3 day)`. **`interval` 뒤에는 언제나 절대값만** 나온다. 같은
+템플릿을 `task_params` 없이 제출하면 요청이 보낸 값·부호 그대로 구간 전체를 한 번에 읽는다.
+
+`task_bound` 는 task 하나의 폭이고, **컬럼 타입/비교식**이 결정한다:
+
+| 비교식 | `task_bound` | task 수(`[-7,+1]`) | 잘못 고르면 |
+|---|---|---|---|
+| `BETWEEN a AND b`(양끝 포함) / `= a`, DATE 컬럼 | `point`(기본) — `(d, d)` | 9 | `pair` → 경계 날짜가 두 task 에 겹쳐 **중복 적재** |
+| `>= a AND < b`(반열림), TIMESTAMP 컬럼 | `pair` — `(d, d+1)` | 8 | `point` → 자정 정각 행만 읽어 **사실상 0행** |
+
+manifest 에 `task_bound` 를 못 박아 두면 요청자가 컬럼 타입을 몰라도 된다.
+
+날짜 리터럴로 하루를 고르는 템플릿(`WHERE dt = {{ task_date | sql_str }}`)도 같은 fan-out 으로
+동작한다 — 이때 두 파라미터는 구간 도출에만 쓰인다(예제: `templates/daily_sales/`).
+
+> **주의(방언)**: 렌더된 SELECT 는 구조 검증을 위해 sqlglot 으로 한 번 파싱된다. sqlglot 에
+> impala 방언이 없고 기본값 `hive` 는 인자 1개짜리 `trunc(date)` 를 거부하므로, `trunc()`+
+> `interval` 을 쓰는 템플릿은 manifest 에 `sql_dialect: trino` 를 지정한다(파싱 전용, 실행은
+> 그대로 Impala).
 
 ### 필드 요약
 
@@ -106,13 +143,14 @@ SQL 전문 대신 서버 템플릿을 `params`(**object**)로 렌더한다. 템�
 |---|---|---|
 | `exec_mode` | ✅(`stage_insert`) | 이 모드를 고른다 |
 | `sql` | ✅(raw) | 소스 SELECT (템플릿 모드는 렌더로 채움) |
-| `partition_column` | ✅ | IN 목록으로 N분할할 컬럼 (fan-out 은 `task_column` 이 대체) |
+| `partition_column` | ✅ | IN 목록으로 N분할할 컬럼 (fan-out 모드에서는 쓰이지 않음 — 표시용) |
 | `target_table` | ✅ | 최종 적재 대상 |
 | `staging_table` | ✅ | staging(보통 TEMP) 테이블명 |
 | `wrapper_query` | ✅ | **INSERT … SELECT FROM staging** 문 |
 | `staging_ddl` | ✕ | `CREATE TEMP TABLE …`(없으면 기존 staging_table 사용) |
-| `template_id` / `params` | ✕ | 템플릿 모드(params 는 **object**) |
-| `task_column` / `task_range` | ✕ | 날짜 fan-out 모드 |
+| `template_id` / `params` | ✕ | 템플릿 모드. `params` 는 **object** 또는 **[{name, value, sign}] 배열**(sign 은 배열에서만) |
+| `task_params` | ✕ | 날짜 fan-out 모드 — 구간의 두 끝을 담은 params 이름 2개 |
+| `task_bound` | ✕ | fan-out task 하나의 폭: `point`(기본) \| `pair` |
 | `parallelism` | ✕ | 분할(=task) 수, 1~128 (기본 4) |
 | `split_strategy` | ✕ | `contiguous`(기본) \| `round_robin` |
 | `sql_dialect` | ✕ | 파싱 방언(기본 hive) |
@@ -168,8 +206,8 @@ sql_ident }} (...)` 로 staging 을 만들고, `insert.sql.j2` 는 `INSERT INTO 
 sql_ident }} (...) SELECT ... FROM {{ staging_table | sql_ident }}` 로 staging→target 을 적재한다
 (식별자는 `sql_ident` 필터로 안전하게 렌더).
 
-날짜별 fan-out 이 필요하면 `templates/daily_sales/`(SELECT 가 `WHERE dt = {{ task_date }}` 로
-하루치만 조회)를 참고한다.
+날짜별 fan-out 이 필요하면 `templates/daily_sales_interval/`(상대 일수 `interval` + `sign`)
+또는 `templates/daily_sales/`(SELECT 가 `WHERE dt = {{ task_date }}` 로 하루치만 조회)를 참고한다.
 
 ### 상태 확인 · 재실행
 
@@ -194,7 +232,9 @@ sql_ident }} (...) SELECT ... FROM {{ staging_table | sql_ident }}` 로 staging�
 | stage_insert 인데 staging_table/wrapper_query 누락 | 422 | `STAGE_INSERT_REQUIRES_FIELDS` |
 | SQL 파싱 실패 / 비-SELECT / 파티션 IN 없음 | 422 | `PARSE_ERROR` / `NOT_A_SELECT` / `NO_PARTITION_IN_CLAUSE` 등 |
 | 템플릿 없음 / 파라미터 검증·렌더 실패 | 422 | `TEMPLATE_NOT_FOUND` / `TEMPLATE_PARAM_ERROR` / `TEMPLATE_RENDER_ERROR` |
-| fan-out: template_id 없음 / 비-stage_insert / task_range 형식 | 422 | `FANOUT_REQUIRES_TEMPLATE` / `FANOUT_REQUIRES_STAGE_INSERT` / `TASK_RANGE_INVALID` |
+| fan-out: template_id 없음 / 비-stage_insert | 422 | `FANOUT_REQUIRES_TEMPLATE` / `FANOUT_REQUIRES_STAGE_INSERT` |
+| fan-out: task_params 형식·이름 / 값 비정수 / 구간 없음·과다 | 422 | `TASK_PARAMS_INVALID` / `TASK_PARAM_NOT_NUMERIC` / `TASK_RANGE_EMPTY` / `TASK_RANGE_TOO_LARGE` |
+| fan-out: 템플릿이 부호 변수(`<name>_sign`)를 안 씀 | 422 | `TEMPLATE_MISSING_SIGN_VAR` |
 | 동시 실행/대기 job 한도 초과 | 429 | (Retry-After 헤더) |
 
 ### 관련 설정 (executor)

@@ -1,9 +1,10 @@
 {# 날짜 fan-out SELECT — task_date(그 task 의 하루)만 조회한다.
-   task_column/task_date 는 coordinator 가 날짜별로 주입한다. 컬럼명은 sql_ident,
+   task_date 는 coordinator 가 task 마다 주입한다(구간은 from_date_no/to_date_no 의
+   값+sign 에서 도출되고, 이 SELECT 는 절대 날짜 리터럴로 하루를 고른다).
    날짜 값은 sql_str 로 안전하게 렌더(SQL 인젝션 방지). region 은 있을 때만 조건 추가. #}
-SELECT user_id, amount, region, {{ task_column | sql_ident }}
+SELECT user_id, amount, region, dt
 FROM sales
-WHERE {{ task_column | sql_ident }} = {{ task_date | sql_str }}
+WHERE dt = {{ task_date | sql_str }}
 {%- if region %}
   AND region = {{ region | sql_str }}
 {%- endif %}

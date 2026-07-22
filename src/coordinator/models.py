@@ -22,7 +22,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -465,6 +465,32 @@ class Job:
 # ----------------------------- API 스키마 -----------------------------
 
 
+class QueryParam(BaseModel):
+    """템플릿 렌더 파라미터 한 항목(이름-값[-부호]).
+
+    ``POST /query-execute`` 와 ``POST /jobs`` 가 공유한다(``/jobs`` 는 하위 호환을 위해
+    이름→값 dict 도 계속 받는다). manifest 의 ``params`` 스키마와 이름으로 매칭되며,
+    ``value`` 는 스칼라뿐 아니라 배열(list 타입 파라미터)도 될 수 있어 ``Any`` 로 둔다 —
+    타입 강제/검증은 이후 템플릿 엔진의 ``ParamSpec`` 이 담당한다.
+
+    ``sign`` 은 **값의 부호가 아니라 SQL 연산자의 방향**을 뜻한다. Impala ``interval`` 이
+    절대값만 받기 때문에 ``current_date() - interval 7 day`` 처럼 부호가 SQL 텍스트에
+    박히는 쿼리에서는, 파라미터 값(7)만으로 "오늘 기준 -7일" 이라는 의미를 복원할 수 없다.
+    그 방향을 클라이언트가 명시하는 자리가 ``sign`` 이다. 렌더 컨텍스트에는
+    ``<name>_sign`` 으로 노출되어 템플릿이 ``{{ from_date_no_sign | sql_sign }}`` 로
+    연산자를 찍을 수 있고, 날짜 fan-out(``task_params``)은 이 부호로 구간을 도출한다.
+    ``sign`` 이 없으면 값 자체의 부호를 쓴다(``value:-7`` == ``value:7, sign:"-"``).
+    """
+
+    name: str = Field(..., description="파라미터 이름(manifest params 의 name 과 일치)")
+    value: Any = Field(default=None, description="파라미터 값(스칼라 또는 배열)")
+    sign: Optional[Literal["+", "-"]] = Field(
+        default=None,
+        description="SQL 연산자 방향(+/-). interval 처럼 부호가 SQL 에 박힌 쿼리에서 "
+        "값의 의미 방향을 나타낸다. 템플릿에는 <name>_sign 으로 노출된다.",
+    )
+
+
 class CreateJobRequest(BaseModel):
     """작업 생성 API(POST)의 요청 바디 스키마.
 
@@ -482,9 +508,10 @@ class CreateJobRequest(BaseModel):
         default=None,
         description="서버 템플릿 ID(디렉터리명). 지정 시 params 로 SQL 을 런타임 생성한다.",
     )
-    params: dict = Field(
+    params: Union[dict, list[QueryParam]] = Field(
         default_factory=dict,
-        description="템플릿 렌더링 파라미터(template_id 지정 시 사용).",
+        description="템플릿 렌더링 파라미터(template_id 지정 시 사용). 이름→값 dict 또는 "
+        "[{name, value, sign}] 배열. 배열 형태만 sign(연산자 방향)을 표현할 수 있다.",
     )
 
     # template_id 를 주면 렌더 결과가 채우므로 sql 은 선택이 된다(raw 모드에서는 필수처럼 취급).
@@ -495,20 +522,22 @@ class CreateJobRequest(BaseModel):
     target_table: Optional[str] = Field(
         default=None, description="Greenplum 적재 대상 테이블(raw 모드 필수, 템플릿은 manifest 기본값 가능)"
     )
-    # ── 날짜 태스크 컬럼 fan-out 모드(파티션 IN 분할 대체) ──
-    # task_column 을 주면 IN 값 분할 대신 '날짜별 1 task' 로 펼친다. task_range(오늘 기준 상대
-    # 일수, 양끝 포함)로 날짜 목록을 만들고, 각 날짜마다 SELECT 템플릿을 task_date 로 렌더해
-    # 하루치만 조회하는 sub-query 를 만든다. 템플릿 stage_insert 전용(select+insert 템플릿 필요).
-    task_column: Optional[str] = Field(
+    # ── 날짜 fan-out 모드(파티션 IN 분할 대체) ──
+    # task_params 로 '구간의 두 끝'을 담은 파라미터 두 개를 지목하면, IN 값 분할 대신
+    # '하루=1 task' 로 펼친다. 각 끝의 오프셋은 (값, sign)에서 도출하고(sign 없으면 값의 부호),
+    # task 마다 두 파라미터를 같은 날로 좁혀 렌더한다 — 값은 언제나 절대값, 부호는 <name>_sign
+    # 으로 나가므로 Impala interval(절대값만 허용)에 그대로 들어간다.
+    # 템플릿 stage_insert 전용(select+insert 조각 필요).
+    task_params: Optional[list[str]] = Field(
         default=None,
-        description="날짜 태스크 컬럼(지정 시 IN 분할 대신 날짜 fan-out 모드). partition_column 을 대체한다.",
+        description="날짜 fan-out: 구간의 두 끝을 담은 params 이름 2개(예: "
+        '["from_date_no", "to_date_no"]). 지정 시 IN 분할 대신 하루=1 task 로 펼친다.',
     )
-    task_range: Optional[list[int]] = Field(
-        default=None,
-        description="오늘 기준 상대 일수 범위 [start, end](양끝 포함). 예: [-7, 0] → 오늘 포함 8일.",
-    )
-    task_column_type: str = Field(
-        default="date", description="태스크 컬럼 타입(현재 date 만 지원)."
+    task_bound: Literal["point", "pair"] = Field(
+        default="point",
+        description="task 하나가 받는 두 오프셋의 형태. point=(d, d) — 양끝 포함 비교"
+        "(BETWEEN/=)용, 날짜 수만큼 task. pair=(d, d+1) — 반열림 비교(>= AND <)용, "
+        "날짜 수-1 만큼 task. manifest 기본값으로도 지정 가능.",
     )
     task_date_format: str = Field(
         default="%Y-%m-%d", description="task_date 로 주입할 날짜 문자열 포맷(strftime)."
@@ -594,18 +623,6 @@ class CreateJobResponse(BaseModel):
     """작업 생성 API의 응답 스키마. 생성된 Job 식별자를 돌려준다."""
 
     job_id: str
-
-
-class QueryParam(BaseModel):
-    """``POST /query-execute`` params 배열의 한 항목(이름-값 쌍).
-
-    manifest 의 ``params`` 스키마와 이름으로 매칭된다. ``value`` 는 스칼라뿐 아니라
-    배열(list 타입 파라미터)도 될 수 있어 ``Any`` 로 둔다 — 타입 강제/검증은 이후
-    템플릿 엔진의 ``ParamSpec`` 이 담당한다.
-    """
-
-    name: str = Field(..., description="파라미터 이름(manifest params 의 name 과 일치)")
-    value: Any = Field(default=None, description="파라미터 값(스칼라 또는 배열)")
 
 
 class QueryExecuteRequest(BaseModel):

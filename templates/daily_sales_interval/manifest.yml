@@ -1,0 +1,46 @@
+# 날짜 fan-out 예제 (B) — 상대 일수 interval 방식. 일별 매출 이관(stage_insert).
+#
+# 소스 쿼리가 절대 날짜가 아니라 오늘 기준 상대 일수로 구간을 잡는 경우다:
+#   BETWEEN trunc(current_date() - interval 7 day) AND trunc(current_date() + interval 1 day)
+#
+# Impala 의 interval 은 **절대값만** 받으므로 방향(-/+)이 SQL 텍스트에 박힌다. 그래서
+# 파라미터 값(7)만으로는 "오늘 기준 -7일" 이라는 의미를 복원할 수 없다. 이 템플릿은 그
+# 방향을 요청의 sign 에서 받아 {{ <name>_sign | sql_sign }} 으로 연산자 자리에 찍는다.
+#
+# 요청 예:
+#   {"template_id": "daily_sales_interval",
+#    "params": [{"name":"from_date_no","value":7,"sign":"-"},
+#               {"name":"to_date_no","value":1,"sign":"+"}],
+#    "task_params": ["from_date_no","to_date_no"]}
+#   → 구간 [-7, +1] → 9 task(오늘 포함 앞 7일 + 내일). fan-out 없이 그냥 제출하면
+#     같은 템플릿이 구간 전체를 한 번에 읽는 SELECT 로 렌더된다(동작이 갈리지 않는다).
+#
+# task 마다 coordinator 가 두 파라미터를 같은 날로 좁혀(값=절대값, 부호=방향) 렌더하므로
+# BETWEEN 이 하루로 붕괴한다. dt 가 DATE 이고 BETWEEN 이 양끝 포함이라 task_bound 는 point.
+# dt 가 TIMESTAMP 라면 SELECT 를 `>= … AND < …` 반열림으로 바꾸고 task_bound 를 pair 로 둔다
+# (그래야 자정 경계가 겹치지 않는다).
+
+id: daily_sales_interval
+description: 일별 매출 이관(stage_insert, 날짜 fan-out — 상대 일수 interval + sign 방식)
+
+exec_mode: stage_insert
+partition_column: dt                 # 표시용(이 모드는 IN 분할을 하지 않는다)
+target_table: public.sales
+staging_table: stg_sales
+strict_validation: false
+task_bound: point                    # BETWEEN(양끝 포함) + DATE 컬럼 → 하루=한 점
+# 렌더된 SELECT 는 구조 검증(단일 SELECT 인지)을 위해 sqlglot 으로 한 번 파싱된다. sqlglot 에는
+# impala 방언이 없고 기본값 hive 는 인자 1개짜리 trunc(date) 를 거부하므로(PARSE_ERROR),
+# interval/trunc 를 쓰는 Impala 쿼리는 파싱만이라도 통과하는 방언을 지정한다. 실행은 그대로
+# Impala 가 하며 이 값은 파싱에만 쓰인다.
+sql_dialect: trino
+
+params:
+  - {name: from_date_no, type: int, required: true}     # 구간 시작 크기(방향은 sign)
+  - {name: to_date_no,   type: int, required: true}     # 구간 끝 크기(방향은 sign)
+  - {name: region,       type: string, required: false}
+
+files:
+  select:      select.sql.j2
+  insert:      insert.sql.j2
+  staging_ddl: staging_ddl.sql.j2

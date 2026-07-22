@@ -104,13 +104,50 @@ def _query_params_to_dict(params: list) -> dict:
     같은 name 이 두 번 오면(모호함) 422 로 거부한다. 타입/필수 검증은 이후 템플릿 엔진의
     ``ParamSpec`` 이 하므로 여기서는 형태(이름 유일성)만 본다.
     """
-    out: dict = {}
+    values, _ = _split_params(params)
+    return values
+
+
+def _split_params(params) -> tuple[dict, dict]:
+    """요청 params 를 ``(값 dict, 부호 dict)`` 로 가른다 — dict/배열 두 형태를 모두 받는다.
+
+    - ``{"region": "KR"}`` (하위 호환, 부호 없음) → ``({"region": "KR"}, {})``
+    - ``[{"name": "from_date_no", "value": 7, "sign": "-"}, ...]`` → 값과 부호를 분리
+
+    부호는 값에 적용하지 **않는다**. ``sign`` 은 SQL 연산자의 방향(``- interval``)을
+    뜻하므로 값에 다시 붙이면 이중 적용이 된다. 렌더 컨텍스트에는 :func:`_render_params`
+    가 ``<name>_sign`` 으로 따로 실어 보낸다. 같은 이름이 두 번 오면 422.
+    """
+    if params is None:
+        return {}, {}
+    if isinstance(params, dict):
+        return dict(params), {}
+    values: dict = {}
+    signs: dict = {}
     for item in params:
-        name = item.name
-        if name in out:
+        # pydantic 모델(QueryParam)로 파싱된 경우와 평범한 dict 둘 다 받는다.
+        name = item.name if hasattr(item, "name") else item.get("name")
+        value = item.value if hasattr(item, "value") else item.get("value")
+        sign = item.sign if hasattr(item, "sign") else item.get("sign")
+        if not name:
+            raise QueryValidationError("PARAM_NAME_MISSING", "params 항목에 name 이 없습니다.")
+        if name in values:
             raise QueryValidationError("DUPLICATE_PARAM", f"중복된 파라미터 이름: {name}")
-        out[name] = item.value
-    return out
+        values[name] = value
+        if sign:
+            signs[name] = sign
+    return values, signs
+
+
+def _render_params(values: dict, signs: dict) -> dict:
+    """값 dict + 부호 dict → 렌더 컨텍스트(부호는 ``<name>_sign`` 으로 노출).
+
+    템플릿은 ``current_date() {{ from_date_no_sign | sql_sign }} interval
+    {{ from_date_no | sql_num }} day`` 처럼 연산자 방향을 데이터로 받는다.
+    """
+    ctx = dict(values)
+    ctx.update({f"{name}_sign": sign for name, sign in signs.items()})
+    return ctx
 
 
 # 템플릿 렌더 시 manifest 기본값과 병합하는 스칼라 필드(요청이 명시하면 요청이 이긴다).
@@ -121,36 +158,105 @@ _TEMPLATE_SCALAR_KEYS = (
 )
 
 
-def _compute_task_dates(task_range, today, fmt: str = "%Y-%m-%d") -> list[str]:
-    """오늘(``today``) 기준 상대 일수 범위 ``[start, end]``(양끝 포함)를 절대 날짜 문자열 목록으로 만든다.
+# 날짜 fan-out 이 만들 수 있는 task 수 상한. 오타(-10000 등)로 수만 개의 task 가 생겨
+# executor 와 메타 저장소를 마비시키는 것을 막는다(1년치 + 윤년 여유).
+_MAX_FANOUT_TASKS = 366
 
-    예: today=2026-07-10, task_range=[-7, 0] → 2026-07-03 … 2026-07-10 (8일).
-    start>end 로 뒤집혀 와도 정상 정렬해 처리한다. 형식 위반은 QueryValidationError(422).
+
+def _param_offset(name: str, value, sign: Optional[str]) -> int:
+    """(값, 부호) → 오늘 기준 **부호 있는 오프셋(일)**.
+
+    ``sign`` 이 있으면 값은 크기로만 보고 부호는 sign 이 결정한다(``value:7, sign:"-"``
+    → ``-7``). ``sign`` 이 없으면 값 자체의 부호를 쓴다(``value:-7`` → ``-7``). 이렇게
+    두 표기가 같은 뜻이 되어, 부호가 SQL 에 박힌 쿼리(``- interval 7 day``)와 값에
+    부호가 있는 쿼리를 같은 방식으로 다룰 수 있다.
     """
-    if not task_range or len(task_range) != 2:
-        raise QueryValidationError(
-            "TASK_RANGE_INVALID", "task_range 는 [start, end] 두 정수여야 합니다."
-        )
     try:
-        start, end = int(task_range[0]), int(task_range[1])
+        num = int(value)
     except (TypeError, ValueError) as exc:
-        raise QueryValidationError("TASK_RANGE_INVALID", f"task_range 정수 변환 실패: {exc}") from exc
-    lo, hi = (start, end) if start <= end else (end, start)
-    return [(today + timedelta(days=d)).strftime(fmt) for d in range(lo, hi + 1)]
+        raise QueryValidationError(
+            "TASK_PARAM_NOT_NUMERIC",
+            f"task_params 의 '{name}' 는 정수여야 합니다(현재 {value!r}).",
+        ) from exc
+    if not sign:
+        return num
+    return -abs(num) if sign == "-" else abs(num)
+
+
+def _compute_task_offsets(lo: int, hi: int, bound: str) -> list[tuple[int, int]]:
+    """구간 ``[lo, hi]`` 를 하루 단위 task 의 ``(시작 오프셋, 끝 오프셋)`` 목록으로 자른다.
+
+    ``bound`` 가 task 하나의 폭을 정한다 — 어느 쪽이 맞는지는 **템플릿의 비교식**이 결정한다:
+
+    - ``point``: ``(d, d)``. ``BETWEEN a AND b``(양끝 포함)나 ``= a`` 처럼 경계를 모두
+      포함하는 비교용. task 수 = 날짜 수. 예 ``[-7, 1]`` → 9개.
+    - ``pair`` : ``(d, d+1)``. ``>= a AND < b``(반열림) 비교용. 경계 중복 없이 이어붙는다.
+      task 수 = 날짜 수 - 1. 예 ``[-7, 1]`` → 8개.
+
+    잘못 고르면 조용히 틀린다(point + 반열림 → 0행, pair + BETWEEN → 경계 날짜 중복
+    적재). 그래서 manifest 가 자기 SQL 에 맞는 값을 못 박아 두는 것을 권한다.
+    """
+    pairs = ([(d, d) for d in range(lo, hi + 1)] if bound == "point"
+             else [(d, d + 1) for d in range(lo, hi)])
+    if not pairs:
+        raise QueryValidationError(
+            "TASK_RANGE_EMPTY",
+            f"task_params 로 만든 구간 [{lo}, {hi}] 에서 task 가 생기지 않습니다"
+            f"(task_bound={bound}).",
+        )
+    if len(pairs) > _MAX_FANOUT_TASKS:
+        raise QueryValidationError(
+            "TASK_RANGE_TOO_LARGE",
+            f"날짜 fan-out task 수({len(pairs)})가 상한 {_MAX_FANOUT_TASKS} 를 초과했습니다. "
+            "구간을 좁혀 여러 job 으로 나누세요.",
+        )
+    return pairs
+
+
+def _offset_value_sign(offset: int) -> tuple[int, str]:
+    """오프셋 → ``(절대값, 부호)``. Impala ``interval`` 이 절대값만 받으므로 부호를 분리한다."""
+    return abs(offset), ("-" if offset < 0 else "+")
+
+
+def _validate_sign_contract(engine: TemplateEngine, template_id: str, names: list) -> None:
+    """task 파라미터를 쓰는 select 조각이 부호 변수(``<name>_sign``)도 쓰는지 검사한다.
+
+    이게 없으면 조용히 틀린다: task 마다 값이 절대값으로 들어가므로, 부호가 SQL 에 고정된
+    ``BETWEEN today - interval {{from}} AND today + interval {{to}}`` 템플릿은 ``d=-3``
+    task 에서 ``BETWEEN today-3 AND today+3`` (7일치)을 읽는다 → 모든 task 가 겹쳐 append
+    적재가 중복된다. 오류 없이 데이터만 틀리는 실패라 접수 시점에 막는다.
+
+    파라미터를 아예 참조하지 않는 템플릿(예: ``task_date`` 로 하루를 고르는 방식)은
+    구간 도출에만 쓰는 것이므로 통과시킨다.
+    """
+    refs = engine.referenced_variables(template_id, "select")
+    if not refs:
+        return
+    missing = [n for n in names if n in refs and f"{n}_sign" not in refs]
+    if missing:
+        raise QueryValidationError(
+            "TEMPLATE_MISSING_SIGN_VAR",
+            f"select 조각이 {', '.join(missing)} 를 쓰면서 부호 변수("
+            f"{', '.join(n + '_sign' for n in missing)})를 쓰지 않습니다. interval 은 "
+            "절대값만 받으므로 부호를 연산자로 내보내야 합니다: "
+            "current_date() {{ %s_sign | sql_sign }} interval {{ %s | sql_num }} day"
+            % (missing[0], missing[0]),
+        )
 
 
 def _build_fanout(
     req: "CreateJobRequest", engine: Optional[TemplateEngine], today, *, default_dialect: str
 ) -> list:
-    """날짜 태스크 컬럼 fan-out: 상대 일수 범위 → 날짜 목록 → **하루 = 1 sub-query**.
+    """날짜 fan-out: task_params 가 가리키는 두 끝 → 하루 단위 구간 → **하루 = 1 sub-query**.
 
     IN 값 분할(validate_and_parse+split)을 우회한다. 동작:
-      1) task_range 로 날짜 목록을 만든다(양끝 포함).
-      2) INSERT/staging 은 날짜 독립이라 대표 날짜로 **1회** 렌더해 req 필드(staging_ddl/
+      1) task_params 두 개의 (값, sign)에서 오늘 기준 오프셋 구간을 도출하고,
+         task_bound 에 따라 (d, d) 또는 (d, d+1) 쌍 목록으로 자른다.
+      2) 부호 계약(``<name>_sign`` 사용 여부)을 검사한다 — 어기면 조용한 중복 적재가 된다.
+      3) INSERT/staging 은 날짜 독립이라 대표 구간으로 **1회** 렌더해 req 필드(staging_ddl/
          wrapper_query=INSERT)와 manifest 스칼라 기본값을 채운다.
-      3) 날짜마다 SELECT 조각만 render_query 로 렌더해 sub-query 를 만들고, partition_values 에
-         그 날짜를 담는다(관측/표시용). stage_insert 는 append 적재다.
-      4) partition_column 을 task_column 으로 확정한다(필수필드 충족).
+      4) task 마다 두 파라미터를 그 하루로 좁혀(값=절대값, 부호=방향) SELECT 조각만 렌더한다.
+         partition_values 에는 그 날짜를 담는다(관측/표시용). stage_insert 는 append 적재다.
 
     템플릿 stage_insert 전용이다(select+insert 필요). template_id 미지정/타 exec_mode 는 422.
     """
@@ -160,20 +266,52 @@ def _build_fanout(
         )
     if not req.template_id:
         raise QueryValidationError(
-            "FANOUT_REQUIRES_TEMPLATE", "task_column(날짜 fan-out) 모드는 template_id 가 필요합니다."
+            "FANOUT_REQUIRES_TEMPLATE", "task_params(날짜 fan-out) 모드는 template_id 가 필요합니다."
         )
-    dates = _compute_task_dates(req.task_range, today, req.task_date_format)
-    if not dates:
-        raise QueryValidationError("TASK_RANGE_EMPTY", "task_range 로 만든 날짜가 없습니다.")
+    names = list(req.task_params or [])
+    if len(names) != 2:
+        raise QueryValidationError(
+            "TASK_PARAMS_INVALID",
+            f"task_params 는 구간의 두 끝을 가리키는 파라미터 이름 2개여야 합니다(현재 {names}).",
+        )
 
-    params = dict(req.params or {})
+    values, signs = _split_params(req.params)
+    missing = [n for n in names if n not in values]
+    if missing:
+        raise QueryValidationError(
+            "TASK_PARAMS_INVALID",
+            f"task_params 가 가리키는 파라미터가 params 에 없습니다: {', '.join(missing)}",
+        )
+    offsets = [_param_offset(n, values[n], signs.get(n)) for n in names]
+    lo, hi = min(offsets), max(offsets)
+
+    # task_bound 는 요청 > manifest 기본값 순. 렌더 전에 확정해야 구간을 자를 수 있으므로
+    # manifest 를 먼저 읽는다(캐시되어 있어 추가 I/O 는 사실상 없다).
+    if "task_bound" not in req.model_fields_set:
+        req.task_bound = engine.load_manifest(req.template_id).defaults.get(
+            "task_bound", req.task_bound
+        )
+    pairs = _compute_task_offsets(lo, hi, req.task_bound)
+    _validate_sign_contract(engine, req.template_id, names)
+
+    def _ctx(pair: tuple[int, int]) -> dict:
+        """task 하나(구간 두 끝)의 렌더 컨텍스트 — 값은 절대값, 부호는 <name>_sign 으로."""
+        ctx = _render_params(values, signs)
+        for name, offset in zip(names, pair):
+            magnitude, sign = _offset_value_sign(offset)
+            ctx[name] = magnitude
+            ctx[f"{name}_sign"] = sign
+        # 절대 날짜/오프셋도 노출한다 — `WHERE dt = {{ task_date | sql_str }}` 처럼 interval
+        # 대신 날짜 리터럴로 하루를 고르는 템플릿을 같은 fan-out 으로 지원하기 위함.
+        ctx["task_offset"] = pair[0]
+        ctx["task_offset_end"] = pair[1]
+        ctx["task_date"] = (today + timedelta(days=pair[0])).strftime(req.task_date_format)
+        ctx["task_date_end"] = (today + timedelta(days=pair[1])).strftime(req.task_date_format)
+        return ctx
+
     request_scalars = {k: getattr(req, k) for k in _TEMPLATE_SCALAR_KEYS if k in req.model_fields_set}
-    # INSERT/staging 은 날짜 독립 → 대표 날짜로 1회 렌더(모든 task 공유). task_date/task_column 노출.
-    base = engine.render(
-        req.template_id,
-        {**params, "task_column": req.task_column, "task_date": dates[0]},
-        request_scalars=request_scalars,
-    )
+    # INSERT/staging 은 날짜 독립 → 대표 구간으로 1회 렌더(모든 task 공유).
+    base = engine.render(req.template_id, _ctx(pairs[0]), request_scalars=request_scalars)
     # manifest 스칼라 기본값 채움(요청이 명시하지 않은 것만). exec_mode 는 아래에서 확정.
     for key, val in base.defaults.items():
         if key == "exec_mode":
@@ -184,21 +322,25 @@ def _build_fanout(
     if base.exec_mode != "stage_insert":
         raise QueryValidationError(
             "FANOUT_REQUIRES_STAGE_INSERT",
-            f"task_column(날짜 fan-out) 모드는 exec_mode=stage_insert 만 지원합니다(현재 {base.exec_mode}).",
+            f"task_params(날짜 fan-out) 모드는 exec_mode=stage_insert 만 지원합니다(현재 {base.exec_mode}).",
         )
     if base.staging_ddl:
         req.staging_ddl = base.staging_ddl
-    req.wrapper_query = base.insert          # stage_insert INSERT → job.insert_sql 로 실린다
-    req.partition_column = req.task_column   # 필수필드(partition_column) 충족용(표시)
+    req.wrapper_query = base.insert  # stage_insert INSERT → job.insert_sql 로 실린다
+    # 필수필드(partition_column) 충족용 표시값. 이 모드는 IN 분할을 안 하므로 실제 분할에는
+    # 쓰이지 않는다 — manifest 가 컬럼을 선언했으면 그걸, 아니면 task_params 이름을 보여준다.
+    if not req.partition_column:
+        req.partition_column = ",".join(names)
 
     dialect = req.sql_dialect or default_dialect
     sub_queries: list = []
-    for d in dates:
-        select_sql = engine.render_query(
-            req.template_id, {**params, "task_column": req.task_column, "task_date": d}
-        )
+    for pair in pairs:
+        ctx = _ctx(pair)
+        select_sql = engine.render_query(req.template_id, ctx)
         validate_select_query(select_sql, dialect=dialect)  # 단일 SELECT 방어(다중 문/비-SELECT 차단)
-        sub_queries.append(SubQuery(sql=select_sql, partition_values=[d]))
+        # 관측용 파티션 값: point 는 그 하루, pair 는 [시작일, 끝일).
+        marks = [ctx["task_date"]] if req.task_bound == "point" else [ctx["task_date"], ctx["task_date_end"]]
+        sub_queries.append(SubQuery(sql=select_sql, partition_values=marks))
     req.sql = sub_queries[0].sql  # original_sql 기록/필수필드 검증용 대표값
     return sub_queries
 
@@ -220,7 +362,12 @@ def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
     request_scalars = {
         k: getattr(req, k) for k in _TEMPLATE_SCALAR_KEYS if k in req.model_fields_set
     }
-    result = engine.render(req.template_id, req.params, request_scalars=request_scalars)
+    # params 는 dict/배열 두 형태를 받는다. 배열의 sign 은 값에 적용하지 않고 <name>_sign
+    # 으로 따로 노출한다(SQL 연산자 방향이지 값의 부호가 아니므로).
+    values, signs = _split_params(req.params)
+    result = engine.render(
+        req.template_id, _render_params(values, signs), request_scalars=request_scalars
+    )
 
     # 요청이 명시하지 않은 스칼라만 manifest 기본값으로 채운다(exec_mode 는 아래에서 확정).
     for key, val in result.defaults.items():
@@ -253,8 +400,12 @@ def _request_fingerprint(req: "CreateJobRequest") -> str:
     쓸 때만 계산하며(비용 절약), 키가 없으면 호출하지 않는다. dict 를 정렬 직렬화해
     필드 순서에 무관하게 같은 요청이면 같은 지문이 나오도록 한다.
     """
-    canonical = json.dumps(req.model_dump(mode="json"), sort_keys=True,
-                           ensure_ascii=False, default=str)
+    body = req.model_dump(mode="json")
+    # params 배열은 순서만 다른 같은 요청이 다른 지문이 되지 않도록 이름순으로 정규화한다
+    # (dict 는 sort_keys 가 처리). 순서가 의미를 갖지 않는 이름-값 목록이라 안전하다.
+    if isinstance(body.get("params"), list):
+        body["params"] = sorted(body["params"], key=lambda p: str(p.get("name", "")))
+    canonical = json.dumps(body, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -507,9 +658,9 @@ def create_app(
                 logger.info("멱등 재생: 기존 job %s 반환(Idempotency-Key 사전확인)", existing.job_id)
                 return _idempotent_replay_response(existing.job_id)
 
-        # 날짜 태스크 컬럼 fan-out 모드: task_column 이 있으면 IN 값 분할 대신 '날짜별 1 task' 로
-        # 펼친다(_build_fanout 이 날짜 목록 생성 + 날짜별 SELECT 렌더 + req 필드 주입까지 끝낸다).
-        fanout = bool(req.task_column)
+        # 날짜 fan-out 모드: task_params 가 있으면 IN 값 분할 대신 '하루 1 task' 로 펼친다
+        # (_build_fanout 이 구간 도출 + task 별 SELECT 렌더 + req 필드 주입까지 끝낸다).
+        fanout = bool(req.task_params)
         if fanout:
             sub_queries = _build_fanout(
                 req, template_engine, now_dt().date(),
@@ -699,7 +850,7 @@ def create_app(
                 ),
                 impala_query_options=req.impala_query_options,
                 template_id=req.template_id,
-                template_params=(dict(req.params) if req.template_id else None),
+                template_params=(_split_params(req.params)[0] if req.template_id else None),
                 external_columns=req.external_columns,
                 export_local_dir=req.export_local_dir,
                 csv_delimiter=req.csv_delimiter,

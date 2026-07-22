@@ -89,11 +89,18 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   참조 구현·설정은 docs/GUIDE.md / `customs/query_funcs/trino_runner.py`. 임의 SQL 미리보기(`/datasources/
   {name}/query`)는 별개 운영 점검용으로 built-in 유지.
 - `src/coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
-  **날짜 태스크 컬럼 fan-out**(DESIGN): `/jobs` 에 `task_column`+`task_range`(오늘 기준 상대
-  일수, 양끝 포함)를 주면 IN 분할 대신 **날짜=1 task** 로 펼친다(`app.py` `_build_fanout`/`_compute_task_dates`,
-  IN 파싱·split 우회). 날짜별 SELECT 만 `render_query` 로 렌더, INSERT/staging 은 날짜 독립이라 1회
+  **날짜 fan-out**(DESIGN §18.8): `/jobs` 에 `task_params`(구간의 두 끝을 담은 params 이름 2개)를
+  주면 IN 분할 대신 **하루=1 task** 로 펼친다(`app.py` `_build_fanout`/`_compute_task_offsets`,
+  IN 파싱·split 우회). 구간은 각 파라미터의 (값, `sign`)에서 도출하는데, **`sign` 은 값의 부호가
+  아니라 SQL 연산자의 방향**이다(Impala `interval` 은 절대값만 받아 `- interval 7 day` 처럼 방향이
+  SQL 에 박히므로). 템플릿에는 `<name>_sign` 으로 노출되고 `sql_sign` 필터가 `+`/`-` 외를 막는다.
+  task 마다 두 파라미터를 같은 날로 좁혀 렌더하므로 BETWEEN 이 하루로 붕괴하고, 값은 언제나 절대값이다.
+  `task_bound`: `point`(기본, `(d,d)` — BETWEEN/= 양끝 포함) / `pair`(`(d,d+1)` — 반열림 `>=`/`<`).
+  부호 변수를 안 쓰는 템플릿은 Jinja2 AST 검사로 422(`TEMPLATE_MISSING_SIGN_VAR`) — 안 막으면
+  각 task 가 의도보다 넓은 구간을 읽어 조용히 중복 적재된다. INSERT/staging 은 날짜 독립이라 1회
   렌더해 job 공유. stage_insert 전용이며 **append** 적재(프레임워크는 대상에 DELETE 안 함 — 멱등이
-  필요하면 대상 선비우기/날짜별 물리 테이블). 예제: `templates/daily_sales/`.
+  필요하면 대상 선비우기/날짜별 물리 테이블). 예제: `templates/daily_sales_interval/`(interval+sign),
+  `templates/daily_sales/`(날짜 리터럴).
 - `src/coordinator/stage.py` — **`local_stage`(file:// 세그먼트 로컬 스테이징) Phase 2 SQL 조립**(순수
   함수): `file://` 외부테이블 DDL·staging 적재·멱등 DELETE·정리 SQL, 파일 예산 배분
   (`plan_file_budget`, 호스트당 ≤ S_h), executor_url→gp_hostname 유도. 자세히는 DESIGN.

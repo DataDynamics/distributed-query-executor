@@ -1,23 +1,33 @@
-# 날짜 태스크 컬럼 fan-out 예제 — 일별 매출 이관(stage_insert).
+# 날짜 fan-out 예제 (A) — 날짜 리터럴 방식. 일별 매출 이관(stage_insert).
 #
-# /jobs 에 template_id="daily_sales" + task_column="dt" + task_range=[-7,0] 를 보내면,
-# coordinator 가 오늘 기준 상대 일수 범위를 날짜 목록으로 펼쳐 **하루 = 1 task** 로 실행한다.
+# /jobs 에 template_id="daily_sales" + params(from_date_no/to_date_no) +
+# task_params=["from_date_no","to_date_no"] 를 보내면, coordinator 가 두 파라미터의
+# (값, sign)에서 오늘 기준 구간을 도출해 **하루 = 1 task** 로 펼친다.
 # 각 task 는 그 하루치만 SELECT(select.sql.j2, task_date 주입) → staging(TEMP) COPY → INSERT.
 # INSERT/staging_ddl 은 날짜 독립이라 1회 렌더해 모든 task 가 공유한다.
 #
-# 파티션 IN 분할과 달리 partition_column 은 쓰지 않는다(task_column 이 대체).
+# 이 템플릿의 SELECT 는 절대 날짜 리터럴(task_date)로 하루를 고르므로 from/to 파라미터를
+# SQL 에서 직접 참조하지 않는다(구간 도출에만 쓰인다). 소스 쿼리가 상대 일수 interval 을
+# 쓰는 경우는 daily_sales_interval 예제를 참고한다.
+#
+# 파티션 IN 분할과 달리 parallelism/split_strategy 는 쓰이지 않는다(task 수 = 날짜 수).
 
 id: daily_sales
-description: 일별 매출 이관(stage_insert, 날짜 태스크 컬럼 fan-out — 하루=1 task)
+description: 일별 매출 이관(stage_insert, 날짜 fan-out — 하루=1 task, 날짜 리터럴 방식)
 
 exec_mode: stage_insert              # fan-out 은 stage_insert 전용
+partition_column: dt                 # 표시용(이 모드는 IN 분할을 하지 않는다)
 target_table: public.sales           # 최종 적재 대상(요청 target_table 로 재정의 가능)
 staging_table: stg_sales             # staging(TEMP)
 strict_validation: false
+task_bound: point                    # dt 가 DATE + '=' 비교 → 하루=한 점(task 수 = 날짜 수)
 
-# 파라미터 스키마 — task_column/task_date 는 시스템이 주입하므로 여기 선언하지 않는다.
+# 파라미터 스키마 — task_date/task_offset 은 시스템이 주입하므로 여기 선언하지 않는다.
+# from_date_no/to_date_no 는 오늘 기준 상대 일수(크기)이고, 방향은 요청의 sign 이 정한다.
 params:
-  - {name: region, type: string, required: false}   # 지역 필터(비면 전체)
+  - {name: from_date_no, type: int, required: true}     # 구간 시작(예: value 7 + sign '-' → -7일)
+  - {name: to_date_no,   type: int, required: true}     # 구간 끝(예: value 0 + sign '+' → 오늘)
+  - {name: region,       type: string, required: false} # 지역 필터(비면 전체)
 
 # role → 조각 파일 매핑. stage_insert: select(필수)+insert(필수)+staging_ddl(선택).
 files:

@@ -33,6 +33,7 @@ from typing import Any, Optional
 import sqlglot
 import yaml
 from jinja2 import StrictUndefined, TemplateError as _JinjaTemplateError
+from jinja2 import meta as jinja2_meta
 from jinja2.sandbox import SandboxedEnvironment
 
 from . import template_funcs
@@ -55,7 +56,7 @@ _ROLES_BY_MODE: dict[str, dict[str, tuple[str, ...]]] = {
 _SCALAR_DEFAULT_KEYS = (
     "exec_mode", "partition_column", "target_table", "staging_table",
     "write_mode", "split_strategy", "failure_policy", "parallelism",
-    "sql_dialect", "strict_validation",
+    "sql_dialect", "strict_validation", "task_bound",
 )
 
 
@@ -346,6 +347,28 @@ class TemplateEngine:
         if not select.strip():
             raise TemplateError("TEMPLATE_RENDER_ERROR", "렌더된 select 가 비어 있습니다.")
         return select
+
+    def referenced_variables(self, template_id: str, role: str = "select") -> set:
+        """조각 파일이 **참조하는 변수 이름 집합**을 Jinja2 AST 에서 뽑는다(렌더 없이).
+
+        날짜 fan-out 의 안전장치용이다. task 파라미터를 ``interval {{ from_date_no }}``
+        처럼 쓰면서 부호 변수(``from_date_no_sign``)를 안 쓰는 템플릿은, task 마다 절대값을
+        받아 ``BETWEEN today-3 AND today+3`` 같은 **의도보다 넓은 구간**을 조용히 읽는다
+        (append 적재라 중복이 그대로 쌓인다). 문자열 grep 이 아니라 AST 를 보므로 주석·
+        조건절 안의 참조도 정확히 잡힌다. ``{% include %}`` 너머는 보지 않는다(조각은 단일
+        파일 전제). 파일이 없으면 빈 집합.
+        """
+        manifest = self.load_manifest(template_id)
+        fname = manifest.files.get(role)
+        if not fname:
+            return set()
+        rel = f"{template_id}/{fname}"
+        try:
+            source, _, _ = self._env.loader.get_source(self._env, rel)
+            return set(jinja2_meta.find_undeclared_variables(self._env.parse(source)))
+        except Exception as exc:  # 문법 오류 등은 렌더 시점에 제대로 보고되므로 여기선 관대
+            logger.debug("템플릿 '%s' 변수 추출 실패(무시): %s", rel, exc)
+            return set()
 
     def _render_file(self, template_id: str, filename: str, ctx: dict) -> str:
         """조각 파일 하나를 렌더링한다(경로는 template_id 하위로 결합)."""

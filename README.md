@@ -137,8 +137,8 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 `strict=false` 에서는 `partition_column` 을 테이블 한정자·대소문자 무관하게 매칭해(`REGION_NO` →
 `A.REGION_NO`) 그 `IN` 절만 부분집합으로 치환하고 다른 조건은 보존합니다. 분할 기준 컬럼은 출력 행을
 분할하는 위치(주로 소스 스캔 필터)에 있어야 하며, 그 위에서 집계/DISTINCT 하는 쿼리는 결과가 달라질
-수 있습니다. `IN` 분할 대신 **날짜 하나 = task 하나**로 펼치는 fan-out 모드(`task_column`+`task_range`)
-도 있습니다. 자세한 규칙·예제는 [`docs/GUIDE.md`](docs/GUIDE.md) 를 참고하세요.
+수 있습니다. `IN` 분할 대신 **하루 = task 하나**로 펼치는 fan-out 모드(`task_params`)도 있습니다 — 구간의
+두 끝을 담은 파라미터 두 개를 지목하면(각 파라미터의 `sign` 이 방향) 하루씩 나눠 실행합니다. 자세한 규칙·예제는 [`docs/GUIDE.md`](docs/GUIDE.md) 를 참고하세요.
 
 ### 적재 방식 (`exec_mode`)
 
