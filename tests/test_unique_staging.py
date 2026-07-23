@@ -79,6 +79,36 @@ def test_per_task_staging_uniquifies_ddl_and_insert_consistently():
     assert "target_t_5" not in out_ins
 
 
+def test_per_task_staging_protects_target_when_names_overlap_bare():
+    # staging 이름이 target 이름의 일부와 겹쳐도(sales ⊂ public.sales) 대상엔 접미사가
+    # 붙지 않아야 한다(bare 형태).
+    ddl = "CREATE TEMP TABLE sales (a int)"
+    ins = "INSERT INTO public.sales (a) SELECT a FROM sales"
+    name, out_ddl, out_ins = stage_sql.per_task_staging(
+        "sales", ddl, ins, "t_9", target_table="public.sales"
+    )
+    assert name == "sales_t_9"
+    assert out_ddl == "CREATE TEMP TABLE sales_t_9 (a int)"
+    # 대상 테이블은 그대로, staging 만 치환.
+    assert "INSERT INTO public.sales (a)" in out_ins
+    assert "FROM sales_t_9" in out_ins
+    assert "public.sales_t_9" not in out_ins
+
+
+def test_per_task_staging_protects_target_when_names_overlap_quoted():
+    # 인용 형태에서도 "public"."sales" 안의 "sales" 를 건드리지 않는다.
+    ddl = 'CREATE TEMP TABLE "sales" (a int)'
+    ins = 'INSERT INTO "public"."sales" (a) SELECT a FROM "sales"'
+    name, out_ddl, out_ins = stage_sql.per_task_staging(
+        "sales", ddl, ins, "t_9", target_table="public.sales"
+    )
+    assert name == "sales_t_9"
+    assert out_ddl == "CREATE TEMP TABLE sales_t_9 (a int)"
+    # 대상 테이블 인용 토큰은 원문 그대로.
+    assert '"public"."sales"' in out_ins
+    assert "FROM sales_t_9" in out_ins
+
+
 def test_per_task_staging_disabled_passthrough():
     ddl = 'CREATE TEMP TABLE "stg_t" (a int)'
     assert stage_sql.per_task_staging("stg_t", ddl, None, "t_5", enabled=False) == \
