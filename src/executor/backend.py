@@ -580,7 +580,10 @@ class ImpalaToGreenplumBackend:
         """Impala SELECT → Greenplum staging(TEMP) COPY 적재 → staging→target INSERT.
 
         한 Greenplum 세션(연결) 안에서 CREATE TEMP TABLE → COPY → INSERT 를 수행하므로
-        TEMP 테이블이 INSERT 시점까지 보이며, 세션 종료 시 자동 정리된다.
+        TEMP 테이블이 INSERT 시점까지 보인다. INSERT 직후(같은 트랜잭션) staging_table 을
+        **명시적으로 DROP** 해 커밋 시점에 확정 정리하므로, 커넥션 풀이 세션을 재사용해도
+        잔존 TEMP 로 인한 다음 task 의 "already exists" 가 발생하지 않는다(DISCARD ALL
+        동작에 의존하지 않는다). staging 이름은 coordinator 가 task 마다 고유화해 보낸다.
         SELECT(Impala)과 INSERT(Greenplum)이 서로 다른 엔진일 때의 표준 패턴.
         query_options 는 Impala SELECT 에만 적용된다(INSERT 는 Greenplum).
         반환: INSERT 영향 행 수(미지원 시 적재 행 수).
@@ -623,6 +626,16 @@ class ImpalaToGreenplumBackend:
                     affected = gp_cur.rowcount
                     _emit(on_stage, "INSERT", "end",
                           {"rows": affected if affected and affected > 0 else loaded})
+                    # 이번 실행에 우리가 만든(staging_ddl 있는) staging 을 같은 트랜잭션 안에서
+                    # 드롭한다 → 커밋 시 확정되어, 커넥션 풀 재사용 시 잔존 TEMP 로 인한 다음
+                    # task 의 "already exists" 를 원천 차단(DISCARD ALL 동작에 의존하지 않음).
+                    # staging_ddl 이 없으면(기존 영구 테이블에 직접 COPY) 사용자 테이블이므로
+                    # 절대 드롭하지 않는다.
+                    if staging_ddl:
+                        gp_cur.execute(
+                            f"DROP TABLE IF EXISTS {_quote_staging_ident(staging_table)}"
+                        )
+                        logger.debug("stage_insert staging 정리: DROP %s", staging_table)
                 _emit(on_stage, "COMMIT", "start")
                 gp.commit()
                 _emit(on_stage, "COMMIT", "end")
@@ -821,6 +834,16 @@ class ImpalaToGreenplumBackend:
             return rows_written
         finally:
             impala_conn.close()
+
+
+def _quote_staging_ident(name: str) -> str:
+    """staging 테이블명을 DROP 용으로 큰따옴표 인용한다(점은 스키마 한정으로 분리).
+
+    coordinator 의 ``sql_ident`` 와 같은 규칙이라, task 별 고유 이름이든 원래 이름이든
+    CREATE/INSERT 에 쓰인 식별자와 동일하게 해석된다.
+    """
+    parts = str(name).split(".")
+    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
 def _split_schema_table(target_table: str) -> tuple[str, str]:

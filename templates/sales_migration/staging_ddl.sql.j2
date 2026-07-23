@@ -1,6 +1,7 @@
 {# staging 테이블 생성 DDL(선택). stage_insert 는 이 TEMP 테이블에 COPY 한 뒤 target 으로
-   INSERT 한다. 반납 시 DISCARD ALL 로 정리되므로 ON COMMIT DROP 없이도 task 간 격리된다.
-   테이블명은 sql_ident 로 안전하게 인용한다. #}
+   INSERT 한다. coordinator 가 task 마다 staging 이름에 task_id 접미사를 붙여 고유화하고
+   (coordinator.stage_unique_staging), task 가 끝나면 DROP 하므로 task 간 격리된다.
+   테이블명은 sql_ident 로 안전하게 인용한다(고유 이름도 같은 토큰으로 치환됨). #}
 CREATE TEMP TABLE {{ staging_table | sql_ident }} (
   user_id  bigint,
   amount   numeric,

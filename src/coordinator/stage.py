@@ -11,6 +11,8 @@ coordinator 가 GP master 에 실행할 SQL 문자열을 **순수 함수**로 �
 
 from __future__ import annotations
 
+import hashlib
+import re
 from urllib.parse import urlparse
 
 
@@ -31,6 +33,91 @@ def external_table_name(job_id: str) -> str:
     """job 별 고유 외부테이블 이름(``ext_<job_id 안전화>``). 영숫자 외 문자는 ``_`` 로 치환."""
     safe = "".join(c if c.isalnum() else "_" for c in job_id)
     return f"ext_{safe}"
+
+
+def _quote_ident(name: str) -> str:
+    """``sql_ident`` 필터와 동일 규칙으로 식별자를 큰따옴표 인용한다.
+
+    내부 ``"`` 는 ``""`` 로 이중화하고, 점(``.``)이 있으면 스키마 한정으로 보고 각 조각을
+    따로 인용한다(예: ``public.stg`` → ``"public"."stg"``). 템플릿이 렌더한 토큰과
+    정확히 일치시키기 위해 여기서 같은 규칙을 복제한다(stage.py 는 template_funcs 에
+    의존하지 않는 순수 모듈이라 import 대신 규칙만 맞춘다).
+    """
+    parts = str(name).split(".")
+    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
+
+
+def unique_staging_name(base: str, task_id: str, max_len: int = 63) -> str:
+    """``base`` 뒤에 ``task_id`` 를 붙여 **task 별 고유 staging 테이블명**을 만든다.
+
+    왜 필요한가: 같은 job 의 여러 task 가 같은 이름으로 ``CREATE TEMP TABLE`` 을 하면,
+    executor 의 GP 커넥션 풀이 세션을 재사용할 때 이전 task 의 TEMP 가 남아 다음
+    ``CREATE`` 가 "relation already exists" 로 충돌할 수 있다(``DISCARD ALL`` 이 TEMP 를
+    실제로 드롭하지 않는 GP 구성에서 특히). task_id 를 접미사로 붙여 이름을 분리하면
+    이 충돌이 원천 차단된다.
+
+    영숫자 외 문자는 ``_`` 로 치환하고, PostgreSQL/Greenplum 식별자 상한(기본 63바이트)을
+    넘으면 base 를 잘라 뒤에 task_id 해시(8자)를 붙여 길이를 맞추면서 고유성을 유지한다.
+    해시는 결정적이라 같은 task 재시도 시 항상 같은 이름이 나온다(멱등).
+    """
+    safe_id = "".join(c if c.isalnum() else "_" for c in str(task_id))
+    name = f"{base}_{safe_id}"
+    if len(name.encode("utf-8")) <= max_len:
+        return name
+    # 상한 초과: base 를 최대한 살리고 task_id 해시로 고유성 확보.
+    h = hashlib.sha1(str(task_id).encode("utf-8")).hexdigest()[:8]
+    keep = max_len - 1 - len(h)  # '_' + 해시 길이만큼 base 여유
+    if keep < 1:
+        return h[:max_len]
+    return f"{base[:keep]}_{h}"
+
+
+def rewrite_staging_name(sql: str | None, old_name: str, new_name: str) -> str | None:
+    """``sql`` 안의 staging 식별자를 ``old_name`` → ``new_name`` 으로 바꾼다.
+
+    템플릿은 ``{{ staging_table | sql_ident }}`` 로 렌더하므로 큰따옴표 인용 토큰
+    (``"old"``)을 우선 치환한다. raw-SQL 로 따옴표 없이 쓴 경우를 대비해 단어경계 bare
+    이름도 폴백으로 치환한다(컬럼/별칭 오탐을 줄이려 단어경계 정확 매치만). 어느 토큰도
+    없으면 원문을 그대로 돌려준다(무변경 — raw-SQL 에서 이름을 다르게 쓴 경우 안전).
+    """
+    if not sql:
+        return sql
+    quoted_old = _quote_ident(old_name)
+    if quoted_old in sql:
+        return sql.replace(quoted_old, _quote_ident(new_name))
+    pattern = r"\b" + re.escape(str(old_name)) + r"\b"
+    if re.search(pattern, sql):
+        return re.sub(pattern, str(new_name), sql)
+    return sql
+
+
+def per_task_staging(
+    staging_table: str,
+    staging_ddl: str | None,
+    insert_sql: str | None,
+    task_id: str,
+    *,
+    enabled: bool = True,
+    max_len: int = 63,
+) -> tuple[str, str | None, str | None]:
+    """stage_insert 용 **task 별 고유 staging** ``(이름, staging_ddl, insert_sql)`` 을 만든다.
+
+    고유화 조건: ``enabled`` 이고 ``staging_ddl`` 이 있을 때만(=프레임워크가 이번 실행에
+    staging 을 CREATE 하는 경우)이다. ``staging_ddl`` 이 비면 기존 영구 staging 테이블에
+    곧장 COPY 하는 경로라 이름을 바꾸면 대상이 사라지므로 고유화하지 않는다(그 경로의
+    격리는 요청자가 job·파티션별 고유 이름으로 보장해야 한다 — backend docstring 참고).
+
+    반환은 항상 3-튜플이며, 고유화하지 않을 때는 입력을 그대로 돌려준다. job 원본은
+    건드리지 않고 task 전용 사본만 만들어, 여러 task 가 각자 다른 staging 이름을 쓴다.
+    """
+    if not enabled or not staging_ddl:
+        return staging_table, staging_ddl, insert_sql
+    eff = unique_staging_name(staging_table, task_id, max_len)
+    if eff == staging_table:
+        return staging_table, staging_ddl, insert_sql
+    ddl = rewrite_staging_name(staging_ddl, staging_table, eff)
+    ins = rewrite_staging_name(insert_sql, staging_table, eff)
+    return eff, ddl, ins
 
 
 def csv_format_clause(csv_options: dict | None) -> str:
