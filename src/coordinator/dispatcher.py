@@ -256,6 +256,7 @@ class _DispatcherBase:
         return stage_sql.per_task_staging(
             job.staging_table, job.staging_ddl, job.insert_sql, task.task_id,
             enabled=getattr(self.settings, "stage_unique_staging", True),
+            target_table=job.target_table,
         )
 
     def _cancel_observed(self, job: Job) -> bool:

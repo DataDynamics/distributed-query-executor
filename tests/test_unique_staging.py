@@ -37,11 +37,11 @@ def test_unique_staging_name_respects_identifier_limit():
     assert other != name
 
 
-def test_rewrite_staging_name_quoted_token():
-    # 템플릿 렌더 형태("old") 를 새 이름의 인용 토큰으로 치환한다.
+def test_rewrite_staging_name_quoted_token_becomes_bare():
+    # 템플릿이 인용한 형태("old") 를 찾아 **따옴표 없는 bare** 새 이름으로 치환한다.
     ddl = 'CREATE TEMP TABLE "stg_t" (a int)'
     assert stage_sql.rewrite_staging_name(ddl, "stg_t", "stg_t_x") == \
-        'CREATE TEMP TABLE "stg_t_x" (a int)'
+        "CREATE TEMP TABLE stg_t_x (a int)"
 
 
 def test_rewrite_staging_name_bare_fallback_and_wordboundary():
@@ -65,13 +65,48 @@ def test_rewrite_staging_name_no_match_passthrough():
 
 def test_per_task_staging_uniquifies_ddl_and_insert_consistently():
     ddl = 'CREATE TEMP TABLE "stg_t" (a int)'
-    ins = 'INSERT INTO t (a) SELECT a FROM "stg_t"'
+    ins = 'INSERT INTO "public"."target" (a) SELECT a FROM "stg_t"'
     name, out_ddl, out_ins = stage_sql.per_task_staging("stg_t", ddl, ins, "t_5")
     assert name == "stg_t_t_5"
     # DDL·INSERT 양쪽이 같은 고유 이름으로 일관 치환되어야 한다(핵심 계약).
-    assert '"stg_t_t_5"' in out_ddl
-    assert '"stg_t_t_5"' in out_ins
+    assert "CREATE TEMP TABLE stg_t_t_5 (a int)" == out_ddl
+    assert "FROM stg_t_t_5" in out_ins
+    # 따옴표로 감싸지 않는다(bare 식별자).
+    assert '"stg_t_t_5"' not in out_ddl and '"stg_t_t_5"' not in out_ins
     assert '"stg_t"' not in out_ddl and '"stg_t"' not in out_ins
+    # INSERT 대상 테이블에는 task_id 가 붙지 않고 이름도 그대로 유지된다(staging 만 치환).
+    assert '"public"."target"' in out_ins
+    assert "target_t_5" not in out_ins
+
+
+def test_per_task_staging_protects_target_when_names_overlap_bare():
+    # staging 이름이 target 이름의 일부와 겹쳐도(sales ⊂ public.sales) 대상엔 접미사가
+    # 붙지 않아야 한다(bare 형태).
+    ddl = "CREATE TEMP TABLE sales (a int)"
+    ins = "INSERT INTO public.sales (a) SELECT a FROM sales"
+    name, out_ddl, out_ins = stage_sql.per_task_staging(
+        "sales", ddl, ins, "t_9", target_table="public.sales"
+    )
+    assert name == "sales_t_9"
+    assert out_ddl == "CREATE TEMP TABLE sales_t_9 (a int)"
+    # 대상 테이블은 그대로, staging 만 치환.
+    assert "INSERT INTO public.sales (a)" in out_ins
+    assert "FROM sales_t_9" in out_ins
+    assert "public.sales_t_9" not in out_ins
+
+
+def test_per_task_staging_protects_target_when_names_overlap_quoted():
+    # 인용 형태에서도 "public"."sales" 안의 "sales" 를 건드리지 않는다.
+    ddl = 'CREATE TEMP TABLE "sales" (a int)'
+    ins = 'INSERT INTO "public"."sales" (a) SELECT a FROM "sales"'
+    name, out_ddl, out_ins = stage_sql.per_task_staging(
+        "sales", ddl, ins, "t_9", target_table="public.sales"
+    )
+    assert name == "sales_t_9"
+    assert out_ddl == "CREATE TEMP TABLE sales_t_9 (a int)"
+    # 대상 테이블 인용 토큰은 원문 그대로.
+    assert '"public"."sales"' in out_ins
+    assert "FROM sales_t_9" in out_ins
 
 
 def test_per_task_staging_disabled_passthrough():
@@ -140,9 +175,13 @@ async def test_local_dispatch_assigns_unique_staging_per_task():
     for (staging_table, staging_ddl, insert_sql), tid in zip(backend.calls, task_ids):
         expected = f"stg_t_{tid}"  # task_id 는 't_...' 라 sanitize 무변경
         assert staging_table == expected
-        # DDL·INSERT 도 같은 고유 이름으로 치환되어 전달된다.
-        assert f'"{expected}"' in staging_ddl
-        assert f'"{expected}"' in insert_sql
+        # DDL·INSERT 도 같은 고유 이름으로, 따옴표 없이(bare) 치환되어 전달된다.
+        assert f"CREATE TEMP TABLE {expected} " in staging_ddl
+        assert f"FROM {expected}" in insert_sql
+        assert f'"{expected}"' not in staging_ddl and '"stg_t"' not in staging_ddl
+        # INSERT 대상 테이블은 원래 이름 그대로 — task_id 접미사가 붙지 않는다.
+        assert "INSERT INTO public.target " in insert_sql
+        assert "public.target_" not in insert_sql
     # job 원본은 건드리지 않는다(공유 상태 오염 방지).
     assert job.staging_table == "stg_t"
     assert '"stg_t"' in job.staging_ddl

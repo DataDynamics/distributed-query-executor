@@ -72,23 +72,51 @@ def unique_staging_name(base: str, task_id: str, max_len: int = 63) -> str:
     return f"{base[:keep]}_{h}"
 
 
-def rewrite_staging_name(sql: str | None, old_name: str, new_name: str) -> str | None:
-    """``sql`` 안의 staging 식별자를 ``old_name`` → ``new_name`` 으로 바꾼다.
+def rewrite_staging_name(
+    sql: str | None, old_name: str, new_name: str, protect: tuple[str, ...] = ()
+) -> str | None:
+    """``sql`` 안의 **staging 식별자만** ``old_name`` → ``new_name`` 으로 바꾼다.
 
-    템플릿은 ``{{ staging_table | sql_ident }}`` 로 렌더하므로 큰따옴표 인용 토큰
-    (``"old"``)을 우선 치환한다. raw-SQL 로 따옴표 없이 쓴 경우를 대비해 단어경계 bare
-    이름도 폴백으로 치환한다(컬럼/별칭 오탐을 줄이려 단어경계 정확 매치만). 어느 토큰도
-    없으면 원문을 그대로 돌려준다(무변경 — raw-SQL 에서 이름을 다르게 쓴 경우 안전).
+    치환 결과는 **큰따옴표로 감싸지 않은 bare 식별자**다(요청: 이름을 ``""`` 로 감싸지
+    않는다). 템플릿이 ``{{ staging_table | sql_ident }}`` 로 렌더한 인용 토큰(``"old"``)이
+    있으면 그 토큰째로 bare 이름으로 바꾸고(따옴표 제거), 따옴표 없이 쓴 경우는 단어경계
+    bare 이름을 치환한다(컬럼/별칭 오탐을 줄이려 단어경계 정확 매치만).
+
+    ``protect`` 는 치환에서 **건드리면 안 되는 이름**(예: INSERT 대상 테이블)이다. staging
+    이름이 대상 테이블 이름의 일부와 겹칠 때(예: staging ``sales`` / target ``public.sales``)
+    단어경계·부분문자열 치환이 대상까지 바꿔 버리는 것을 막는다. 보호 대상의 인용/비인용
+    형태를 먼저 플레이스홀더로 잠갔다가 staging 치환 뒤 복원한다(가장 긴 형태부터 잠가
+    부분 겹침을 피한다). staging 이름과 완전히 같은 보호 이름은 구분 불가라 잠그지 않는다.
+
+    어느 staging 토큰도 없으면 원문을 그대로 돌려준다(무변경).
     """
     if not sql:
         return sql
+    new = str(new_name)
+    # 1) 보호 대상(target 등)을 플레이스홀더로 잠근다. staging 이름과 동일하면 구분 불가라 건너뛴다.
+    forms: set[str] = set()
+    for name in protect:
+        if name and str(name) != str(old_name):
+            forms.add(_quote_ident(name))  # "public"."target"
+            forms.add(str(name))            # public.target
+    placeholders: list[tuple[str, str]] = []
+    masked = sql
+    for i, form in enumerate(sorted(forms, key=len, reverse=True)):
+        if form and form in masked:
+            ph = f"\x00PROTECT{i}\x00"
+            placeholders.append((ph, form))
+            masked = masked.replace(form, ph)
+    # 2) staging 이름만 치환(인용 토큰 우선, 아니면 단어경계 bare).
     quoted_old = _quote_ident(old_name)
-    if quoted_old in sql:
-        return sql.replace(quoted_old, _quote_ident(new_name))
-    pattern = r"\b" + re.escape(str(old_name)) + r"\b"
-    if re.search(pattern, sql):
-        return re.sub(pattern, str(new_name), sql)
-    return sql
+    if quoted_old in masked:
+        masked = masked.replace(quoted_old, new)
+    else:
+        pattern = r"\b" + re.escape(str(old_name)) + r"\b"
+        masked = re.sub(pattern, new, masked)
+    # 3) 보호 대상 복원.
+    for ph, form in placeholders:
+        masked = masked.replace(ph, form)
+    return masked
 
 
 def per_task_staging(
@@ -99,6 +127,7 @@ def per_task_staging(
     *,
     enabled: bool = True,
     max_len: int = 63,
+    target_table: str | None = None,
 ) -> tuple[str, str | None, str | None]:
     """stage_insert 용 **task 별 고유 staging** ``(이름, staging_ddl, insert_sql)`` 을 만든다.
 
@@ -106,6 +135,10 @@ def per_task_staging(
     staging 을 CREATE 하는 경우)이다. ``staging_ddl`` 이 비면 기존 영구 staging 테이블에
     곧장 COPY 하는 경로라 이름을 바꾸면 대상이 사라지므로 고유화하지 않는다(그 경로의
     격리는 요청자가 job·파티션별 고유 이름으로 보장해야 한다 — backend docstring 참고).
+
+    task_id 접미사는 **staging 이름에만** 붙는다. ``target_table`` 을 넘기면 INSERT 대상
+    테이블을 치환에서 보호해, staging 이름이 대상 이름의 일부와 겹쳐도(예: staging
+    ``sales`` / target ``public.sales``) 대상에는 접미사가 붙지 않는다.
 
     반환은 항상 3-튜플이며, 고유화하지 않을 때는 입력을 그대로 돌려준다. job 원본은
     건드리지 않고 task 전용 사본만 만들어, 여러 task 가 각자 다른 staging 이름을 쓴다.
@@ -115,8 +148,9 @@ def per_task_staging(
     eff = unique_staging_name(staging_table, task_id, max_len)
     if eff == staging_table:
         return staging_table, staging_ddl, insert_sql
-    ddl = rewrite_staging_name(staging_ddl, staging_table, eff)
-    ins = rewrite_staging_name(insert_sql, staging_table, eff)
+    protect = (target_table,) if target_table else ()
+    ddl = rewrite_staging_name(staging_ddl, staging_table, eff, protect)
+    ins = rewrite_staging_name(insert_sql, staging_table, eff, protect)
     return eff, ddl, ins
 
 

@@ -1,5 +1,5 @@
 {# staging → target 적재 INSERT. stage_insert 모드에서 이 조각이 wrapper_query(INSERT)로
-   실려 executor 가 COPY 후 실행한다. 테이블명은 sql_ident 로 인용한다. #}
-INSERT INTO {{ target_table | sql_ident }} (user_id, amount, region, dt)
+   실려 executor 가 COPY 후 실행한다. 테이블명은 따옴표 없이 bare 로 렌더한다. #}
+INSERT INTO {{ target_table }} (user_id, amount, region, dt)
 SELECT user_id, amount, region, dt
-FROM {{ staging_table | sql_ident }}
+FROM {{ staging_table }}
