@@ -273,6 +273,13 @@ class Settings:
         self.max_dispatch_concurrency: int = int(
             _get("coordinator", "max_dispatch_concurrency", 32)
         )
+        # stage_insert: task 마다 staging 테이블명 뒤에 task_id 를 붙여 고유화하고, task 가
+        # 끝나면 DROP 한다. 커넥션 풀 재사용 시 이전 task 의 TEMP 가 남아 다음 CREATE 가
+        # "already exists" 로 충돌하는 문제를 막는다(staging_ddl 이 있는 경우에만 적용 —
+        # 없으면 기존 영구 테이블에 직접 COPY 하므로 이름을 바꾸지 않는다).
+        self.stage_unique_staging: bool = _to_bool(
+            _get("coordinator", "stage_unique_staging", True)
+        )
         self.poll_interval_s: float = float(
             _get("coordinator", "poll_interval_s", 1.0)
         )

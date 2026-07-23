@@ -243,6 +243,21 @@ class _DispatcherBase:
         except Exception:
             logger.exception("job %s 저장 실패", job.job_id)
 
+    def _task_staging(self, job: Job, task: Task) -> tuple[str, str | None, str | None]:
+        """이 task 가 쓸 ``(staging_table, staging_ddl, insert_sql)`` 을 정한다.
+
+        stage_insert 이고 ``coordinator.stage_unique_staging`` 이 켜져 있으면 staging
+        이름에 task_id 접미사를 붙여 고유화하고(SQL 두 조각을 일관 치환), 그렇지 않으면
+        job 값을 그대로 쓴다. 다른 exec_mode(copy/statement/local_stage)는 이 필드를
+        stage_insert 처럼 쓰지 않으므로 job 값을 그대로 반환한다.
+        """
+        if job.exec_mode != "stage_insert":
+            return job.staging_table, job.staging_ddl, job.insert_sql
+        return stage_sql.per_task_staging(
+            job.staging_table, job.staging_ddl, job.insert_sql, task.task_id,
+            enabled=getattr(self.settings, "stage_unique_staging", True),
+        )
+
     def _cancel_observed(self, job: Job) -> bool:
         """이 job에 취소가 요청됐는지 확인한다(로컬 플래그 + 공유 store 양쪽).
 
@@ -724,6 +739,10 @@ class HttpDispatcher(_DispatcherBase):
         self, client: httpx.AsyncClient, job: Job, task: Task, url: str
     ) -> None:
         """executor 에 task 실행을 요청한다(POST /tasks). 비2xx 응답은 예외로 올린다."""
+        # stage_insert 는 task 마다 staging 이름을 고유화(task_id 접미사)해 커넥션 풀
+        # 재사용 시 TEMP "already exists" 충돌을 막는다. job 원본은 건드리지 않고 task
+        # 전용 SQL 사본만 만들어 보낸다(executor 는 받은 이름을 그대로 쓰고 종료 시 DROP).
+        st_table, st_ddl, st_insert = self._task_staging(job, task)
         resp = await client.post(
             f"{url}/tasks",
             json={
@@ -735,9 +754,9 @@ class HttpDispatcher(_DispatcherBase):
                 "partition_column": job.partition_column,
                 "partition_values": task.partition_values,
                 "exec_mode": job.exec_mode,
-                "staging_table": job.staging_table,
-                "staging_ddl": job.staging_ddl,
-                "insert_sql": job.insert_sql,
+                "staging_table": st_table,
+                "staging_ddl": st_ddl,
+                "insert_sql": st_insert,
                 "impala_query_options": job.impala_query_options,
                 "username": job.username,
                 # local_stage 전용: 로컬 CSV 출력 경로 + CSV 방언(외부테이블 FORMAT 과 일치).
@@ -937,11 +956,13 @@ class LocalDispatcher(_DispatcherBase):
                         )
                     )
                 elif job.exec_mode == "stage_insert":
+                    # HTTP 경로와 동일하게 task 별 고유 staging 이름을 쓴다(종료 시 backend 가 DROP).
+                    st_table, st_ddl, st_insert = self._task_staging(job, task)
                     rows = await loop.run_in_executor(
                         None,
                         lambda: ctx.run(
                             backend.stage_and_insert,
-                            task.sub_query, job.staging_table, job.staging_ddl, job.insert_sql,
+                            task.sub_query, st_table, st_ddl, st_insert,
                             on_progress=_progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,

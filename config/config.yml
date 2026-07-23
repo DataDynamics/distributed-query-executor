@@ -60,6 +60,7 @@ coordinator:
   max_pending_jobs: ${coordinator.max_pending_jobs:100}        # 슬롯이 다 찼을 때 PENDING 으로 대기 가능한 job 수.
                                                                # 실행+대기 합을 넘는 요청은 429 로 거부. 0 이하면 무제한.
   max_dispatch_concurrency: ${coordinator.max_dispatch_concurrency:32}   # 동시 task 디스패치 상한(코루틴 동시성)
+  stage_unique_staging: ${coordinator.stage_unique_staging:true}   # stage_insert: staging 테이블명에 task_id 접미사(task별 고유) + task 종료 시 DROP. 풀 재사용 시 TEMP "already exists" 충돌 방지
   poll_interval_s: ${coordinator.poll_interval_s:1.0}     # task 상태 폴링 간격(초)
   task_timeout_s: ${coordinator.task_timeout_s:3600}      # task HTTP 전체(read) 타임아웃(초)
   # executor 장애 대응(연결 실패 시 재시도 → 다른 executor 로 failover)
