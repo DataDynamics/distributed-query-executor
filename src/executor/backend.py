@@ -632,9 +632,9 @@ class ImpalaToGreenplumBackend:
                     # staging_ddl 이 없으면(기존 영구 테이블에 직접 COPY) 사용자 테이블이므로
                     # 절대 드롭하지 않는다.
                     if staging_ddl:
-                        gp_cur.execute(
-                            f"DROP TABLE IF EXISTS {_quote_staging_ident(staging_table)}"
-                        )
+                        # staging_table 은 coordinator 가 CREATE/INSERT 와 같은 형태(따옴표
+                        # 없는 bare 식별자)로 보낸 이름이라 그대로 DROP 한다.
+                        gp_cur.execute(f"DROP TABLE IF EXISTS {staging_table}")
                         logger.debug("stage_insert staging 정리: DROP %s", staging_table)
                 _emit(on_stage, "COMMIT", "start")
                 gp.commit()
@@ -834,16 +834,6 @@ class ImpalaToGreenplumBackend:
             return rows_written
         finally:
             impala_conn.close()
-
-
-def _quote_staging_ident(name: str) -> str:
-    """staging 테이블명을 DROP 용으로 큰따옴표 인용한다(점은 스키마 한정으로 분리).
-
-    coordinator 의 ``sql_ident`` 와 같은 규칙이라, task 별 고유 이름이든 원래 이름이든
-    CREATE/INSERT 에 쓰인 식별자와 동일하게 해석된다.
-    """
-    parts = str(name).split(".")
-    return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
 def _split_schema_table(target_table: str) -> tuple[str, str]:

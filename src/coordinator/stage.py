@@ -75,19 +75,21 @@ def unique_staging_name(base: str, task_id: str, max_len: int = 63) -> str:
 def rewrite_staging_name(sql: str | None, old_name: str, new_name: str) -> str | None:
     """``sql`` 안의 staging 식별자를 ``old_name`` → ``new_name`` 으로 바꾼다.
 
-    템플릿은 ``{{ staging_table | sql_ident }}`` 로 렌더하므로 큰따옴표 인용 토큰
-    (``"old"``)을 우선 치환한다. raw-SQL 로 따옴표 없이 쓴 경우를 대비해 단어경계 bare
-    이름도 폴백으로 치환한다(컬럼/별칭 오탐을 줄이려 단어경계 정확 매치만). 어느 토큰도
-    없으면 원문을 그대로 돌려준다(무변경 — raw-SQL 에서 이름을 다르게 쓴 경우 안전).
+    치환 결과는 **큰따옴표로 감싸지 않은 bare 식별자**다(요청: 이름을 ``""`` 로 감싸지
+    않는다). 템플릿이 ``{{ staging_table | sql_ident }}`` 로 렌더한 인용 토큰(``"old"``)이
+    있으면 그 토큰째로 bare 이름으로 바꾸고(따옴표 제거), 따옴표 없이 쓴 경우는 단어경계
+    bare 이름을 치환한다(컬럼/별칭 오탐을 줄이려 단어경계 정확 매치만). 어느 토큰도 없으면
+    원문을 그대로 돌려준다(무변경).
     """
     if not sql:
         return sql
+    new = str(new_name)
     quoted_old = _quote_ident(old_name)
     if quoted_old in sql:
-        return sql.replace(quoted_old, _quote_ident(new_name))
+        return sql.replace(quoted_old, new)
     pattern = r"\b" + re.escape(str(old_name)) + r"\b"
     if re.search(pattern, sql):
-        return re.sub(pattern, str(new_name), sql)
+        return re.sub(pattern, new, sql)
     return sql
 
 
