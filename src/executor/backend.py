@@ -579,8 +579,11 @@ class ImpalaToGreenplumBackend:
     def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
         """Impala SELECT → Greenplum staging(TEMP) COPY 적재 → staging→target INSERT.
 
-        한 Greenplum 세션(연결) 안에서 CREATE TEMP TABLE → COPY → INSERT 를 수행하므로
-        TEMP 테이블이 INSERT 시점까지 보이며, 세션 종료 시 자동 정리된다.
+        한 Greenplum 세션(연결) 안에서 (DROP →) CREATE TEMP TABLE → COPY → INSERT 를
+        수행하므로 TEMP 테이블이 INSERT 시점까지 보이며, 세션 종료 시 자동 정리된다. CREATE
+        직전 ``DROP TABLE IF EXISTS`` 로 선삭제하는데, 풀에서 재사용한 연결에 이전 task 의
+        TEMP staging 이 남아 있으면(일부 GP 는 DISCARD ALL 이 TEMP 를 안 떨군다) CREATE 가
+        "already exists" 로 실패하기 때문이다.
         SELECT(Impala)과 INSERT(Greenplum)이 서로 다른 엔진일 때의 표준 패턴.
         query_options 는 Impala SELECT 에만 적용된다(INSERT 는 Greenplum).
         반환: INSERT 영향 행 수(미지원 시 적재 행 수).
@@ -603,6 +606,15 @@ class ImpalaToGreenplumBackend:
                 with gp.cursor() as gp_cur:
                     if staging_ddl:
                         _emit(on_stage, "STAGING_DDL", "start")
+                        # 생성 전 항상 선삭제한다. 풀에서 재사용한 GP 연결에 이전 task 의 TEMP
+                        # staging 이 남아 있으면 CREATE TEMP TABLE 이 "already exists" 로 실패하기
+                        # 때문이다. 반납 시 DISCARD ALL 로 세션을 비우지만, 일부 Greenplum/
+                        # WarehousePG 는 DISCARD 로 TEMP 를 실제로 떨구지 않아(예외 없이 no-op)
+                        # TEMP 가 살아남는다 — 이때 stage_insert/날짜 fan-out 처럼 같은 staging_table
+                        # 이름을 여러 task 가 재사용하면 두 번째 task 부터 충돌한다. 선삭제로 세션
+                        # 상태와 무관하게 멱등적으로 재생성한다. search_path 상 pg_temp 가 우선이라
+                        # 동명의 영구 테이블은 건드리지 않고 이 세션의 TEMP 만 떨군다.
+                        gp_cur.execute(f"DROP TABLE IF EXISTS {staging_table}")
                         gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
                         _emit(on_stage, "STAGING_DDL", "end")
                     # staging_ddl 이 없으면 생성을 건너뛰고 기존 staging_table 에 그대로 COPY.
