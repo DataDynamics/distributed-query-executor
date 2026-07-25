@@ -12,6 +12,11 @@ Impala 에서 Greenplum 으로 **옮기는 이관**과, 결과를 클라이언�
 - **`local_stage` 이관**(`POST /jobs`, `exec_mode: local_stage`) — executor 를 각 GP 세그먼트
   호스트에 co-locate 하고, 각 세그먼트가 자기 호스트 로컬 CSV 를 `file://` 외부테이블로 병렬
   read 해 적재하는 2-phase 모드. 세그먼트 병렬성을 최대로 끌어내는 대량 적재용이다.
+- **`s3_stage` 이관**(`POST /jobs`, `exec_mode: s3_stage`) — executor 가 소스 SELECT 결과를
+  로컬 CSV 로 떨어뜨린 뒤 S3 에 올리고, Greenplum 이 그 객체를 PXF 외부테이블로 read 해
+  최종 테이블에 INSERT 하는 모드. `local_stage` 와 목적이 같지만 S3 는 세그먼트 로컬이 아니라
+  위치 무관하게 읽히므로 **executor 를 세그먼트에 co-locate 할 필요가 없다**(오브젝트 스토어를
+  쓰는 대량 이관용). task 하나가 자체 완결한다(stage_insert 와 같은 per-task 모델).
 - **결과 반환 실행**(`POST /query-execute`) — 서버 템플릿으로 SELECT 만 렌더해 실행하고 상위
   N행을 동기 반환한다. 데이터를 옮기지 않는 미리보기·조회용이다.
 
@@ -20,8 +25,8 @@ Impala 에서 Greenplum 으로 **옮기는 이관**과, 결과를 클라이언�
 `job_id`** 를 즉시 반환하는 **비동기**이며 클라이언트가 상태를 폴링한다. 반면 query-execute 는
 결과가 coordinator 를 거쳐 클라이언트로 돌아오는 **동기** 실행이다.
 
-전체 설계는 [DESIGN.md](DESIGN.md) — 적재 방식 §9, `local_stage` §17, 템플릿 엔진 §18,
-query-execute §18.7, 날짜 fan-out §18.8 을 참고한다.
+전체 설계는 [DESIGN.md](DESIGN.md) — 적재 방식 §9, `local_stage` §17, `s3_stage` §17.1,
+템플릿 엔진 §18, query-execute §18.7, 날짜 fan-out §18.8 을 참고한다.
 
 ---
 
@@ -83,9 +88,10 @@ SQL 전문 대신 서버 템플릿을 `params`(**object**)로 렌더한다. 템�
 }
 ```
 
-### 요청 — 날짜 fan-out (stage_insert 전용)
+### 요청 — 날짜 fan-out (stage_insert / s3_stage)
 
 파티션 `IN` 분할 대신 **하루 = task 하나**로 펼쳐 executor 당 하루씩 맡긴다(일별 배치용).
+`exec_mode` 는 `stage_insert`(아래 예) 또는 `s3_stage` 를 지원한다(그 외는 `422`).
 `task_params` 로 **구간의 두 끝을 담은 파라미터 두 개**를 지목한다.
 
 ```jsonc
@@ -375,6 +381,94 @@ task 의 `executor_url` 은 파일 예산 배분대로 세그먼트 호스트에
 기본 커버리지를, 실제 소켓/프로세스를 띄우는 HTTP 하니스(`tests/test_local_stage_http.py`)가 폴링·
 failover·gp_hostname 수집·cleanup 팬아웃을 얇게 덮는다. 순수 함수·라우팅은
 `tests/test_local_stage.py` 가 담당한다.
+
+---
+
+## 2.1 `s3_stage` 이관 (`POST /jobs`)
+
+`s3_stage` 는 `local_stage` 와 목적이 같지만 스테이징 매체가 세그먼트 로컬 파일이 아니라 **S3
+객체**다. executor 가 소스 SELECT 결과를 로컬 CSV 로 떨어뜨린 뒤 **S3 에 업로드**하고, Greenplum
+이 그 객체를 **PXF 외부테이블**로 read 해 target 에 INSERT 한다. S3 는 세그먼트 로컬이 아니라
+위치 무관하게 읽히므로 `local_stage` 가 요구하는 **executor↔세그먼트 co-locate 가 필요 없고**,
+파일 예산 배분·배리어·중앙 적재도 없다 — task 하나가 처음부터 끝까지 자체 완결한다(`stage_insert`
+와 같은 per-task 모델). `write_mode: overwrite_partitions` 로 재실행 멱등이 성립한다.
+
+### 언제 쓰나
+
+- 오브젝트 스토어(S3/MinIO/Ceph 등)를 스테이징 매체로 쓸 수 있고, **executor 를 GP 세그먼트
+  호스트에 붙일 수 없을 때**(co-locate 불가) 대량 이관.
+- Impala↔Greenplum 처럼 소스/대상 엔진이 다르고, 단일 COPY 스트림(`stage_insert`)보다 큰 처리량이
+  필요할 때.
+
+### 요청 (POST /jobs)
+
+```jsonc
+POST /jobs
+{
+  "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('2026-06-01','2026-06-02','2026-06-03','2026-06-04') AND region='KR'",
+  "partition_column": "dt",
+  "target_table": "public.sales_mirror",
+  "write_mode": "overwrite_partitions",
+  "exec_mode": "s3_stage",
+  "parallelism": 4,
+  "external_columns": "user_id bigint, amount numeric, dt date",
+  "staging_table": "stg_sales_s3",
+  "insert_sql": "INSERT INTO public.sales_mirror (user_id, amount, dt) SELECT user_id, amount, dt FROM stg_sales_s3"
+}
+```
+
+- 성공 접수는 `202 { "job_id": "job_ab12cd" }`.
+- `staging_table`·`external_columns`·`insert_sql` 중 하나라도 빠지면 `422 S3_STAGE_REQUIRES_FIELDS`.
+- `local_stage` 와 달리 **`staging_ddl` 은 주지 않는다**(외부테이블이 staging 을 겸하고, 그 DDL 은
+  executor 가 `external_columns` 로 생성한다). `staging_table` 은 그 외부테이블 이름이며,
+  coordinator 가 task 마다 task_id 접미사로 고유화한다.
+- `external_columns` 는 CSV 컬럼 순서(=SELECT 출력 순서)와 타입이 일치해야 한다.
+
+### task 하나의 내부 흐름 (executor 완결)
+
+```sql
+-- 1) Impala SELECT → 로컬 임시 CSV (EXPORT_WRITE)
+-- 2) 로컬 CSV → S3 업로드 후 로컬 삭제 (S3_UPLOAD): s3://<bucket>/<prefix>/<job_id>/<task_id>.csv
+-- 3) GP master 에서 한 트랜잭션:
+CREATE EXTERNAL TABLE stg_sales_s3_<task_id> (user_id bigint, amount numeric, dt date)
+  LOCATION ('pxf://<bucket>/<prefix>/<job_id>/<task_id>.csv?PROFILE=s3:csv&SERVER=<pxf_server>')
+  FORMAT 'CSV' ( DELIMITER '`' NULL '' QUOTE '"' );
+DELETE FROM public.sales_mirror WHERE dt IN ('2026-06-01', ...);   -- overwrite_partitions
+INSERT INTO public.sales_mirror (...) SELECT ... FROM stg_sales_s3_<task_id>;  -- insert_sql
+DROP EXTERNAL TABLE IF EXISTS stg_sales_s3_<task_id>;              -- in-tx 정리
+-- COMMIT
+-- 4) S3 객체 삭제 (CLEANUP)
+```
+
+단계 이벤트(대시보드/로그)의 스테이지명은 `IMPALA_SUBMIT`·`EXPORT_WRITE`·`S3_UPLOAD`·
+`S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
+
+### 사전 준비 (인프라·설정·권한)
+
+| 항목 | 준비 내용 |
+|---|---|
+| **executor 설정(업로드)** | `impala.host`(소스), `greenplum.dsn`(GP master — external table/INSERT), `s3.bucket`·`s3.prefix`·`s3.endpoint_url`(온프렘 S3 호환이면)·`s3.access_key`/`s3.secret_key`(또는 boto3 기본 자격증명 체인). 업로드는 `boto3`(requirements-executor.txt). |
+| **GP 읽기(PXF)** | GP 세그먼트에 **PXF 를 설치·기동**하고 **S3 SERVER 프로파일**을 구성한다: `$PXF_BASE/servers/<server>/s3-site.xml` 에 S3 자격증명·엔드포인트. 그 서버 이름을 `s3.pxf_server` 로 지정(프로파일 기본 `s3:csv`). 업로드 자격증명과 **경로가 분리**된다. |
+| **GP 스키마** | target 테이블 존재/생성 가능, 외부테이블 생성 권한. |
+| **CSV 방언** | executor write 와 외부테이블 `FORMAT 'CSV'` 는 같은 설정(`stage.csv_delimiter` 기본 backtick `` ` ``)을 쓰므로 자동 일치. |
+
+`s3.delete_on_cleanup=true`(기본)면 적재 후 S3 객체를 삭제하고, 디버깅 시 `false` 로 보존한다.
+사이트의 PXF LOCATION 형식이 다르면 `s3.gp_location_template` 으로 raw override 한다
+(`{bucket}`/`{key}`/`{profile}`/`{server}` 치환).
+
+### 오류 응답
+
+| 상황 | 코드 | error_code |
+|---|---|---|
+| staging_table/external_columns/insert_sql 누락 | 422 | `S3_STAGE_REQUIRES_FIELDS` |
+| `s3.bucket` 미설정인데 s3_stage 요청 | task `FAILED` | 업로드 시 `s3.bucket 설정이 필요` 예외 |
+| S3 업로드/PXF read 실패 | task `FAILED` | executor 로그(자격증명·PXF SERVER·엔드포인트 확인) |
+
+### 예제 템플릿: `sales_migration_s3`
+
+`templates/sales_migration_s3/` 는 `sales_migration` 의 s3_stage 판이다(`select`+`insert`+
+`external_columns` 조각, `exec_mode: s3_stage`). 날짜 fan-out(§1 의 fan-out 참고)도 `s3_stage` 를
+지원하므로, 하루=1 task 로 펼쳐 각 task 가 자체 S3 왕복을 하게 할 수 있다(append 적재).
 
 ---
 

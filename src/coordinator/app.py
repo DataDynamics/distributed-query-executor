@@ -319,14 +319,21 @@ def _build_fanout(
         if key not in req.model_fields_set and hasattr(req, key):
             setattr(req, key, val)
     req.exec_mode = base.exec_mode
-    if base.exec_mode != "stage_insert":
+    if base.exec_mode not in ("stage_insert", "s3_stage"):
         raise QueryValidationError(
             "FANOUT_REQUIRES_STAGE_INSERT",
-            f"task_params(날짜 fan-out) 모드는 exec_mode=stage_insert 만 지원합니다(현재 {base.exec_mode}).",
+            "task_params(날짜 fan-out) 모드는 exec_mode=stage_insert 또는 s3_stage 만 "
+            f"지원합니다(현재 {base.exec_mode}).",
         )
-    if base.staging_ddl:
-        req.staging_ddl = base.staging_ddl
-    req.wrapper_query = base.insert  # stage_insert INSERT → job.insert_sql 로 실린다
+    if base.exec_mode == "s3_stage":
+        # s3_stage: 외부테이블(=staging)은 executor 가 external_columns 로 생성한다. INSERT 와
+        # 외부테이블 컬럼 정의를 job 필드에 싣는다(하루=1 task 마다 자체 S3 왕복, append 적재).
+        req.insert_sql = base.insert
+        req.external_columns = base.external_columns
+    else:
+        if base.staging_ddl:
+            req.staging_ddl = base.staging_ddl
+        req.wrapper_query = base.insert  # stage_insert INSERT → job.insert_sql 로 실린다
     # 필수필드(partition_column) 충족용 표시값. 이 모드는 IN 분할을 안 하므로 실제 분할에는
     # 쓰이지 않는다 — manifest 가 컬럼을 선언했으면 그걸, 아니면 task_params 이름을 보여준다.
     if not req.partition_column:
@@ -389,6 +396,11 @@ def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
     elif result.exec_mode == "local_stage":
         if result.staging_ddl:
             req.staging_ddl = result.staging_ddl
+        req.insert_sql = result.insert
+        req.external_columns = result.external_columns
+    elif result.exec_mode == "s3_stage":
+        # s3_stage: 외부테이블(=staging)은 executor 가 external_columns 로 생성하므로 staging_ddl
+        # 은 쓰지 않는다. INSERT(external→target)와 외부테이블 컬럼 정의만 주입한다.
         req.insert_sql = result.insert
         req.external_columns = result.external_columns
 
@@ -729,6 +741,16 @@ def create_app(
                     "local_stage 모드는 staging_table, external_columns, insert_sql 가 "
                     "필요합니다. staging_ddl 은 선택입니다.",
                 )
+        elif req.exec_mode == "s3_stage":
+            # s3_stage: 각 executor 가 Impala 결과를 로컬 CSV → S3 업로드 → PXF 외부테이블 →
+            # target INSERT → S3 정리로 자체 완결한다(local_stage 형제, 세그먼트 co-locate 불필요).
+            # 외부테이블이 staging 을 겸하며, 그 이름(staging_table)·컬럼(external_columns)·
+            # 최종 INSERT(insert_sql)를 요청자가 명시한다(래퍼 분기로 내려가지 않게 여기서 끊는다).
+            if not (req.staging_table and req.external_columns and req.insert_sql):
+                raise QueryValidationError(
+                    "S3_STAGE_REQUIRES_FIELDS",
+                    "s3_stage 모드는 staging_table, external_columns, insert_sql 가 필요합니다.",
+                )
         elif req.wrapper_query:
             # stage_insert 가 아니면서 래퍼 쿼리가 주어진 경우: 분할된 각 sub-query를
             # 래퍼의 placeholder 자리에 치환해 최종 실행 SQL을 만든다(예: 집계/CTE로 감싸기).
@@ -790,6 +812,12 @@ def create_app(
                     entry["insert_sql"] = req.wrapper_query
                     logger.info("[dry-run] task#%d staging_ddl=%s", idx, req.staging_ddl)
                     logger.info("[dry-run] task#%d insert_sql=%s", idx, req.wrapper_query)
+                elif req.exec_mode == "s3_stage":
+                    entry["staging_table"] = req.staging_table
+                    entry["external_columns"] = req.external_columns
+                    entry["insert_sql"] = req.insert_sql
+                    logger.info("[dry-run] task#%d external_columns=%s insert_sql=%s",
+                                idx, req.external_columns, req.insert_sql)
                 plan.append(entry)
             return JSONResponse(
                 status_code=200,
@@ -844,7 +872,7 @@ def create_app(
                 staging_table=req.staging_table,
                 staging_ddl=req.staging_ddl,
                 insert_sql=(
-                    req.insert_sql if req.exec_mode == "local_stage"
+                    req.insert_sql if req.exec_mode in ("local_stage", "s3_stage")
                     else req.wrapper_query if req.exec_mode == "stage_insert"
                     else None
                 ),

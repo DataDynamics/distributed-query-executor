@@ -30,6 +30,8 @@ executor 는 **포트별로 여러 인스턴스**를 띄울 수 있다. 예컨�
 
 > **`local_stage`(file:// 세그먼트 로컬 스테이징) 배치는 다르다.** 기본 `copy`/`stage_insert` 모드는 executor 를 어디에 두든 상관없지만, `local_stage`(DESIGN 참고)는 executor 가 읽은 데이터를 **자기 호스트 로컬 디스크의 CSV** 로 떨어뜨리고 GP 세그먼트가 그 파일을 `file://` 로 직접 읽는다. 그래서 executor 를 **각 Greenplum 세그먼트 호스트에 co-locate**(호스트당 하나 이상) 해야 하며, 추가로 (1) `stage.local_dir` 을 모든 세그먼트 호스트에 **동일 경로**로 두고 GP 세그먼트 프로세스(보통 `gpadmin`)가 read 가능하게 권한을 맞추고, (2) `executor.gp_hostname` 을 그 호스트의 `gp_segment_configuration.hostname` 과 일치시키며(미설정 시 OS hostname), (3) coordinator 의 `greenplum.dsn` 은 GP master 를 가리켜야 한다(Phase 2 적재·검증·토폴로지 조회). 운영 시나리오는 [docs/GUIDE.md](../docs/GUIDE.md) 의 `local_stage` 절 참고.
 
+> **`s3_stage`(S3 경유 스테이징) 배치.** `local_stage` 와 목적은 같지만 스테이징 매체가 세그먼트 로컬 파일이 아니라 **S3 객체**라 **co-locate 가 필요 없다**(executor 를 어디에 두든 됨). 대신 (1) executor 설정 `s3.bucket`·`s3.prefix`·`s3.endpoint_url`(온프렘 S3 호환이면)·업로드 자격증명(`s3.access_key`/`s3.secret_key` 또는 boto3 기본 체인)을 채우고 — 업로드는 `boto3`(에어갭 wheel 번들에 포함), (2) **GP 세그먼트에 PXF 를 설치·기동**하고 **S3 SERVER 프로파일**(`$PXF_BASE/servers/<server>/s3-site.xml` 에 S3 자격증명·엔드포인트)을 구성한 뒤 그 서버 이름을 `s3.pxf_server` 로 지정한다(업로드용과 GP 읽기용 자격증명이 분리된다), (3) executor 의 `greenplum.dsn` 은 GP master 를 가리킨다(외부테이블 생성·INSERT). 운영 시나리오는 [docs/GUIDE.md](../docs/GUIDE.md) 의 `s3_stage` 절 참고.
+
 ## 빠른 설치 (스크립트 사용)
 
 손 가는 일은 `install.sh` 가 대신 하므로 직접 칠 명령은 몇 줄뿐이다. 위에서 아래로 순서대로 따라간다.

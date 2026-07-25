@@ -149,3 +149,15 @@ executor:
     validate_hosts: ${stage.validate_hosts:true}  # Phase 2 전 file:// 호스트를 gp_segment_configuration 과 대조 검증(불일치 조기 실패)
     max_files_per_host: ${stage.max_files_per_host:0}  # 호스트당 최대 파일 수(0=gp_segment_configuration 의 호스트별 primary 세그먼트 수 S_h)
     impala_convert_types: ${stage.impala_convert_types:false}  # export fetch 형변환(false=끔: timestamp/date/decimal 을 wire 문자열 그대로 받아 CSV write, 재파싱 비용 제거)
+  s3:                                             # s3_stage(S3 경유 스테이징) — local_stage 형제, 세그먼트 co-locate 불필요
+    bucket: ${s3.bucket:}                         # S3 버킷(비우면 s3_stage 미구성 — 다른 모드엔 무영향)
+    prefix: ${s3.prefix:dqe-stage}                # 객체 키 프리픽스 → s3://bucket/prefix/{job_id}/{task_id}.csv
+    endpoint_url: ${s3.endpoint_url:}             # 온프렘 S3 호환(MinIO/Ceph) 엔드포인트. 비우면 AWS 기본
+    region: ${s3.region:}                         # 리전(비우면 기본)
+    access_key: ${s3.access_key:}                 # 업로드 자격증명(비우면 boto3 기본 체인). 비밀값
+    secret_key: ${s3.secret_key:}                 # 업로드 자격증명. 비밀값
+    use_ssl: ${s3.use_ssl:true}                   # 업로드 TLS 사용 여부
+    pxf_server: ${s3.pxf_server:}                 # GP 읽기용 PXF SERVER 이름($PXF_BASE/servers/<server>/s3-site.xml 에 자격증명)
+    pxf_profile: ${s3.pxf_profile:s3:csv}         # PXF 프로파일(기본 s3:csv)
+    gp_location_template: ${s3.gp_location_template:}  # 고급: LOCATION raw override({bucket}/{key}/{profile}/{server} 치환)
+    delete_on_cleanup: ${s3.delete_on_cleanup:true}    # 적재 성공/실패 후 S3 객체 정리 여부

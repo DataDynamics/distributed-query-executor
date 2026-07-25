@@ -86,7 +86,7 @@ class Task:
     partition_column: str
     partition_values: list[str]
     username: Optional[str] = None
-    exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert" | "local_stage"
+    exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert" | "local_stage" | "s3_stage"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
@@ -95,6 +95,8 @@ class Task:
     # coordinator 가 파일 경로/인덱스를 확정해 넘긴다(file:// URI 와 짝을 이룬다).
     out_path: Optional[str] = None
     csv_options: Optional[dict] = None  # {"delimiter","null","quote"} — 외부테이블 FORMAT 과 일치
+    # s3_stage 모드: PXF 외부테이블 컬럼 정의(executor 가 이 컬럼으로 CREATE EXTERNAL TABLE).
+    external_columns: Optional[str] = None
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
     rows_read: int = 0
@@ -189,7 +191,7 @@ class CreateTaskRequest(BaseModel):
     partition_column: str
     partition_values: list[str] = []
     username: Optional[str] = None
-    exec_mode: Literal["copy", "statement", "stage_insert", "local_stage"] = "copy"
+    exec_mode: Literal["copy", "statement", "stage_insert", "local_stage", "s3_stage"] = "copy"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
@@ -197,6 +199,8 @@ class CreateTaskRequest(BaseModel):
     # local_stage 전용: 로컬 CSV 출력 경로 + CSV 방언(coordinator 가 확정해 전달).
     out_path: Optional[str] = None
     csv_options: Optional[dict] = None
+    # s3_stage 전용: PXF 외부테이블 컬럼 정의(coordinator 가 job 값에서 전달).
+    external_columns: Optional[str] = None
 
 
 class DatasourceQueryRequest(BaseModel):

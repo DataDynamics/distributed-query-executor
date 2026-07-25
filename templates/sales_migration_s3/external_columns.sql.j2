@@ -1,0 +1,4 @@
+{# PXF S3 외부테이블의 컬럼 정의. executor 가 CREATE EXTERNAL TABLE <staging_table> (...) 에
+   그대로 쓴다. SELECT 출력 컬럼 순서/타입과 정확히 일치해야 하며(CSV 위치 기반 매핑),
+   CSV 로 직렬화되므로 GP 쪽 타입(예: date/numeric/text)으로 선언한다. #}
+user_id bigint, amount numeric, region text, dt date

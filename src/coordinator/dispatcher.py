@@ -251,6 +251,15 @@ class _DispatcherBase:
         job 값을 그대로 쓴다. 다른 exec_mode(copy/statement/local_stage)는 이 필드를
         stage_insert 처럼 쓰지 않으므로 job 값을 그대로 반환한다.
         """
+        if job.exec_mode == "s3_stage":
+            # s3_stage: 외부테이블이 staging 을 겸한다. staging_ddl 은 executor 가 생성하므로
+            # 없고, 이름+insert_sql 만 task 별로 고유화한다(카탈로그 전역 충돌 방지).
+            eff, ins = stage_sql.per_task_external(
+                job.staging_table, job.insert_sql, task.task_id,
+                enabled=getattr(self.settings, "stage_unique_staging", True),
+                target_table=job.target_table,
+            )
+            return eff, None, ins
         if job.exec_mode != "stage_insert":
             return job.staging_table, job.staging_ddl, job.insert_sql
         return stage_sql.per_task_staging(
@@ -762,9 +771,14 @@ class HttpDispatcher(_DispatcherBase):
                 "username": job.username,
                 # local_stage 전용: 로컬 CSV 출력 경로 + CSV 방언(외부테이블 FORMAT 과 일치).
                 "out_path": task.out_path,
+                # csv_options 는 local_stage/s3_stage 가 공유(CSV 방언 = 외부테이블 FORMAT).
                 "csv_options": (
                     stage_sql.resolve_csv_options(job, self.settings)
-                    if job.exec_mode == "local_stage" else None
+                    if job.exec_mode in ("local_stage", "s3_stage") else None
+                ),
+                # s3_stage 전용: PXF 외부테이블 컬럼 정의(executor 가 CREATE EXTERNAL TABLE 에 사용).
+                "external_columns": (
+                    job.external_columns if job.exec_mode == "s3_stage" else None
                 ),
             },
         )
@@ -977,6 +991,22 @@ class LocalDispatcher(_DispatcherBase):
                         lambda: ctx.run(
                             backend.export_to_local_csv,
                             task.sub_query, task.out_path, csv_options,
+                            _progress,
+                            query_options=job.impala_query_options,
+                            on_stage=task.on_stage,
+                        ),
+                    )
+                elif job.exec_mode == "s3_stage":
+                    # s3_stage: task 하나가 S3 경유로 자체 완결(HTTP 경로와 동일하게 이름 고유화).
+                    st_table, _st_ddl, st_insert = self._task_staging(job, task)
+                    csv_options = stage_sql.resolve_csv_options(job, self.settings)
+                    rows = await loop.run_in_executor(
+                        None,
+                        lambda: ctx.run(
+                            backend.stage_via_s3,
+                            task.sub_query, st_table, st_insert, job.external_columns,
+                            csv_options, job.target_table, job.partition_column,
+                            task.partition_values, job.write_mode, job.job_id, task.task_id,
                             _progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,

@@ -236,7 +236,9 @@ const jobLink = id => `<a class="lnk" onclick="showSql('${id}');return false">${
 const bar = p => `<span class="bar"><i style="width:${p||0}%"></i></span> ${p||0}%`;
 // 현재 단계 집계({STREAM_COPY:3,...})를 라벨 칩들로 요약 표기.
 const PHASE_LABELS = {QUEUE_WAIT:"대기", IMPALA_SUBMIT:"조회", STAGING_DDL:"staging",
-  PREFLIGHT:"검증", DELETE:"선삭제", STREAM_COPY:"COPY", INSERT:"INSERT", COMMIT:"커밋"};
+  PREFLIGHT:"검증", DELETE:"선삭제", STREAM_COPY:"COPY", EXPORT_WRITE:"export",
+  S3_UPLOAD:"S3업로드", S3_EXTERNAL_DDL:"외부테이블", INSERT:"INSERT", COMMIT:"커밋",
+  CLEANUP:"정리"};
 function phaseSummary(s){
   const keys = Object.keys(s||{});
   if(!keys.length) return '<span class="mut">-</span>';

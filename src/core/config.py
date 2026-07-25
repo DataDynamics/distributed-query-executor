@@ -494,6 +494,31 @@ class Settings:
             _get_nested("executor", "stage", "impala_convert_types", False)
         )
 
+        # ───────── s3_stage (S3 경유 스테이징) ─────────
+        # local_stage 의 형제. executor 가 Impala 결과를 로컬 CSV 로 export → S3 업로드 →
+        # GP PXF 외부테이블로 읽어 target INSERT → S3 정리(per-task 완결). S3 는 세그먼트
+        # 로컬이 아니므로 co-locate/파일예산 배분이 불필요하다. bucket 이 비면 미구성이라
+        # s3_stage 를 요청할 때만 오류(다른 모드에는 무영향).
+        # 업로드(executor → S3): 온프렘 S3 호환(MinIO/Ceph)은 endpoint_url 로 지정.
+        self.s3_bucket: str = _get_nested("executor", "s3", "bucket", "")
+        self.s3_prefix: str = _get_nested("executor", "s3", "prefix", "dqe-stage")
+        self.s3_endpoint_url: str = _get_nested("executor", "s3", "endpoint_url", "")
+        self.s3_region: str = _get_nested("executor", "s3", "region", "")
+        self.s3_access_key: str = _get_nested("executor", "s3", "access_key", "")
+        self.s3_secret_key: str = _get_nested("executor", "s3", "secret_key", "")
+        self.s3_use_ssl: bool = _to_bool(_get_nested("executor", "s3", "use_ssl", True))
+        # GP 읽기(PXF): 자격증명은 세그먼트의 PXF SERVER 설정에서 읽으므로 여기엔 서버 이름만.
+        self.s3_pxf_server: str = _get_nested("executor", "s3", "pxf_server", "")
+        self.s3_pxf_profile: str = _get_nested("executor", "s3", "pxf_profile", "s3:csv")
+        # 고급: LOCATION 문자열 raw override({bucket}/{key}/{profile}/{server} 치환).
+        self.s3_gp_location_template: str = _get_nested(
+            "executor", "s3", "gp_location_template", ""
+        )
+        # 적재 성공/실패 후 S3 객체를 지울지 여부(정리).
+        self.s3_delete_on_cleanup: bool = _to_bool(
+            _get_nested("executor", "s3", "delete_on_cleanup", True)
+        )
+
 
 def init_settings(
     yaml_path: str | None = None,

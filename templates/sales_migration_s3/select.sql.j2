@@ -1,0 +1,9 @@
+{# Impala SELECT — 파티션 컬럼 dt 의 IN 목록은 date_range 로 자동 생성한다.
+   파라미터(regions)는 반드시 sql_in 필터를 거쳐 안전하게 리터럴로 렌더한다(SQL 인젝션 방지).
+   컬럼 순서/타입은 external_columns.sql.j2 의 외부테이블 정의와 정확히 일치해야 한다. #}
+SELECT user_id, amount, region, dt
+FROM sales
+WHERE dt IN ( {{ date_range(start_dt, end_dt) | sql_in }} )
+{%- if regions %}
+  AND region IN ( {{ regions | sql_in }} )
+{%- endif %}

@@ -34,8 +34,12 @@ PHASE_LABELS: dict[str, str] = {
     "PREFLIGHT": "컬럼 검증",          # COPY 전 대상 컬럼 사전검증 (copy)
     "DELETE": "파티션 선삭제",         # overwrite_partitions 선삭제 (copy)
     "STREAM_COPY": "스트리밍 COPY",    # Impala fetch + Greenplum COPY(교차 스트리밍)
+    "EXPORT_WRITE": "CSV export",      # Impala fetch → 로컬 CSV write (local_stage/s3_stage)
+    "S3_UPLOAD": "S3 업로드",          # 로컬 CSV → S3 업로드 (s3_stage)
+    "S3_EXTERNAL_DDL": "S3 외부테이블", # CREATE EXTERNAL TABLE (PXF, s3_stage)
     "INSERT": "INSERT",               # staging→target INSERT / statement 직접 실행
     "COMMIT": "커밋",                  # 트랜잭션 commit
+    "CLEANUP": "정리",                 # 외부테이블/스테이지 정리 (local_stage/s3_stage)
 }
 
 

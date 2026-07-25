@@ -175,6 +175,7 @@ WHERE dt IN ('2026-01-01','2026-01-02', ... ,'2026-06-25')   -- partition_column
 | `statement` | wrapper로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB에서 **그대로 실행** | 소스/타깃이 같은 DB(Greenplum). INSERT 컬럼 목록이 매핑 담당 |
 | `stage_insert` | (선택적으로 `staging_ddl`로 staging 생성 →) Impala SELECT 결과를 Greenplum **staging에 COPY** → staging을 `FROM`으로 하는 **INSERT 실행** | SELECT은 Impala, INSERT은 Greenplum처럼 서로 다른 엔진을 INSERT로 연결 |
 | `local_stage` | 각 executor가 세그먼트 호스트 **로컬 디스크에 CSV**로 export → GP가 `file://` 외부테이블로 **세그먼트별 로컬 파일을 병렬 read**해 staging 적재 → target INSERT. 2-phase. 자세히는 **§17** | executor를 **GP 세그먼트 호스트에 co-locate**한 대량 이관. `copy`의 단일 COPY 소켓 병목을 세그먼트 병렬 read로 대체 |
+| `s3_stage` | 각 executor가 Impala 결과를 **로컬 CSV**로 export → **S3에 업로드**(로컬 삭제) → GP가 **PXF 외부테이블**로 S3 객체를 read → target INSERT → S3 정리. `stage_insert`의 형제(per-task 자체 완결). 자세히는 **§17.1** | executor를 세그먼트에 **co-locate할 수 없는** 대량 이관. S3는 세그먼트 로컬이 아니라 위치 무관하게 읽히므로 `local_stage`의 co-locate/파일예산 배분/배리어가 전부 불필요 |
 
 `stage_insert`에서 `staging_ddl`은 **선택**이다. 주면 COPY 전에 그 DDL(보통 `CREATE TEMP TABLE`)로 테이블을 만들고, 생략하면 생성을 건너뛰고 이미 존재하는 `staging_table`을 쓴다(이 경우 영구 테이블을 여러 task가 공유하지 않도록 격리에 유의).
 
@@ -520,6 +521,20 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **coordinator(Phase 2·3)**: 디스패처 `run()`의 배리어(`_execute` 반환) 뒤 `_run_stage_load()`가 GP master에 외부테이블 DDL→staging 적재→(멱등 선삭제)→target INSERT를 한 트랜잭션으로 실행하고 `_cleanup_stage()`로 로컬 파일 정리. URI·`FORMAT 'CSV'(...)`·파일 인덱스 조립은 `src/coordinator/stage.py`(순수 함수)가 담당. `finalize_job`은 local_stage를 원자 적재로 보아 실패 시 정책 무관 FAILED.
 - **테스트**: `tests/test_local_stage.py` — stage.py 순수 함수, executor 라우팅/cleanup/metrics, LocalDispatcher 2-phase e2e, gp_hostname 매핑·검증까지 실 DB·실 디스크 없이 검증.
 
+### 17.1 S3 경유 스테이징 파이프라인 (`s3_stage`, PXF/S3 기반)
+
+`local_stage`의 형제지만 스테이징 매체가 세그먼트 로컬 파일(`file://`)이 아니라 **S3 객체**다. S3 객체는 세그먼트 로컬이 아니라 모든 세그먼트에서 위치 무관하게 읽히므로, `local_stage`가 겪는 제약 — executor를 GP 세그먼트 호스트에 **co-locate**해야 하고 coordinator가 파일 예산 배분/배리어/중앙 적재를 해야 하는 것 — 이 **전부 사라진다**. 그래서 `stage_insert`/날짜 fan-out처럼 **task 하나가 처음부터 끝까지 자체 완결**한다(per-task, executor가 GP INSERT까지 직접).
+
+- **단계(executor `backend.stage_via_s3`, 한 task 완결)**: `IMPALA_SUBMIT`→`EXPORT_WRITE`(Impala SELECT → 로컬 임시 CSV, `export_to_local_csv` 재사용, `convert_types=False`) → `S3_UPLOAD`(로컬 CSV → S3 업로드 후 **로컬 즉시 삭제**) → `S3_EXTERNAL_DDL`(GP: `DROP`→`CREATE EXTERNAL TABLE ... LOCATION('pxf://...')`) → (`DELETE` overwrite 시 파티션 선삭제) → `INSERT`(external→target) → 외부테이블 in-tx `DROP` → `COMMIT` → `CLEANUP`(S3 객체 삭제, best-effort).
+- **외부테이블이 staging을 겸한다**: `stage_insert` 템플릿 계약(`insert_sql = INSERT INTO target SELECT ... FROM <staging>`)을 그대로 재사용하되, `staging` 이름으로 TEMP를 만드는 대신 **같은 이름의 PXF 외부테이블**을 만든다. 그래서 `staging_ddl`은 렌더/사용하지 않고(외부테이블 DDL은 executor가 `external_columns`로 생성), 요청/manifest는 `staging_table`·`external_columns`·`insert_sql`만 준다.
+- **이름 고유화**: 외부테이블은 TEMP가 아니라 GP 카탈로그 전역이므로, 같은 job의 여러 task가 같은 이름으로 `CREATE EXTERNAL TABLE`을 하면 충돌한다. `coordinator.stage.per_task_external()`이 `stage_insert`의 `per_task_staging`과 같은 방식으로 `staging_table`+`insert_sql`에 task_id 접미사를 붙여 고유화한다(`target_table`은 치환 보호). S3 객체 키(`<prefix>/<job_id>/<task_id>.csv`)도 task_id로 유일해 동시 task/재시도 충돌이 없다.
+- **업로드 vs 읽기 자격증명 분리**: 업로드는 executor가 **boto3**(옵션 의존성, 지연 임포트, `endpoint_url`로 온프렘 S3 호환 지원)로, GP 읽기는 **PXF SERVER 설정**(`$PXF_BASE/servers/<server>/s3-site.xml`)의 자격증명으로 한다 — 두 경로가 분리된다. LOCATION은 `pxf://<bucket>/<key>?PROFILE=s3:csv&SERVER=<server>`가 기본이고, 사이트가 다르면 `s3.gp_location_template`으로 raw override한다.
+- **멱등/정리**: `overwrite_partitions`는 INSERT 전 같은 트랜잭션에서 파티션 선삭제(재실행 멱등). 로컬 임시 CSV는 `finally`에서, S3 객체·외부테이블은 실패 시 best-effort로 지워 고아를 남기지 않는다. `s3.bucket` 미설정이면 `s3_stage` 요청 시에만 명확히 실패(다른 모드 무영향).
+- **fan-out 연동**: 날짜 fan-out(§18.8)도 `s3_stage`를 지원한다(하루=1 task, 각 task가 자체 S3 왕복, append 적재).
+- **SQL 조립**: `src/core/s3_stage.py`(순수 함수 — 객체 키·PXF LOCATION·외부테이블 DDL·선삭제·정리 DDL). 업로더는 `src/executor/s3_client.py`.
+- **예제/설정**: `templates/sales_migration_s3/`, `config.yml`의 `executor.s3.*`(bucket/prefix/endpoint_url/자격증명/pxf_server/pxf_profile). 배포 시 GP 세그먼트에 PXF SERVER를 구성해야 한다(packaging/README).
+- **테스트**: `tests/test_s3_stage.py` — s3_stage.py 순수 함수, `per_task_external` 고유화, 가짜 S3/GP로 backend 전체 흐름(업로드→외부테이블→INSERT→정리·overwrite 선삭제·GP 실패 시 고아 정리·bucket 미설정 오류), executor 라우팅(Mock), coordinator 검증/dry-run, 템플릿 렌더 + 날짜 fan-out.
+
 ---
 
 ## 18. 쿼리 템플릿 엔진
@@ -607,7 +622,7 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **`task_bound` — task 하나의 폭**: `point`(기본) = `(d, d)`로 `BETWEEN a AND b`(양끝 포함)·`= a` 비교용, task 수 = 날짜 수. `pair` = `(d, d+1)`로 `>= a AND < b`(반열림) 비교용, task 수 = 날짜 수 - 1. 어느 쪽인지는 **컬럼 타입/비교식**이 정한다 — DATE + `BETWEEN`에 `pair`를 쓰면 경계 날짜가 두 task에 겹쳐 중복 적재되고, TIMESTAMP + 반열림에 `point`를 쓰면 자정 정각 행만 읽어 사실상 0행이 된다. manifest가 자기 SQL에 맞는 값을 못 박아 두는 것을 권한다.
 - **안전장치(`_validate_sign_contract`)**: select 조각이 task 파라미터를 참조하면서 `<name>_sign`을 쓰지 않으면 `422 TEMPLATE_MISSING_SIGN_VAR`로 거부한다. 부호가 SQL에 고정된 템플릿에 절대값을 넣으면 `d=-3` task가 `BETWEEN today-3 AND today+3`(7일치)을 읽어 **모든 task가 겹친 채 append**되는데, 오류 없이 데이터만 틀리는 실패라 접수 시점에 막는다. 문자열 grep이 아니라 Jinja2 AST(`TemplateEngine.referenced_variables`, `jinja2.meta`)를 본다. 파라미터를 아예 참조하지 않는 템플릿(날짜 리터럴 방식)은 구간 도출에만 쓰는 것이므로 통과.
 - **상한**: task 수 > 366이면 `422 TASK_RANGE_TOO_LARGE`(오타로 수만 개의 task가 생기는 것을 차단).
-- **적재 방식**: stage_insert는 **append**다(그 날짜 SELECT → staging(TEMP) COPY → target INSERT). 하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을 쓴다 — 프레임워크는 대상에 DELETE를 하지 않는다.
+- **적재 방식**: fan-out은 `exec_mode=stage_insert` 또는 `s3_stage`를 지원한다(그 외는 `422 FANOUT_REQUIRES_STAGE_INSERT`). 둘 다 **append**다(그 날짜 SELECT → staging COPY 또는 S3 경유 → target INSERT). 하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을 쓴다 — 프레임워크는 대상에 DELETE를 하지 않는다.
 - **방언 주의**: 렌더된 SELECT는 구조 검증(단일 SELECT)을 위해 sqlglot으로 한 번 파싱된다. sqlglot에 impala 방언이 없고 기본값 `hive`는 인자 1개짜리 `trunc(date)`를 거부하므로, `trunc()`+`interval`을 쓰는 템플릿은 manifest에 `sql_dialect`(예: `trino`)를 지정한다. 실행은 그대로 Impala가 하며 이 값은 파싱에만 쓰인다.
 - **예제**: `templates/daily_sales_interval/`(상대 일수 interval + sign 방식), `templates/daily_sales/`(절대 날짜 리터럴 방식).
 

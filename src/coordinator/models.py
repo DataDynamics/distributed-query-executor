@@ -547,13 +547,15 @@ class CreateJobRequest(BaseModel):
     parallelism: int = Field(default=4, ge=1, le=128)
     split_strategy: Literal["contiguous", "round_robin"] = "contiguous"
     failure_policy: Literal["fail_fast", "best_effort"] = "fail_fast"
-    exec_mode: Literal["copy", "statement", "stage_insert", "local_stage"] = Field(
+    exec_mode: Literal["copy", "statement", "stage_insert", "local_stage", "s3_stage"] = Field(
         default="copy",
         description="copy: Impala read→Greenplum COPY. statement: SQL을 대상 DB에서 "
         "직접 실행. stage_insert: Impala 결과를 Greenplum staging(TEMP)에 COPY 후 "
         "staging→target INSERT 실행(서로 다른 엔진일 때). local_stage: executor 가 "
         "세그먼트 호스트 로컬 CSV 로 export 후, GP 가 file:// 외부테이블로 세그먼트 로컬 "
-        "병렬 read 하여 staging 적재→target INSERT(2-phase, executor co-locate 필요).",
+        "병렬 read 하여 staging 적재→target INSERT(2-phase, executor co-locate 필요). "
+        "s3_stage: executor 가 로컬 CSV → S3 업로드 → GP PXF 외부테이블 read → target "
+        "INSERT → S3 정리(per-task 완결, 세그먼트 co-locate 불필요).",
     )
     staging_table: Optional[str] = Field(
         default=None,

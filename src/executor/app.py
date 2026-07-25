@@ -303,6 +303,29 @@ def create_app(
                         on_stage=task.on_stage,
                     ),
                 )
+            elif task.exec_mode == "s3_stage":
+                # s3_stage: Impala 결과를 로컬 CSV → S3 업로드 → PXF 외부테이블 → target INSERT
+                # → S3 정리까지 이 task 하나가 자체 완결(per-task, 배리어 없음).
+                rows = await loop.run_in_executor(
+                    None,
+                    lambda: ctx.run(
+                        app.state.backend.stage_via_s3,
+                        task.sub_query,
+                        task.staging_table,
+                        task.insert_sql,
+                        task.external_columns,
+                        task.csv_options,
+                        task.target_table,
+                        task.partition_column,
+                        task.partition_values,
+                        task.write_mode,
+                        task.job_id,
+                        task.task_id,
+                        progress,
+                        query_options=task.impala_query_options,
+                        on_stage=task.on_stage,
+                    ),
+                )
             else:
                 # copy 모드: Impala read → Greenplum COPY
                 rows = await loop.run_in_executor(
@@ -381,6 +404,7 @@ def create_app(
             impala_query_options=req.impala_query_options,
             out_path=req.out_path,
             csv_options=req.csv_options,
+            external_columns=req.external_columns,
         )
         # 접수 시각부터 슬롯 확보까지의 대기(QUEUE_WAIT) 단계를 연다. _run 진입 시 닫힌다.
         task.on_stage("QUEUE_WAIT", "start")

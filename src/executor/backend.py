@@ -209,6 +209,31 @@ class Backend(Protocol):
         빈 집합을 반환하면 검증을 생략한다(목/조회 불가 시)."""
         ...
 
+    def stage_via_s3(
+        self,
+        impala_select: str,
+        staging_table: str,
+        insert_sql: str,
+        external_columns: str,
+        csv_options,
+        target_table: str,
+        partition_column: str,
+        partition_values,
+        write_mode: str,
+        job_id: str,
+        task_id: str,
+        on_progress=None,
+        query_options=None,
+        on_stage=None,
+    ) -> int:
+        """[s3_stage 모드] task 하나를 S3 경유로 완결 적재한다(per-task, executor 완결).
+
+        흐름: Impala SELECT → 로컬 CSV → S3 업로드 → 로컬 삭제 → GP PXF 외부테이블 생성 →
+        (overwrite_partitions 시) target 파티션 선삭제 → target INSERT → 외부테이블 DROP →
+        커밋 → S3 객체 정리. 외부테이블이 staging 역할을 겸하며, 이름은 task 별로 고유해야
+        한다(coordinator 가 고유화해 보낸다). INSERT 영향 행 수를 반환한다."""
+        ...
+
 
 class MockBackend:
     """결정적인 행 수를 반환하고 실제 I/O는 하지 않음. 개발/테스트용.
@@ -295,6 +320,33 @@ class MockBackend:
         _emit(on_stage, "COMMIT", "end")
         return self.rows_per_value
 
+    def stage_via_s3(self, impala_select, staging_table, insert_sql, external_columns,
+                     csv_options, target_table, partition_column, partition_values,
+                     write_mode, job_id, task_id, on_progress=None, query_options=None,
+                     on_stage=None) -> int:
+        # s3_stage 모드: 실제 I/O(Impala/S3/GP) 없이 단계 이벤트만 방출하고 rows_per_value 반환.
+        total = self.rows_per_value
+        _emit(on_stage, "IMPALA_SUBMIT", "start")
+        _emit(on_stage, "IMPALA_SUBMIT", "end")
+        _emit(on_stage, "EXPORT_WRITE", "start")
+        if on_progress:
+            on_progress(total)
+        _emit(on_stage, "EXPORT_WRITE", "end", {"rows": total})
+        _emit(on_stage, "S3_UPLOAD", "start")
+        _emit(on_stage, "S3_UPLOAD", "end", {"rows": total})
+        _emit(on_stage, "S3_EXTERNAL_DDL", "start")
+        _emit(on_stage, "S3_EXTERNAL_DDL", "end")
+        if write_mode == "overwrite_partitions" and partition_values:
+            _emit(on_stage, "DELETE", "start")
+            _emit(on_stage, "DELETE", "end")
+        _emit(on_stage, "INSERT", "start")
+        _emit(on_stage, "INSERT", "end", {"rows": total})
+        _emit(on_stage, "COMMIT", "start")
+        _emit(on_stage, "COMMIT", "end")
+        _emit(on_stage, "CLEANUP", "start")
+        _emit(on_stage, "CLEANUP", "end")
+        return total
+
     def segment_host_counts(self) -> dict:
         # 목: 빈 dict → coordinator 의 파일 예산 배분/호스트 검증을 건너뛰게 한다.
         return {}
@@ -314,7 +366,8 @@ class ImpalaToGreenplumBackend:
     def __init__(self, impala_dsn: dict, greenplum_dsn: str, batch_size: int = 10_000,
                  query_options: dict | None = None, copy_preflight: bool = True,
                  pool_max: int = 8, pipeline: bool = True, queue_size: int = 8,
-                 copy_format: str = "text", stage_convert_types: bool = False):
+                 copy_format: str = "text", stage_convert_types: bool = False,
+                 s3_config: dict | None = None, s3_client=None):
         # Impala 소스 접속 dict(impyla connect 에 그대로 전달).
         self.impala_dsn = impala_dsn
         # local_stage export 의 impyla 커서에 넘길 convert_types 값. False 면 형변환을 꺼
@@ -335,6 +388,23 @@ class ImpalaToGreenplumBackend:
         # Greenplum 커넥션 풀: 동시 GP 연결을 pool_max 로 제한하고 연결을 재사용한다.
         # (Impala 쪽은 task 마다 새로 연결한다 — 읽기 커서가 연결에 묶여 풀링이 까다로움.)
         self._gp_pool = _GreenplumPool(greenplum_dsn, pool_max)
+        # s3_stage 설정(버킷/프리픽스/PXF 서버·프로파일 등)과 업로더. s3_client 를 주입하면
+        # 그걸 쓰고(테스트용 가짜), 없으면 첫 사용 때 설정으로 boto3 클라이언트를 지연 생성한다.
+        self.s3_config: dict = dict(s3_config or {})
+        self._s3_client = s3_client
+
+    def _get_s3_client(self):
+        """s3_stage 용 S3 클라이언트를 지연 생성해 반환한다(미구성이면 명확히 실패)."""
+        if self._s3_client is None:
+            from executor.s3_client import build_s3_client  # 지연 임포트(옵션 의존성)
+
+            self._s3_client = build_s3_client(self.s3_config)
+        if self._s3_client is None:
+            raise ValueError(
+                "s3_stage 모드는 s3.bucket 설정이 필요합니다(현재 미설정). "
+                "config 의 s3.* 를 채우세요."
+            )
+        return self._s3_client
 
     def _source_connect(self):
         """Impala 소스 연결을 연다(impyla). 드라이버는 지연 임포트한다."""
@@ -762,6 +832,121 @@ class ImpalaToGreenplumBackend:
             _emit(on_stage, "CLEANUP", "end")
         return affected if affected and affected > 0 else 0
 
+    def stage_via_s3(self, impala_select, staging_table, insert_sql, external_columns,
+                     csv_options, target_table, partition_column, partition_values,
+                     write_mode, job_id, task_id, on_progress=None, query_options=None,
+                     on_stage=None) -> int:
+        """s3_stage: Impala→로컬 CSV→S3 업로드→PXF 외부테이블→target INSERT→S3 정리(per-task 완결).
+
+        ``stage_insert`` 의 형제지만 스테이징 매체가 GP TEMP 가 아니라 S3 객체다. S3 는
+        세그먼트 로컬이 아니므로 executor 를 세그먼트 호스트에 co-locate 할 필요가 없고,
+        각 task 가 자기 파일을 독립적으로 올려 자기 외부테이블로 읽어 넣는다(배리어 없음).
+
+        단계: IMPALA_SUBMIT→EXPORT_WRITE(로컬 CSV) → S3_UPLOAD(업로드+로컬 삭제) →
+        S3_EXTERNAL_DDL(DROP→CREATE EXTERNAL) → (DELETE) → INSERT → 외부테이블 DROP →
+        COMMIT → CLEANUP(S3 객체 삭제). 외부테이블이 곧 staging 이므로 insert_sql 은 이
+        이름을 소스로 참조한다. 반환: INSERT 영향 행 수(미지원 시 export 행 수).
+
+        정리 보장: 로컬 임시 CSV 는 finally 에서, S3 객체·외부테이블은 실패 시 best-effort 로
+        지운다(성공 경로는 S3 는 CLEANUP 에서, 외부테이블은 커밋 트랜잭션 안에서 DROP).
+        """
+        import os
+
+        from core import s3_stage as s3sql
+
+        # 로컬 임시 CSV 경로(업로드 후 즉시 삭제 — s3_stage 는 로컬에 파일을 남기지 않는다).
+        local_root = self.s3_config.get("local_tmp_dir") or "/tmp"
+        out_path = os.path.join(local_root, job_id, f"{task_id}.csv")
+        # S3 객체 키 + PXF LOCATION + 외부테이블 DDL 조립.
+        key = s3sql.s3_object_key(self.s3_config.get("prefix", ""), job_id, task_id)
+        location = s3sql.build_s3_location(
+            self.s3_config.get("bucket", ""), key,
+            profile=self.s3_config.get("pxf_profile", "s3:csv"),
+            server=self.s3_config.get("pxf_server", ""),
+            location_template=self.s3_config.get("gp_location_template", ""),
+        )
+        external_ddl = s3sql.build_s3_external_ddl(
+            staging_table, external_columns, location, csv_options
+        )
+        pre_delete = (
+            s3sql.build_pre_delete(target_table, partition_column, partition_values)
+            if write_mode == "overwrite_partitions" else None
+        )
+        cleanup_ddl = s3sql.build_cleanup_ddl(staging_table)
+        delete_on_cleanup = self.s3_config.get("delete_on_cleanup", True)
+
+        uploaded = False
+        committed = False
+        try:
+            # 1) Impala SELECT → 로컬 CSV(IMPALA_SUBMIT/EXPORT_WRITE 이벤트는 export 가 방출).
+            rows = self.export_to_local_csv(
+                impala_select, out_path, csv_options, on_progress,
+                query_options=query_options, on_stage=on_stage,
+            )
+            # 2) 로컬 CSV → S3 업로드 후 로컬 파일 즉시 삭제(로컬 디스크를 비운다).
+            _emit(on_stage, "S3_UPLOAD", "start")
+            client = self._get_s3_client()
+            client.upload(out_path, key)
+            uploaded = True
+            try:
+                os.remove(out_path)
+            except OSError:
+                logger.warning("s3_stage 로컬 CSV 삭제 실패(업로드는 완료): %s", out_path,
+                               exc_info=True)
+            _emit(on_stage, "S3_UPLOAD", "end", {"rows": rows})
+
+            # 3) GP: 외부테이블 생성 → (선삭제) → target INSERT → 외부테이블 DROP → 커밋.
+            with self._gp_pool.connection() as gp:
+                with gp.cursor() as cur:
+                    _emit(on_stage, "S3_EXTERNAL_DDL", "start")
+                    # 재사용 연결에 동명 외부테이블이 남아 있을 수 있으니 선삭제 후 생성(멱등).
+                    cur.execute(cleanup_ddl)
+                    cur.execute(external_ddl)
+                    _emit(on_stage, "S3_EXTERNAL_DDL", "end")
+                    if pre_delete:
+                        _emit(on_stage, "DELETE", "start")
+                        cur.execute(pre_delete)
+                        _emit(on_stage, "DELETE", "end",
+                              {"rows": cur.rowcount if cur.rowcount and cur.rowcount > 0 else None})
+                    _emit(on_stage, "INSERT", "start")
+                    cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM <staging(external)>
+                    affected = cur.rowcount
+                    _emit(on_stage, "INSERT", "end",
+                          {"rows": affected if affected and affected > 0 else rows})
+                    # 외부테이블은 같은 트랜잭션에서 DROP → 커밋 시 확정(잔존 카탈로그 방지).
+                    cur.execute(cleanup_ddl)
+                _emit(on_stage, "COMMIT", "start")
+                gp.commit()
+                committed = True
+                _emit(on_stage, "COMMIT", "end")
+
+            # 4) 정리: S3 객체 삭제(best-effort — 실패해도 적재는 이미 커밋됨).
+            _emit(on_stage, "CLEANUP", "start")
+            if delete_on_cleanup:
+                try:
+                    client.delete(key)
+                    uploaded = False
+                except Exception:
+                    logger.warning("s3_stage S3 객체 정리 실패 — 무시: s3://%s/%s",
+                                   self.s3_config.get("bucket"), key, exc_info=True)
+            _emit(on_stage, "CLEANUP", "end")
+            logger.debug("s3_stage 완료: %s행 반영(key=%s)", affected, key)
+            return affected if affected and affected > 0 else rows
+        finally:
+            # 로컬 임시 파일은 항상 정리한다(업로드 전 실패로 남았을 수 있음).
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except OSError:
+                pass
+            # 실패로 커밋되지 않았는데 S3 객체가 남았으면 지운다(고아 객체 방지, best-effort).
+            if uploaded and not committed and delete_on_cleanup:
+                try:
+                    self._get_s3_client().delete(key)
+                except Exception:
+                    logger.warning("s3_stage 실패 후 S3 객체 정리 실패 — 무시: key=%s", key,
+                                   exc_info=True)
+
     def segment_host_counts(self) -> dict:
         """gp_segment_configuration 에서 호스트별 primary(content>=0) 세그먼트 수 {host: S_h} 조회.
 
@@ -956,6 +1141,29 @@ def build_impala_dsn(settings) -> dict:
     return dsn
 
 
+def build_s3_config(settings) -> dict:
+    """settings 로부터 s3_stage 용 설정 dict 를 만든다(업로드 + PXF 외부테이블 조립).
+
+    ``bucket`` 이 비어 있으면 s3_stage 를 쓰지 않는 배포이므로 클라이언트는 지연 생성 시
+    None 이 되고(사용 시 명확한 오류), 다른 exec_mode 에는 영향이 없다. 로컬 임시 CSV 는
+    local_stage 와 같은 루트(``stage.local_dir``)를 재사용한다.
+    """
+    return {
+        "bucket": getattr(settings, "s3_bucket", ""),
+        "prefix": getattr(settings, "s3_prefix", "dqe-stage"),
+        "endpoint_url": getattr(settings, "s3_endpoint_url", ""),
+        "region": getattr(settings, "s3_region", ""),
+        "access_key": getattr(settings, "s3_access_key", ""),
+        "secret_key": getattr(settings, "s3_secret_key", ""),
+        "use_ssl": getattr(settings, "s3_use_ssl", True),
+        "pxf_server": getattr(settings, "s3_pxf_server", ""),
+        "pxf_profile": getattr(settings, "s3_pxf_profile", "s3:csv"),
+        "gp_location_template": getattr(settings, "s3_gp_location_template", ""),
+        "delete_on_cleanup": getattr(settings, "s3_delete_on_cleanup", True),
+        "local_tmp_dir": getattr(settings, "stage_local_dir", "/tmp"),
+    }
+
+
 def build_backend(settings) -> Backend:
     """설정에 따라 실제 백엔드 또는 MockBackend를 선택한다(coordinator·executor 공용).
 
@@ -981,6 +1189,7 @@ def build_backend(settings) -> Backend:
             queue_size=getattr(settings, "copy_queue_size", 8),
             copy_format=getattr(settings, "copy_format", "text"),
             stage_convert_types=getattr(settings, "stage_impala_convert_types", False),
+            s3_config=build_s3_config(settings),
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()
