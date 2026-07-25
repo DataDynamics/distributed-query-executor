@@ -154,36 +154,6 @@ def per_task_staging(
     return eff, ddl, ins
 
 
-def per_task_external(
-    staging_table: str,
-    insert_sql: str | None,
-    task_id: str,
-    *,
-    enabled: bool = True,
-    max_len: int = 63,
-    target_table: str | None = None,
-) -> tuple[str, str | None]:
-    """s3_stage 용 **task 별 고유 외부테이블(=staging) 이름**과 그에 맞춘 insert_sql 을 만든다.
-
-    s3_stage 는 S3 외부테이블이 staging 역할을 겸한다. 외부테이블은 TEMP 가 아니라 GP
-    카탈로그 전역이라, 같은 job 의 여러 task 가 같은 이름으로 CREATE EXTERNAL TABLE 을 하면
-    동시에 충돌한다. 그래서 ``stage_insert`` 의 ``per_task_staging`` 과 같은 방식으로 이름에
-    task_id 접미사를 붙여 고유화하고, insert_sql 의 소스 참조도 같은 이름으로 바꾼다
-    (``target_table`` 은 치환에서 보호해 이름 겹침 시 대상이 바뀌지 않게 한다).
-
-    ``staging_ddl`` 이 없다는 점만 ``per_task_staging`` 과 다르다(외부테이블 DDL 은 executor
-    가 external_columns 로 생성하므로 여기서 다루지 않는다). 반환: ``(이름, insert_sql)``.
-    """
-    if not enabled:
-        return staging_table, insert_sql
-    eff = unique_staging_name(staging_table, task_id, max_len)
-    if eff == staging_table:
-        return staging_table, insert_sql
-    protect = (target_table,) if target_table else ()
-    ins = rewrite_staging_name(insert_sql, staging_table, eff, protect)
-    return eff, ins
-
-
 def csv_format_clause(csv_options: dict | None) -> str:
     """``FORMAT 'CSV' ( DELIMITER '`' NULL '' QUOTE '"' )`` 절을 만든다.
 

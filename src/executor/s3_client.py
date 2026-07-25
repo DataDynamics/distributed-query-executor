@@ -73,6 +73,32 @@ class S3Client:
         logger.debug("S3 삭제: s3://%s/%s", self.bucket, key)
         self._get_client().delete_object(Bucket=self.bucket, Key=key)
 
+    def delete_prefix(self, prefix: str) -> int:
+        """``s3://<bucket>/<prefix>`` 아래 모든 객체를 삭제한다(Phase 3 job 정리). 삭제 수 반환.
+
+        list_objects_v2 로 프리픽스 아래를 페이지 단위로 훑어 delete_objects(최대 1000개/요청)로
+        지운다. job 하위 폴더(``<prefix>/<job_id>/``)만 대상이므로 다른 job 객체는 건드리지 않는다.
+        """
+        if not self.bucket:
+            return 0
+        client = self._get_client()
+        deleted = 0
+        token = None
+        while True:
+            kwargs = {"Bucket": self.bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = client.list_objects_v2(**kwargs)
+            objs = [{"Key": o["Key"]} for o in resp.get("Contents", [])]
+            if objs:
+                client.delete_objects(Bucket=self.bucket, Delete={"Objects": objs})
+                deleted += len(objs)
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+        logger.debug("S3 프리픽스 삭제: s3://%s/%s (%d개)", self.bucket, prefix, deleted)
+        return deleted
+
 
 def build_s3_client(config: dict | None):
     """설정에서 S3 클라이언트를 만든다. ``bucket`` 이 비어 있으면 None(=s3_stage 미구성)."""

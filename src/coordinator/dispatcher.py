@@ -32,6 +32,7 @@ from typing import Optional, Protocol
 
 import httpx
 
+from core import s3_stage as s3_sql
 from core.logging import job_log_context
 from core.phases import close_open_phases
 from . import stage as stage_sql
@@ -251,15 +252,6 @@ class _DispatcherBase:
         job 값을 그대로 쓴다. 다른 exec_mode(copy/statement/local_stage)는 이 필드를
         stage_insert 처럼 쓰지 않으므로 job 값을 그대로 반환한다.
         """
-        if job.exec_mode == "s3_stage":
-            # s3_stage: 외부테이블이 staging 을 겸한다. staging_ddl 은 executor 가 생성하므로
-            # 없고, 이름+insert_sql 만 task 별로 고유화한다(카탈로그 전역 충돌 방지).
-            eff, ins = stage_sql.per_task_external(
-                job.staging_table, job.insert_sql, task.task_id,
-                enabled=getattr(self.settings, "stage_unique_staging", True),
-                target_table=job.target_table,
-            )
-            return eff, None, ins
         if job.exec_mode != "stage_insert":
             return job.staging_table, job.staging_ddl, job.insert_sql
         return stage_sql.per_task_staging(
@@ -486,11 +478,95 @@ class _DispatcherBase:
         await self._cleanup_stage(job)
         self._save(job)
 
+    async def _run_s3_load(self, job: Job) -> None:
+        """s3_stage Phase 2: 모든 업로드 완료(배리어) 후 GP PXF 외부테이블 적재 → target INSERT.
+
+        ``_execute`` 가 반환하면 모든 Phase 1(업로드) task 가 종료 상태다(자연 배리어). 업로드가
+        하나라도 실패/취소됐으면 건너뛴다(finalize 가 상태를 정한다). 정상이면 coordinator 가
+        GP master 에 **job 프리픽스(``<prefix>/<job_id>/``)를 가리키는 외부테이블 하나**를 만들어
+        (PXF 가 그 아래 모든 task CSV 를 세그먼트 병렬 read) → (멱등 선삭제) → target INSERT 를
+        한 트랜잭션으로 수행하고, S3 스테이징 객체를 정리한다(Phase 3).
+
+        local_stage 와 달리 세그먼트 co-locate/파일예산/호스트 검증이 없다(S3 는 위치 무관).
+        s3_stage 가 아니면 즉시 반환하므로 다른 exec_mode 에는 영향이 없다.
+        """
+        if job.exec_mode != "s3_stage":
+            return
+        if self._cancel_observed(job):
+            return
+        if any(t.status == TaskStatus.FAILED for t in job.tasks):
+            logger.warning(
+                "job %s: 업로드 실패 task 존재 → s3_stage Phase 2(GP 적재) 건너뜀", job.job_id
+            )
+            return
+
+        backend = self._get_stage_backend()
+        loop = asyncio.get_running_loop()
+
+        # coordinator 가 GP master 에 실행할 SQL 을 조립한다(core/s3_stage.py — 순수 함수).
+        csv_options = stage_sql.resolve_csv_options(job, self.settings)
+        ext = s3_sql.external_table_name(job.job_id)
+        prefix = s3_sql.s3_job_prefix(self.settings.s3_prefix, job.job_id)
+        location = s3_sql.build_s3_location(
+            self.settings.s3_bucket, prefix,
+            profile=self.settings.s3_pxf_profile,
+            server=self.settings.s3_pxf_server,
+            location_template=self.settings.s3_gp_location_template,
+        )
+        external_ddl = s3_sql.build_s3_external_ddl(
+            ext, job.external_columns, location, csv_options
+        )
+        # 외부테이블이 staging 을 겸한다 — insert_sql 의 staging 참조를 job 고유 외부테이블
+        # 이름으로 치환해 INSERT INTO target SELECT ... FROM <ext> 가 되게 한다.
+        insert_sql = stage_sql.rewrite_staging_name(
+            job.insert_sql, job.staging_table, ext, (job.target_table,)
+        )
+        # overwrite_partitions 멱등: job 전체 파티션 값을 모아 최종 INSERT 전에 선삭제.
+        pre_delete = (
+            s3_sql.build_pre_delete(
+                job.target_table, job.partition_column,
+                [v for t in job.tasks for v in t.partition_values],
+            )
+            if job.write_mode == "overwrite_partitions" else None
+        )
+        cleanup = [s3_sql.build_cleanup_ddl(ext)]
+
+        try:
+            rows = await loop.run_in_executor(
+                None,
+                lambda: backend.load_external_s3(
+                    external_ddl, pre_delete, insert_sql, cleanup,
+                ),
+            )
+            logger.info("job %s: s3_stage Phase 2 적재 완료(target 반영 %s행)",
+                        job.job_id, rows)
+        except Exception as exc:
+            # 업로드는 됐지만 GP 적재가 실패 → job 을 실패로 확정한다.
+            logger.exception("job %s: s3_stage Phase 2 실패", job.job_id)
+            job.error = f"s3_stage Phase 2 실패: {exc}"
+            if job.tasks:
+                job.tasks[0].status = TaskStatus.FAILED
+                job.tasks[0].error = job.tasks[0].error or f"Phase 2 적재 실패: {exc}"
+            self._save(job)
+            return
+        # Phase 3: S3 스테이징 객체 정리(디스패처별 구현).
+        await self._cleanup_s3(job)
+        self._save(job)
+
     async def _cleanup_stage(self, job: Job) -> None:
         """local_stage Phase 3: 로컬 CSV 정리(디스패처별 구현). 기본은 no-op.
 
         HttpDispatcher 는 각 executor 의 ``/stage/{job_id}/cleanup`` 을 호출해 로컬 파일을
         지운다. LocalDispatcher(개발/목)는 정리할 원격 파일이 없어 그대로 둔다.
+        """
+        return
+
+    async def _cleanup_s3(self, job: Job) -> None:
+        """s3_stage Phase 3: S3 스테이징 객체 정리(디스패처별 구현). 기본은 no-op.
+
+        HttpDispatcher 는 executor 하나에 ``/s3/{job_id}/cleanup`` 을 호출한다(S3 는 세그먼트
+        로컬이 아니라 아무 executor 나 삭제 가능). LocalDispatcher 는 in-process 백엔드로 직접
+        지운다. ``s3.delete_on_cleanup=false`` 면 건너뛴다(S3 수명주기 정책에 맡길 때).
         """
         return
 
@@ -548,8 +624,10 @@ class _DispatcherBase:
                         if await self._plan_local_stage(job):
                             await self._execute(job)
                             # local_stage: 모든 export 완료(배리어) 후 GP file:// 적재(Phase 2+3).
-                            # 다른 exec_mode 에는 즉시 반환하는 no-op 이다.
+                            # s3_stage: 모든 업로드 완료(배리어) 후 GP PXF 적재(Phase 2+3).
+                            # 다른 exec_mode 에는 둘 다 즉시 반환하는 no-op 이다.
                             await self._run_stage_load(job)
+                            await self._run_s3_load(job)
                     finally:
                         # _execute 가 예외로 끝나도 최종 상태/종료시각/이력은 반드시 남긴다.
                         finalize_job(job)
@@ -769,16 +847,14 @@ class HttpDispatcher(_DispatcherBase):
                 "insert_sql": st_insert,
                 "impala_query_options": job.impala_query_options,
                 "username": job.username,
-                # local_stage 전용: 로컬 CSV 출력 경로 + CSV 방언(외부테이블 FORMAT 과 일치).
+                # local_stage 는 로컬 CSV 경로, s3_stage 는 S3 객체 키를 out_path 로 싣는다
+                # (둘 다 coordinator 가 확정한 "이 task 가 쓸 위치"). 외부테이블 생성/INSERT 는
+                # 두 모드 모두 coordinator 가 배리어 후 Phase 2 에서 하므로 여기선 보내지 않는다.
                 "out_path": task.out_path,
                 # csv_options 는 local_stage/s3_stage 가 공유(CSV 방언 = 외부테이블 FORMAT).
                 "csv_options": (
                     stage_sql.resolve_csv_options(job, self.settings)
                     if job.exec_mode in ("local_stage", "s3_stage") else None
-                ),
-                # s3_stage 전용: PXF 외부테이블 컬럼 정의(executor 가 CREATE EXTERNAL TABLE 에 사용).
-                "external_columns": (
-                    job.external_columns if job.exec_mode == "s3_stage" else None
                 ),
             },
         )
@@ -873,6 +949,24 @@ class HttpDispatcher(_DispatcherBase):
         async with httpx.AsyncClient(timeout=10.0) as client:
             await asyncio.gather(*(_one(client, u) for u in urls))
 
+    async def _cleanup_s3(self, job: Job) -> None:
+        """s3_stage Phase 3(원격): executor 하나에 S3 스테이징 객체 정리를 지시한다.
+
+        S3 객체는 세그먼트 로컬이 아니라 어느 executor 나 지울 수 있으므로, 배정된 executor 중
+        하나에만 ``/s3/{job_id}/cleanup`` 을 호출한다(프리픽스 전체 삭제라 한 번이면 충분).
+        설정에서 정리를 끄면 건너뛴다. 실패는 적재 결과에 무영향이라 로깅만 한다.
+        """
+        if not self.settings.s3_delete_on_cleanup:
+            return
+        url = next((t.executor_url for t in job.tasks if t.executor_url), None)
+        if not url:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                await client.post(f"{url}/s3/{job.job_id}/cleanup")
+        except Exception as exc:
+            logger.warning("job %s: executor %s S3 정리 실패: %s", job.job_id, url, exc)
+
     async def _resolve_url_hosts(self, urls) -> dict:
         """각 executor 의 ``/metrics`` 를 조회해 보고된 gp_hostname 으로 매핑을 만든다(캐시).
 
@@ -937,6 +1031,19 @@ class LocalDispatcher(_DispatcherBase):
         # (주입된 MockBackend 포함) → export 용 백엔드를 그대로 재사용한다.
         return self._get_backend()
 
+    async def _cleanup_s3(self, job: Job) -> None:
+        # s3_stage Phase 3(local): in-process 백엔드로 S3 프리픽스 객체를 직접 지운다.
+        if not self.settings.s3_delete_on_cleanup:
+            return
+        prefix = s3_sql.s3_job_prefix(self.settings.s3_prefix, job.job_id)
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None, self._get_backend().cleanup_s3_prefix, prefix
+            )
+        except Exception as exc:
+            logger.warning("job %s: local S3 정리 실패: %s", job.job_id, exc)
+
     async def _execute(self, job: Job) -> None:
         # HTTP 버전과 동일하게 모든 task를 동시에 돌리되, 실제 작업은 backend가 수행한다.
         await asyncio.gather(*(self._run_task(job, t) for t in job.tasks))
@@ -997,16 +1104,15 @@ class LocalDispatcher(_DispatcherBase):
                         ),
                     )
                 elif job.exec_mode == "s3_stage":
-                    # s3_stage: task 하나가 S3 경유로 자체 완결(HTTP 경로와 동일하게 이름 고유화).
-                    st_table, _st_ddl, st_insert = self._task_staging(job, task)
+                    # s3_stage Phase 1: Impala 결과를 로컬 CSV 로 export → S3 업로드(Phase 2 는
+                    # run() 이 배리어 후 수행). out_path 는 coordinator 가 확정한 S3 객체 키.
                     csv_options = stage_sql.resolve_csv_options(job, self.settings)
                     rows = await loop.run_in_executor(
                         None,
                         lambda: ctx.run(
-                            backend.stage_via_s3,
-                            task.sub_query, st_table, st_insert, job.external_columns,
-                            csv_options, job.target_table, job.partition_column,
-                            task.partition_values, job.write_mode, job.job_id, task.task_id,
+                            backend.export_to_s3,
+                            task.sub_query, task.out_path, job.job_id, task.task_id,
+                            csv_options,
                             _progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,

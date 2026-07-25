@@ -1,14 +1,14 @@
-"""s3_stage 모드: Impala→로컬 CSV→S3 업로드→GP PXF 외부테이블→target INSERT→S3 정리.
+"""s3_stage 모드(2-phase, coordinator 중앙): executor 업로드 → coordinator PXF 적재.
 
-local_stage 의 형제지만 세그먼트 co-locate/파일예산 배분이 없고, task 하나가 자체 완결한다.
-순수 SQL/키 조립(core.s3_stage) + coordinator 이름 고유화(coordinator.stage.per_task_external)
-+ 백엔드 흐름(가짜 S3/GP) + coordinator 검증/전달 + 날짜 fan-out 연동을 검증한다.
+local_stage 의 형제. Phase 1(executor): Impala→로컬 CSV→S3 업로드. 배리어. Phase 2
+(coordinator): job 프리픽스로 PXF 외부테이블 하나 생성→target INSERT. Phase 3: S3 정리.
+순수 SQL/키 조립(core.s3_stage) + backend Phase 1/2/3 + executor 라우팅/정리 엔드포인트 +
+coordinator 검증/전달 + LocalDispatcher 2-phase e2e + 템플릿 렌더/날짜 fan-out 을 검증한다.
 """
 
 from __future__ import annotations
 
 import asyncio
-import datetime
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -17,10 +17,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from core import s3_stage as s3sql
-from core.timeutil import now_dt
-from coordinator import stage as stage_sql
 from coordinator.app import create_app
+from coordinator.config import settings as coord_settings
+from coordinator.dispatcher import LocalDispatcher
 from coordinator.job_store import JobStore
+from coordinator.models import JobStatus
 from executor.app import create_app as create_executor_app
 from executor.backend import ImpalaToGreenplumBackend, MockBackend
 
@@ -30,84 +31,70 @@ REPO_TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 # ───────────────────── 순수 함수(core.s3_stage) ─────────────────────
 
 
-def test_s3_object_key_normalizes_prefix():
+def test_s3_object_key_and_job_prefix():
     assert s3sql.s3_object_key("dqe-stage", "job_x", "t_y") == "dqe-stage/job_x/t_y.csv"
     assert s3sql.s3_object_key("/a/b/", "j", "t") == "a/b/j/t.csv"
     assert s3sql.s3_object_key("", "j", "t") == "j/t.csv"
+    # 모든 task 키가 job 프리픽스 아래에 모인다.
+    assert s3sql.s3_job_prefix("dqe-stage", "job_x") == "dqe-stage/job_x/"
+    assert s3sql.s3_object_key("dqe-stage", "job_x", "t_y").startswith(
+        s3sql.s3_job_prefix("dqe-stage", "job_x"))
 
 
-def test_build_s3_location_default_pxf():
-    key = s3sql.s3_object_key("dqe-stage", "j", "t")
-    loc = s3sql.build_s3_location("mybkt", key, profile="s3:csv", server="s3srv")
-    assert loc == "pxf://mybkt/dqe-stage/j/t.csv?PROFILE=s3:csv&SERVER=s3srv"
+def test_external_table_name_job_unique_and_safe():
+    assert s3sql.external_table_name("job_abc-1") == "s3ext_job_abc_1"
+    # job 마다 다르다(동시 실행 job 간 카탈로그 충돌 방지).
+    assert s3sql.external_table_name("a") != s3sql.external_table_name("b")
 
 
-def test_build_s3_location_without_server_omits_server():
-    loc = s3sql.build_s3_location("mybkt", "k.csv", profile="s3:csv", server="")
-    assert loc == "pxf://mybkt/k.csv?PROFILE=s3:csv"
-    assert "SERVER" not in loc
+def test_build_s3_location_default_pxf_directory():
+    prefix = s3sql.s3_job_prefix("dqe-stage", "j")
+    loc = s3sql.build_s3_location("mybkt", prefix, profile="s3:csv", server="s3srv")
+    assert loc == "pxf://mybkt/dqe-stage/j/?PROFILE=s3:csv&SERVER=s3srv"
 
 
-def test_build_s3_location_template_override():
+def test_build_s3_location_without_server_and_template_override():
+    assert "SERVER" not in s3sql.build_s3_location("b", "k/", server="")
     loc = s3sql.build_s3_location(
-        "mybkt", "k.csv", profile="s3:text", server="srv",
-        location_template="s3://{bucket}/{key}?PROFILE={profile}&SERVER={server}",
+        "b", "k/", profile="s3:text", server="srv",
+        location_template="s3a://{bucket}/{key}?p={profile}&s={server}",
     )
-    assert loc == "s3://mybkt/k.csv?PROFILE=s3:text&SERVER=srv"
+    assert loc == "s3a://b/k/?p=s3:text&s=srv"
 
 
-def test_build_s3_external_ddl_has_location_and_format():
-    loc = s3sql.build_s3_location("b", "k.csv", server="srv")
+def test_build_s3_external_ddl_and_helpers():
+    loc = s3sql.build_s3_location("b", "dqe/j/", server="srv")
     ddl = s3sql.build_s3_external_ddl(
-        "public.stg", "id int, dt date", loc,
-        {"delimiter": "`", "null": "", "quote": '"'},
-    )
-    assert ddl.startswith("CREATE EXTERNAL TABLE public.stg (id int, dt date)")
-    assert "LOCATION ('pxf://b/k.csv?PROFILE=s3:csv&SERVER=srv')" in ddl
+        "s3ext_j", "id int, dt date", loc, {"delimiter": "`", "null": "", "quote": '"'})
+    assert ddl.startswith("CREATE EXTERNAL TABLE s3ext_j (id int, dt date)")
+    assert "LOCATION ('pxf://b/dqe/j/?PROFILE=s3:csv&SERVER=srv')" in ddl
     assert "FORMAT 'CSV' ( DELIMITER '`' NULL '' QUOTE '\"' )" in ddl
-
-
-def test_build_pre_delete_and_cleanup():
     assert s3sql.build_pre_delete("t", "dt", []) is None
-    assert s3sql.build_pre_delete("t", "dt", ["'1'", "'2'"]) == \
-        "DELETE FROM t WHERE dt IN ('1', '2')"
-    assert s3sql.build_cleanup_ddl("ext") == "DROP EXTERNAL TABLE IF EXISTS ext"
+    assert s3sql.build_pre_delete("t", "dt", ["'1'"]) == "DELETE FROM t WHERE dt IN ('1')"
+    assert s3sql.build_cleanup_ddl("s3ext_j") == "DROP EXTERNAL TABLE IF EXISTS s3ext_j"
 
 
-# ───────────────────── 이름 고유화(coordinator.stage) ─────────────────────
-
-
-def test_per_task_external_uniquifies_name_and_insert():
-    name, insert = stage_sql.per_task_external(
-        "stg", "INSERT INTO public.target SELECT * FROM stg", "t_abc",
-        target_table="public.target",
-    )
-    assert name == "stg_t_abc"
-    assert "FROM stg_t_abc" in insert
-    # target 은 보호되어 접미사가 붙지 않는다(이름 겹침 방지).
-    assert "public.target" in insert
-
-
-def test_per_task_external_disabled_returns_input():
-    name, insert = stage_sql.per_task_external(
-        "stg", "INSERT INTO t SELECT * FROM stg", "t_abc", enabled=False,
-    )
-    assert name == "stg" and insert == "INSERT INTO t SELECT * FROM stg"
-
-
-# ───────────────────── 백엔드 흐름(가짜 S3/GP) ─────────────────────
+# ───────────────────── backend Phase 1/2/3(가짜 S3/GP) ─────────────────────
 
 
 class _FakeS3Client:
     def __init__(self):
-        self.uploaded = []  # (local_path, key)
-        self.deleted = []
+        self.uploaded = []   # (local_path, key)
+        self.deleted_prefixes = []
+        self.objects = set()  # 업로드된 키(프리픽스 삭제 시뮬레이션용)
 
     def upload(self, local_path, key):
         self.uploaded.append((local_path, key))
+        self.objects.add(key)
 
     def delete(self, key):
-        self.deleted.append(key)
+        self.objects.discard(key)
+
+    def delete_prefix(self, prefix):
+        gone = {k for k in self.objects if k.startswith(prefix)}
+        self.objects -= gone
+        self.deleted_prefixes.append(prefix)
+        return len(gone)
 
 
 class _FakeGpCursor:
@@ -148,94 +135,91 @@ class _FakePool:
         yield self._conn
 
 
-def _s3_backend(gp_conn, s3_client, s3_config=None):
+def _backend(gp_conn=None, s3_client=None, s3_config=None):
     cfg = {"bucket": "mybkt", "prefix": "dqe-stage", "pxf_server": "s3srv",
            "local_tmp_dir": "/tmp/dqe-test"}
     cfg.update(s3_config or {})
     be = ImpalaToGreenplumBackend(impala_dsn={}, greenplum_dsn="x",
                                   s3_config=cfg, s3_client=s3_client)
-    be._gp_pool = _FakePool(gp_conn)
-    # export_to_local_csv 를 스텁: 실제 Impala/파일 없이 행수만 반환(단계 이벤트도 생략).
-    be.export_to_local_csv = lambda *a, **k: 42
+    if gp_conn is not None:
+        be._gp_pool = _FakePool(gp_conn)
     return be
 
 
-def test_stage_via_s3_full_flow():
-    conn = _FakeGpConn()
+def test_export_to_s3_uploads_and_removes_local(tmp_path):
     s3 = _FakeS3Client()
-    be = _s3_backend(conn, s3)
-    n = be.stage_via_s3(
-        "SELECT a, dt FROM imp", "public.stg", "INSERT INTO public.t SELECT * FROM public.stg",
-        "a int, dt date", {"delimiter": "`", "null": "", "quote": '"'},
-        "public.t", "dt", ["'1'"], "append", "job_x", "t_y",
+    be = _backend(s3_client=s3, s3_config={"local_tmp_dir": str(tmp_path)})
+    # export_to_local_csv 를 스텁: 실제 파일을 하나 만들어 업로드 대상이 존재하게 한다.
+    written = {}
+
+    def _fake_export(sql, out_path, csv_options, on_progress, query_options=None, on_stage=None):
+        import os
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w") as f:
+            f.write("row\n")
+        written["path"] = out_path
+        return 42
+
+    be.export_to_local_csv = _fake_export
+    n = be.export_to_s3("SELECT 1", "dqe-stage/job_x/t_y.csv", "job_x", "t_y", {})
+    assert n == 42
+    assert s3.uploaded == [(written["path"], "dqe-stage/job_x/t_y.csv")]
+    # 업로드 후 로컬 임시 파일은 삭제됐다.
+    import os
+    assert not os.path.exists(written["path"])
+
+
+def test_load_external_s3_runs_ddl_insert_cleanup():
+    conn = _FakeGpConn()
+    be = _backend(gp_conn=conn)
+    ext_ddl = "CREATE EXTERNAL TABLE s3ext_j (id int) LOCATION ('pxf://b/dqe/j/?PROFILE=s3:csv')\n  FORMAT 'CSV' ( )"
+    n = be.load_external_s3(
+        ext_ddl,
+        "DELETE FROM public.t WHERE dt IN ('1')",
+        "INSERT INTO public.t SELECT * FROM s3ext_j",
+        ["DROP EXTERNAL TABLE IF EXISTS s3ext_j"],
     )
-    assert n == 7  # INSERT rowcount
-    # 업로드가 올바른 키로 일어났고, 성공 정리로 S3 객체가 삭제됐다.
-    assert s3.uploaded == [("/tmp/dqe-test/job_x/t_y.csv", "dqe-stage/job_x/t_y.csv")]
-    assert s3.deleted == ["dqe-stage/job_x/t_y.csv"]
-    # GP: 외부테이블 DROP→CREATE, INSERT, 외부테이블 DROP, COMMIT 순.
+    assert n == 7
     joined = " | ".join(conn.executed)
-    assert "CREATE EXTERNAL TABLE public.stg" in joined
-    assert "pxf://mybkt/dqe-stage/job_x/t_y.csv?PROFILE=s3:csv&SERVER=s3srv" in joined
-    assert "INSERT INTO public.t" in joined
-    assert conn.executed[-1] == "COMMIT"
-    # append 이므로 DELETE 없음.
+    # 외부테이블 생성 → 선삭제 → INSERT → COMMIT → (별도 tx) DROP.
+    assert conn.executed[0].startswith("CREATE EXTERNAL TABLE s3ext_j")
+    assert "DELETE FROM public.t" in joined
+    assert "INSERT INTO public.t SELECT * FROM s3ext_j" in joined
+    assert "COMMIT" in conn.executed
+    assert any(s.startswith("DROP EXTERNAL TABLE IF EXISTS s3ext_j") for s in conn.executed)
+
+
+def test_load_external_s3_append_skips_delete():
+    conn = _FakeGpConn()
+    be = _backend(gp_conn=conn)
+    be.load_external_s3("CREATE EXTERNAL TABLE s3ext_j (id int)", None,
+                        "INSERT INTO t SELECT * FROM s3ext_j", None)
     assert not any(s.strip().upper().startswith("DELETE") for s in conn.executed)
 
 
-def test_stage_via_s3_overwrite_pre_deletes():
-    conn = _FakeGpConn()
-    be = _s3_backend(conn, _FakeS3Client())
-    be.stage_via_s3(
-        "SELECT a, dt FROM imp", "stg", "INSERT INTO t SELECT * FROM stg",
-        "a int, dt date", {"delimiter": "`", "null": "", "quote": '"'},
-        "t", "dt", ["'1'", "'2'"], "overwrite_partitions", "j", "tk",
-    )
-    assert any(s.startswith("DELETE FROM t WHERE dt IN ('1', '2')") for s in conn.executed)
-
-
-def test_stage_via_s3_deletes_orphan_on_gp_failure():
-    # INSERT(=GP)에서 실패하면 이미 올린 S3 객체를 고아로 남기지 않고 지운다.
-    class _BoomCursor(_FakeGpCursor):
-        def execute(self, sql):
-            self.conn.executed.append(sql)
-            if sql.strip().upper().startswith("INSERT"):
-                raise RuntimeError("GP boom")
-
-    class _BoomConn(_FakeGpConn):
-        def cursor(self):
-            return _BoomCursor(self)
-
-    conn = _BoomConn()
+def test_cleanup_s3_prefix_deletes_objects():
     s3 = _FakeS3Client()
-    be = _s3_backend(conn, s3)
-    raised = False
-    try:
-        be.stage_via_s3(
-            "SELECT 1", "stg", "INSERT INTO t SELECT * FROM stg", "a int",
-            {"delimiter": "`", "null": "", "quote": '"'},
-            "t", "dt", [], "append", "j", "tk",
-        )
-    except RuntimeError:
-        raised = True
-    assert raised
-    assert s3.uploaded  # 업로드는 됐고
-    assert s3.deleted == ["dqe-stage/j/tk.csv"]  # 실패 후 고아 객체 정리
+    s3.objects.update({"dqe-stage/job_x/a.csv", "dqe-stage/job_x/b.csv",
+                       "dqe-stage/other/c.csv"})
+    be = _backend(s3_client=s3)
+    deleted = be.cleanup_s3_prefix("dqe-stage/job_x/")
+    assert deleted == 2
+    assert s3.objects == {"dqe-stage/other/c.csv"}  # 다른 job 은 안 지운다
 
 
-def test_stage_via_s3_missing_bucket_raises():
-    be = ImpalaToGreenplumBackend(impala_dsn={}, greenplum_dsn="x", s3_config={})
+def test_export_to_s3_missing_bucket_raises(tmp_path):
+    be = ImpalaToGreenplumBackend(impala_dsn={}, greenplum_dsn="x",
+                                  s3_config={"local_tmp_dir": str(tmp_path)})
     be.export_to_local_csv = lambda *a, **k: 1
     raised = False
     try:
-        be.stage_via_s3("SELECT 1", "stg", "INSERT INTO t SELECT * FROM stg", "a int",
-                        {}, "t", "dt", [], "append", "j", "tk")
+        be.export_to_s3("SELECT 1", "k.csv", "j", "t", {})
     except ValueError as exc:
         raised = "s3.bucket" in str(exc)
     assert raised
 
 
-# ───────────────────── executor task 라우팅(MockBackend) ─────────────────────
+# ───────────────────── executor task 라우팅 + 정리 엔드포인트 ─────────────────────
 
 
 def _task_payload(task_id, **over):
@@ -244,16 +228,15 @@ def _task_payload(task_id, **over):
         "sub_query": "SELECT a, dt FROM imp WHERE dt IN ('1')",
         "target_table": "public.target", "write_mode": "append",
         "partition_column": "dt", "partition_values": ["'1'"],
-        "exec_mode": "s3_stage", "staging_table": "stg_t",
-        "insert_sql": "INSERT INTO public.target SELECT * FROM stg_t",
-        "external_columns": "a int, dt date",
+        "exec_mode": "s3_stage",
+        "out_path": "dqe-stage/j/" + task_id + ".csv",  # coordinator 가 준 S3 키
         "csv_options": {"delimiter": "`", "null": "", "quote": '"'},
     }
     base.update(over)
     return base
 
 
-async def _run(app, payload):
+async def _run_task(app, payload):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
         await c.post("/tasks", json=payload)
@@ -265,11 +248,20 @@ async def _run(app, payload):
         return st
 
 
-async def test_executor_s3_stage_routes_to_mock():
-    st = await _run(create_executor_app(backend=MockBackend(rows_per_value=9)),
-                    _task_payload("s1"))
+async def test_executor_s3_stage_phase1_routes_to_export():
+    st = await _run_task(create_executor_app(backend=MockBackend(rows_per_value=9)),
+                         _task_payload("s1"))
     assert st["status"] == "DONE"
     assert st["rows_written"] == 9
+
+
+def test_executor_s3_cleanup_endpoint():
+    app = create_executor_app(backend=MockBackend())
+    client = TestClient(app)
+    resp = client.post("/s3/job_x/cleanup")
+    assert resp.status_code == 200
+    # MockBackend.cleanup_s3_prefix → 0 (지울 것 없음), 엔드포인트는 정상 응답.
+    assert resp.json() == {"job_id": "job_x", "deleted": 0}
 
 
 # ───────────────────── coordinator 검증/전달 ─────────────────────
@@ -287,17 +279,19 @@ def _job_payload(**over):
     return base
 
 
-def test_coordinator_s3_stage_job(client, store):
+def test_coordinator_s3_stage_job_and_keys(client, store):
     resp = client.post("/jobs", json=_job_payload())
     assert resp.status_code == 202
     job = store.get(resp.json()["job_id"])
     assert job.exec_mode == "s3_stage"
-    assert job.staging_table == "stg_t"
     assert job.external_columns == "a int, dt date"
     assert job.insert_sql.startswith("INSERT INTO public.target")
-    # sub-query 는 분할된 Impala SELECT 그대로(래핑/INSERT 아님).
+    # 각 task 의 out_path 는 job 프리픽스 아래의 S3 키다.
+    prefix = s3sql.s3_job_prefix(coord_settings.s3_prefix, job.job_id)
+    for t in job.tasks:
+        assert t.out_path.startswith(prefix) and t.out_path.endswith(".csv")
+    # sub-query 는 분할된 SELECT 그대로.
     assert job.tasks[0].sub_query.startswith("SELECT a, dt FROM imp")
-    assert "INSERT" not in job.tasks[0].sub_query.upper()
 
 
 def test_coordinator_s3_stage_missing_fields_rejected(client):
@@ -311,10 +305,90 @@ def test_coordinator_s3_stage_missing_fields_rejected(client):
 def test_coordinator_s3_stage_dry_run(client):
     resp = client.post("/jobs", json=_job_payload(dry_run=True))
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["dry_run"] is True and body["exec_mode"] == "s3_stage"
-    assert body["tasks"][0]["external_columns"] == "a int, dt date"
-    assert body["tasks"][0]["insert_sql"].startswith("INSERT INTO public.target")
+    b = resp.json()
+    assert b["dry_run"] is True and b["exec_mode"] == "s3_stage"
+    assert b["tasks"][0]["external_columns"] == "a int, dt date"
+    assert b["tasks"][0]["insert_sql"].startswith("INSERT INTO public.target")
+
+
+# ───────────────────── LocalDispatcher 2-phase e2e ─────────────────────
+
+
+class _MockS3StageBackend(MockBackend):
+    """s3_stage 2-phase 를 in-process 로 검증하는 목 백엔드.
+
+    Phase 1(export_to_s3): 업로드 키를 기록하고 rows 반환. Phase 2(load_external_s3):
+    coordinator 가 조립한 external_ddl/insert_sql 을 기록하고 rows 반환. Phase 3
+    (cleanup_s3_prefix): 정리 프리픽스 기록.
+    """
+
+    def __init__(self, rows_per_value=100):
+        super().__init__(rows_per_value)
+        self.uploaded_keys = []
+        self.phase2 = None   # (external_ddl, pre_delete, insert_sql, cleanup)
+        self.cleaned = []
+
+    def export_to_s3(self, impala_select, key, job_id, task_id, csv_options=None,
+                     on_progress=None, query_options=None, on_stage=None):
+        self.uploaded_keys.append(key)
+        if on_progress:
+            on_progress(self.rows_per_value)
+        return self.rows_per_value
+
+    def load_external_s3(self, external_ddl, pre_delete_sql, insert_sql, cleanup_sqls=None,
+                         on_stage=None):
+        self.phase2 = (external_ddl, pre_delete_sql, insert_sql, cleanup_sqls)
+        return 55
+
+    def cleanup_s3_prefix(self, prefix):
+        self.cleaned.append(prefix)
+        return len(self.uploaded_keys)
+
+
+def _s3_settings(monkeypatch):
+    monkeypatch.setattr(coord_settings, "s3_bucket", "mybkt", raising=False)
+    monkeypatch.setattr(coord_settings, "s3_prefix", "dqe-stage", raising=False)
+    monkeypatch.setattr(coord_settings, "s3_pxf_server", "s3srv", raising=False)
+    monkeypatch.setattr(coord_settings, "s3_pxf_profile", "s3:csv", raising=False)
+    monkeypatch.setattr(coord_settings, "s3_gp_location_template", "", raising=False)
+    monkeypatch.setattr(coord_settings, "s3_delete_on_cleanup", True, raising=False)
+    monkeypatch.setattr(coord_settings, "executors", [], raising=False)
+    monkeypatch.setattr(coord_settings, "executor_mode", "local", raising=False)
+
+
+async def test_localdispatcher_s3_stage_two_phase(monkeypatch):
+    _s3_settings(monkeypatch)
+    backend = _MockS3StageBackend()
+    store = JobStore()
+    disp = LocalDispatcher(coord_settings, backend=backend, store=store)
+    app = create_app(runner=disp, store=store, settings=coord_settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
+        resp = await c.post("/jobs", json=_job_payload(parallelism=3, write_mode="overwrite_partitions"))
+        assert resp.status_code == 202, resp.text
+        job_id = resp.json()["job_id"]
+        for _ in range(300):
+            st = (await c.get(f"/jobs/{job_id}/status")).json()
+            if st["status"] in ("DONE", "PARTIAL", "FAILED", "CANCELLED"):
+                break
+            await asyncio.sleep(0.01)
+    assert st["status"] == "DONE", st
+    # Phase 1: 각 task 가 job 프리픽스 아래 고유 키로 업로드했다.
+    prefix = s3sql.s3_job_prefix("dqe-stage", job_id)
+    assert len(backend.uploaded_keys) == 3
+    assert all(k.startswith(prefix) and k.endswith(".csv") for k in backend.uploaded_keys)
+    # Phase 2: coordinator 가 job 프리픽스로 외부테이블 하나를 만들고 INSERT 했다.
+    ext_ddl, pre_delete, insert_sql, cleanup = backend.phase2
+    ext_name = s3sql.external_table_name(job_id)
+    assert f"CREATE EXTERNAL TABLE {ext_name}" in ext_ddl
+    assert f"pxf://mybkt/{prefix}?PROFILE=s3:csv&SERVER=s3srv" in ext_ddl
+    # insert_sql 의 staging 참조가 job 고유 외부테이블 이름으로 치환됐다.
+    assert f"FROM {ext_name}" in insert_sql
+    assert "public.target" in insert_sql
+    # overwrite_partitions → 선삭제 존재.
+    assert pre_delete and pre_delete.startswith("DELETE FROM public.target")
+    # Phase 3: S3 스테이징 프리픽스 정리.
+    assert backend.cleaned == [prefix]
 
 
 # ───────────────────── 템플릿 렌더 + 날짜 fan-out ─────────────────────
@@ -322,17 +396,15 @@ def test_coordinator_s3_stage_dry_run(client):
 
 @pytest.fixture
 def tpl_client(monkeypatch):
-    from coordinator.config import settings
-    monkeypatch.setattr(settings, "template_enabled", True, raising=False)
-    monkeypatch.setattr(settings, "template_dir", str(REPO_TEMPLATES), raising=False)
-    monkeypatch.setattr(settings, "template_auto_reload", False, raising=False)
-    monkeypatch.setattr(settings, "template_func_modules", [], raising=False)
-    monkeypatch.setattr(settings, "executors", [], raising=False)
+    monkeypatch.setattr(coord_settings, "template_enabled", True, raising=False)
+    monkeypatch.setattr(coord_settings, "template_dir", str(REPO_TEMPLATES), raising=False)
+    monkeypatch.setattr(coord_settings, "template_auto_reload", False, raising=False)
+    monkeypatch.setattr(coord_settings, "template_func_modules", [], raising=False)
+    monkeypatch.setattr(coord_settings, "executors", [], raising=False)
     return TestClient(create_app(store=JobStore()))
 
 
 def test_s3_stage_template_renders(tpl_client):
-    # 예제 템플릿 sales_migration_s3 이 s3_stage 로 렌더되어 필드가 채워진다.
     resp = tpl_client.post("/jobs", json={
         "template_id": "sales_migration_s3",
         "params": [
@@ -352,8 +424,6 @@ def test_s3_stage_template_renders(tpl_client):
 
 
 def test_s3_stage_fanout_one_task_per_day(tpl_client, tmp_path, monkeypatch):
-    # s3_stage 도 날짜 fan-out(task_params)을 지원한다(하루=1 task, append 적재).
-    from coordinator.config import settings
     tpl = tmp_path / "daily_s3"
     tpl.mkdir()
     (tpl / "manifest.yml").write_text(
@@ -371,10 +441,9 @@ def test_s3_stage_fanout_one_task_per_day(tpl_client, tmp_path, monkeypatch):
         encoding="utf-8",
     )
     (tpl / "insert.sql.j2").write_text(
-        "INSERT INTO public.sales SELECT * FROM stg_s3\n", encoding="utf-8"
-    )
+        "INSERT INTO public.sales SELECT * FROM stg_s3\n", encoding="utf-8")
     (tpl / "ext.sql.j2").write_text("id bigint, dt date\n", encoding="utf-8")
-    monkeypatch.setattr(settings, "template_dir", str(tmp_path), raising=False)
+    monkeypatch.setattr(coord_settings, "template_dir", str(tmp_path), raising=False)
     client = TestClient(create_app(store=JobStore()))
 
     resp = client.post("/jobs", json={
@@ -389,6 +458,6 @@ def test_s3_stage_fanout_one_task_per_day(tpl_client, tmp_path, monkeypatch):
     assert resp.status_code == 200, resp.text
     b = resp.json()
     assert b["exec_mode"] == "s3_stage"
-    assert b["task_count"] == 3  # [-2, 0] 양끝 포함
+    assert b["task_count"] == 3
     assert b["tasks"][0]["external_columns"].startswith("id bigint")
     assert b["tasks"][0]["insert_sql"].startswith("INSERT INTO public.sales")

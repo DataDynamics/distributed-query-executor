@@ -1,10 +1,10 @@
 # 쿼리 템플릿 예제 — 일별 매출 Impala→Greenplum 이관(s3_stage, S3 경유 스테이징).
 #
-# sales_migration 의 s3_stage 판이다. stage_insert(GP TEMP 경유)·local_stage(file:// 세그먼트
-# 로컬)와 달리, executor 가 Impala 결과를 로컬 CSV 로 떨어뜨린 뒤 S3 버킷에 올리고, Greenplum 이
-# 그 객체를 PXF 외부테이블로 읽어 target 에 INSERT 한다. S3 객체는 세그먼트 로컬이 아니라 모든
-# 세그먼트에서 위치 무관하게 읽히므로, executor 를 GP 세그먼트 호스트에 co-locate 할 필요가 없다
-# (local_stage 의 파일예산 배분/배리어/중앙 적재도 불필요). task 하나가 처음부터 끝까지 자체 완결한다.
+# sales_migration 의 s3_stage 판이다. local_stage 와 같은 2-phase: Phase 1 에서 각 executor 가
+# Impala 결과를 로컬 CSV 로 떨어뜨린 뒤 S3 버킷에 올리고(로컬 삭제), 배리어 후 Phase 2 에서
+# coordinator 가 GP master 에 job 프리픽스로 PXF 외부테이블 하나를 만들어 target 에 INSERT 한다.
+# S3 객체는 세그먼트 로컬이 아니라 위치 무관하게 읽히므로 executor↔세그먼트 co-locate·파일예산
+# 배분이 불필요하다(외부테이블 생성·INSERT 는 local_stage 처럼 coordinator 중앙 수행).
 #
 # 사전 준비(운영):
 #   - executor config 의 s3.* (bucket/prefix/endpoint_url/자격증명) 를 채운다(업로드용).

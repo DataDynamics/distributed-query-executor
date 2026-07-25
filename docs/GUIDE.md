@@ -386,12 +386,14 @@ failover·gp_hostname 수집·cleanup 팬아웃을 얇게 덮는다. 순수 함�
 
 ## 2.1 `s3_stage` 이관 (`POST /jobs`)
 
-`s3_stage` 는 `local_stage` 와 목적이 같지만 스테이징 매체가 세그먼트 로컬 파일이 아니라 **S3
-객체**다. executor 가 소스 SELECT 결과를 로컬 CSV 로 떨어뜨린 뒤 **S3 에 업로드**하고, Greenplum
-이 그 객체를 **PXF 외부테이블**로 read 해 target 에 INSERT 한다. S3 는 세그먼트 로컬이 아니라
-위치 무관하게 읽히므로 `local_stage` 가 요구하는 **executor↔세그먼트 co-locate 가 필요 없고**,
-파일 예산 배분·배리어·중앙 적재도 없다 — task 하나가 처음부터 끝까지 자체 완결한다(`stage_insert`
-와 같은 per-task 모델). `write_mode: overwrite_partitions` 로 재실행 멱등이 성립한다.
+`s3_stage` 는 `local_stage` 와 **같은 2-phase 구조**이고, 스테이징 매체만 세그먼트 로컬 파일이
+아니라 **S3 객체**다. Phase 1 에서 각 executor 가 소스 SELECT 결과를 로컬 CSV 로 떨어뜨린 뒤
+**S3 에 업로드**하고(로컬 삭제), 배리어 후 Phase 2 에서 **coordinator 가** Greenplum master 에
+그 객체들을 **PXF 외부테이블 하나**로 걸어 target 에 INSERT 한다. S3 는 세그먼트 로컬이 아니라
+위치 무관하게 읽히므로 `local_stage` 가 요구하는 **executor↔세그먼트 co-locate·파일 예산 배분이
+필요 없다**. 외부테이블 생성과 INSERT 는 `local_stage` 처럼 **coordinator 가 중앙에서** 하고,
+executor 는 Impala 읽기와 S3 업로드까지만 한다(GP 를 직접 건드리지 않는다).
+`write_mode: overwrite_partitions` 로 재실행 멱등이 성립한다.
 
 ### 언제 쓰나
 
@@ -419,35 +421,41 @@ POST /jobs
 
 - 성공 접수는 `202 { "job_id": "job_ab12cd" }`.
 - `staging_table`·`external_columns`·`insert_sql` 중 하나라도 빠지면 `422 S3_STAGE_REQUIRES_FIELDS`.
-- `local_stage` 와 달리 **`staging_ddl` 은 주지 않는다**(외부테이블이 staging 을 겸하고, 그 DDL 은
-  executor 가 `external_columns` 로 생성한다). `staging_table` 은 그 외부테이블 이름이며,
-  coordinator 가 task 마다 task_id 접미사로 고유화한다.
+- `local_stage` 와 달리 **`staging_ddl` 은 주지 않는다**(heap staging 없이 S3 외부테이블을 최종
+  INSERT 의 소스로 곧장 쓴다). `staging_table` 은 `insert_sql` 의 `FROM` 이 참조하는 이름이고,
+  coordinator 가 Phase 2 에서 이를 **job 고유 외부테이블 이름 `s3ext_<job_id>`** 로 치환한다.
 - `external_columns` 는 CSV 컬럼 순서(=SELECT 출력 순서)와 타입이 일치해야 한다.
 
-### task 하나의 내부 흐름 (executor 완결)
+### 2-phase 내부 흐름
 
+```text
+Phase 1 (executor N개 병렬):
+  각 task: Impala SELECT → 로컬 임시 CSV → S3 업로드 → 로컬 삭제
+           s3://<bucket>/<prefix>/<job_id>/<task_id>.csv   (모든 task 키가 job 폴더에 모임)
+  단계: IMPALA_SUBMIT · EXPORT_WRITE · S3_UPLOAD
+--- 배리어(모든 업로드 완료) ---
+Phase 2 (coordinator, GP master 한 트랜잭션):
+```
 ```sql
--- 1) Impala SELECT → 로컬 임시 CSV (EXPORT_WRITE)
--- 2) 로컬 CSV → S3 업로드 후 로컬 삭제 (S3_UPLOAD): s3://<bucket>/<prefix>/<job_id>/<task_id>.csv
--- 3) GP master 에서 한 트랜잭션:
-CREATE EXTERNAL TABLE stg_sales_s3_<task_id> (user_id bigint, amount numeric, dt date)
-  LOCATION ('pxf://<bucket>/<prefix>/<job_id>/<task_id>.csv?PROFILE=s3:csv&SERVER=<pxf_server>')
+CREATE EXTERNAL TABLE s3ext_<job_id> (user_id bigint, amount numeric, dt date)
+  LOCATION ('pxf://<bucket>/<prefix>/<job_id>/?PROFILE=s3:csv&SERVER=<pxf_server>')  -- job 폴더 전체
   FORMAT 'CSV' ( DELIMITER '`' NULL '' QUOTE '"' );
-DELETE FROM public.sales_mirror WHERE dt IN ('2026-06-01', ...);   -- overwrite_partitions
-INSERT INTO public.sales_mirror (...) SELECT ... FROM stg_sales_s3_<task_id>;  -- insert_sql
-DROP EXTERNAL TABLE IF EXISTS stg_sales_s3_<task_id>;              -- in-tx 정리
+DELETE FROM public.sales_mirror WHERE dt IN ('2026-06-01', ...);            -- overwrite_partitions
+INSERT INTO public.sales_mirror (...) SELECT ... FROM s3ext_<job_id>;       -- insert_sql(치환됨)
 -- COMMIT
--- 4) S3 객체 삭제 (CLEANUP)
+DROP EXTERNAL TABLE IF EXISTS s3ext_<job_id>;                              -- 별도 tx 정리
+-- Phase 3: coordinator 가 executor 하나에 S3 프리픽스 객체 삭제를 지시(CLEANUP)
 ```
 
-단계 이벤트(대시보드/로그)의 스테이지명은 `IMPALA_SUBMIT`·`EXPORT_WRITE`·`S3_UPLOAD`·
-`S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
+단계 이벤트(대시보드/로그) 스테이지명은 Phase 1 이 `IMPALA_SUBMIT`·`EXPORT_WRITE`·`S3_UPLOAD`,
+Phase 2 가 `S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
 
 ### 사전 준비 (인프라·설정·권한)
 
 | 항목 | 준비 내용 |
 |---|---|
-| **executor 설정(업로드)** | `impala.host`(소스), `greenplum.dsn`(GP master — external table/INSERT), `s3.bucket`·`s3.prefix`·`s3.endpoint_url`(온프렘 S3 호환이면)·`s3.access_key`/`s3.secret_key`(또는 boto3 기본 자격증명 체인). 업로드는 `boto3`(requirements-executor.txt). |
+| **executor 설정(Phase 1 업로드)** | `impala.host`(소스), `s3.bucket`·`s3.prefix`·`s3.endpoint_url`(온프렘 S3 호환이면)·`s3.access_key`/`s3.secret_key`(또는 boto3 기본 자격증명 체인). 업로드는 `boto3`(requirements-executor.txt). executor 는 GP 를 직접 쓰지 않지만, 실백엔드 선택을 위해 `greenplum.dsn` 은 있어야 한다(연결은 lazy). |
+| **coordinator 설정(Phase 2 적재)** | `greenplum.dsn`(GP master — 외부테이블 생성·INSERT), 그리고 Phase 2 LOCATION 조립을 위해 **coordinator 도 같은 `s3.*`**(bucket/prefix/pxf_server/pxf_profile)를 읽는다(설정은 coordinator·executor 공유). |
 | **GP 읽기(PXF)** | GP 세그먼트에 **PXF 를 설치·기동**하고 **S3 SERVER 프로파일**을 구성한다: `$PXF_BASE/servers/<server>/s3-site.xml` 에 S3 자격증명·엔드포인트. 그 서버 이름을 `s3.pxf_server` 로 지정(프로파일 기본 `s3:csv`). 업로드 자격증명과 **경로가 분리**된다. |
 | **GP 스키마** | target 테이블 존재/생성 가능, 외부테이블 생성 권한. |
 | **CSV 방언** | executor write 와 외부테이블 `FORMAT 'CSV'` 는 같은 설정(`stage.csv_delimiter` 기본 backtick `` ` ``)을 쓰므로 자동 일치. |
@@ -462,13 +470,15 @@ DROP EXTERNAL TABLE IF EXISTS stg_sales_s3_<task_id>;              -- in-tx 정�
 |---|---|---|
 | staging_table/external_columns/insert_sql 누락 | 422 | `S3_STAGE_REQUIRES_FIELDS` |
 | `s3.bucket` 미설정인데 s3_stage 요청 | task `FAILED` | 업로드 시 `s3.bucket 설정이 필요` 예외 |
-| S3 업로드/PXF read 실패 | task `FAILED` | executor 로그(자격증명·PXF SERVER·엔드포인트 확인) |
+| S3 업로드 실패(Phase 1) | task `FAILED` | executor 로그(자격증명·엔드포인트 확인). `s3.bucket` 미설정이면 `s3.bucket 설정이 필요` 예외 |
+| PXF read/외부테이블 실패(Phase 2) | job `FAILED`(Phase 2) | coordinator 로그(PXF SERVER·프로파일·GP 권한 확인). S3 객체는 남아 재실행 가능 |
 
 ### 예제 템플릿: `sales_migration_s3`
 
 `templates/sales_migration_s3/` 는 `sales_migration` 의 s3_stage 판이다(`select`+`insert`+
 `external_columns` 조각, `exec_mode: s3_stage`). 날짜 fan-out(§1 의 fan-out 참고)도 `s3_stage` 를
-지원하므로, 하루=1 task 로 펼쳐 각 task 가 자체 S3 왕복을 하게 할 수 있다(append 적재).
+지원하므로, 하루=1 task 로 업로드를 펼치고 coordinator 가 job 프리픽스로 한 번에 적재하게 할 수
+있다(append).
 
 ---
 

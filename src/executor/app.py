@@ -304,23 +304,17 @@ def create_app(
                     ),
                 )
             elif task.exec_mode == "s3_stage":
-                # s3_stage: Impala 결과를 로컬 CSV → S3 업로드 → PXF 외부테이블 → target INSERT
-                # → S3 정리까지 이 task 하나가 자체 완결(per-task, 배리어 없음).
+                # s3_stage Phase 1: Impala 결과를 로컬 CSV 로 export → S3 업로드(로컬 삭제).
+                # 외부테이블 생성/target INSERT(Phase 2)는 coordinator 가 배리어 후 수행한다.
                 rows = await loop.run_in_executor(
                     None,
                     lambda: ctx.run(
-                        app.state.backend.stage_via_s3,
+                        app.state.backend.export_to_s3,
                         task.sub_query,
-                        task.staging_table,
-                        task.insert_sql,
-                        task.external_columns,
-                        task.csv_options,
-                        task.target_table,
-                        task.partition_column,
-                        task.partition_values,
-                        task.write_mode,
+                        task.out_path,   # coordinator 가 확정한 S3 객체 키
                         task.job_id,
                         task.task_id,
+                        task.csv_options,
                         progress,
                         query_options=task.impala_query_options,
                         on_stage=task.on_stage,
@@ -404,7 +398,6 @@ def create_app(
             impala_query_options=req.impala_query_options,
             out_path=req.out_path,
             csv_options=req.csv_options,
-            external_columns=req.external_columns,
         )
         # 접수 시각부터 슬롯 확보까지의 대기(QUEUE_WAIT) 단계를 연다. _run 진입 시 닫힌다.
         task.on_stage("QUEUE_WAIT", "start")
@@ -538,6 +531,33 @@ def create_app(
                 # coordinator 가 이미 정리했거나 이 호스트엔 파일이 없던 경우(멱등).
                 logger.debug("local_stage 로컬 CSV 정리: 대상 없음(%s)", target)
         return {"job_id": job_id, "removed": removed}
+
+    @app.post(
+        "/s3/{job_id}/cleanup",
+        tags=["Tasks"],
+        summary="s3_stage S3 스테이징 객체 정리",
+    )
+    def cleanup_s3(job_id: str):
+        """s3_stage 의 S3 스테이징 프리픽스(``{s3.prefix}/{job_id}/``) 아래 객체를 삭제한다.
+
+        Phase 2(GP PXF 적재)가 끝난 뒤 coordinator 가 executor 하나에 호출한다(S3 는 세그먼트
+        로컬이 아니라 executor 아무나 삭제 가능). job_id 의 basename 으로 프리픽스를 만들어
+        해당 job 하위 객체만 지운다(멱등). 반환: 삭제한 객체 수."""
+        import os
+
+        from core import s3_stage as s3sql
+
+        safe = os.path.basename(job_id)  # 경로 조작 방지: job 하위 프리픽스만
+        prefix = s3sql.s3_job_prefix(settings.s3_prefix, safe)
+        deleted = 0
+        with job_log_context(job_id):
+            try:
+                deleted = app.state.backend.cleanup_s3_prefix(prefix)
+                logger.info("s3_stage S3 정리: %s (%d개 삭제)", prefix, deleted)
+            except Exception:
+                # 정리는 best-effort — 실패해도 적재는 이미 커밋됨.
+                logger.warning("s3_stage S3 정리 실패 — 무시: %s", prefix, exc_info=True)
+        return {"job_id": job_id, "deleted": deleted}
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():

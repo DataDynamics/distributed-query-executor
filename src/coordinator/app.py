@@ -40,6 +40,7 @@ from core.dbprobe import clamp_limit, run_postgres_select
 from core.http_logging import install_http_logging
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
+from core import s3_stage
 from core.timeutil import format_at_fields, now_dt
 from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
@@ -888,24 +889,34 @@ def create_app(
                 idempotency_key=idempotency_key,
                 request_fingerprint=fingerprint,
             )
-            # local_stage: 각 task 가 쓸 로컬 CSV 경로를 확정한다({local_dir}/{job_id}/f{idx}.csv).
-            # 이 경로가 executor 의 write 대상이자 coordinator 의 file:// URI 조립 근거가 된다.
+            # task 별 out_path 확정(모드에 따라 의미가 다르다):
+            #  - local_stage: 로컬 CSV 경로({local_dir}/{job_id}/f{idx}.csv) — executor write 대상
+            #    이자 coordinator 의 file:// URI 조립 근거.
+            #  - s3_stage: S3 객체 키({prefix}/{job_id}/{task_id}.csv) — executor 업로드 대상.
+            #    모든 키가 {prefix}/{job_id}/ 아래 모여, Phase 2 가 그 디렉터리 하나를 외부테이블로 읽는다.
             _local_dir = (
                 (req.export_local_dir or settings.stage_local_dir)
                 if req.exec_mode == "local_stage" else None
             )
-            job.tasks = [
-                Task(
+
+            def _out_path(idx: int, task: Task) -> Optional[str]:
+                if _local_dir:
+                    return f"{_local_dir}/{job.job_id}/f{idx}.csv"
+                if req.exec_mode == "s3_stage":
+                    return s3_stage.s3_object_key(settings.s3_prefix, job.job_id, task.task_id)
+                return None
+
+            tasks = []
+            for idx, (sq, url) in enumerate(zip(sub_queries, executor_urls)):
+                t = Task(
                     job_id=job.job_id,
                     executor_url=url,
                     sub_query=sq.sql,
                     partition_values=sq.partition_values,
-                    out_path=(
-                        f"{_local_dir}/{job.job_id}/f{idx}.csv" if _local_dir else None
-                    ),
                 )
-                for idx, (sq, url) in enumerate(zip(sub_queries, executor_urls))
-            ]
+                t.out_path = _out_path(idx, t)  # task_id 발급 후(s3 키가 task_id 를 씀) 채운다
+                tasks.append(t)
+            job.tasks = tasks
             # 분할 결과를 Task 목록으로 펼쳐 Job 에 담고 저장소에 등록한다.
             # 멱등 키가 있으면 원자적 선점(claim_and_add): 사전확인을 통과한 동시 요청 둘이
             # 여기서 만나도 job 은 하나만 생성되고, 진 쪽은 기존 job 을 돌려받는다.

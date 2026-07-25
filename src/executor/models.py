@@ -95,8 +95,6 @@ class Task:
     # coordinator 가 파일 경로/인덱스를 확정해 넘긴다(file:// URI 와 짝을 이룬다).
     out_path: Optional[str] = None
     csv_options: Optional[dict] = None  # {"delimiter","null","quote"} — 외부테이블 FORMAT 과 일치
-    # s3_stage 모드: PXF 외부테이블 컬럼 정의(executor 가 이 컬럼으로 CREATE EXTERNAL TABLE).
-    external_columns: Optional[str] = None
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
     rows_read: int = 0
@@ -196,11 +194,9 @@ class CreateTaskRequest(BaseModel):
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
     impala_query_options: Optional[dict] = None
-    # local_stage 전용: 로컬 CSV 출력 경로 + CSV 방언(coordinator 가 확정해 전달).
+    # local_stage 는 로컬 CSV 경로, s3_stage 는 S3 객체 키를 out_path 로 받는다(coordinator 확정).
     out_path: Optional[str] = None
     csv_options: Optional[dict] = None
-    # s3_stage 전용: PXF 외부테이블 컬럼 정의(coordinator 가 job 값에서 전달).
-    external_columns: Optional[str] = None
 
 
 class DatasourceQueryRequest(BaseModel):
