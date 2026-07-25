@@ -480,6 +480,18 @@ Phase 2 가 `S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
 지원하므로, 하루=1 task 로 업로드를 펼치고 coordinator 가 job 프리픽스로 한 번에 적재하게 할 수
 있다(append).
 
+### GP·S3 없이 통합 테스트
+
+실제 GP/S3 없이도 `POST /jobs`→`DONE` 전 과정(검증·분할·S3 키 확정·Phase 1 업로드·배리어·
+Phase 2 외부테이블/INSERT 조립·Phase 3 정리·finalize)을 닫힌 루프로 검증할 수 있다. 핵심은
+`tests/helpers.py` 의 **`MockS3StageBackend`** 로, `MockBackend` 를 상속해 Phase 1(`export_to_s3`)이
+**인메모리 S3**(dict)에 CSV 를 올리고, Phase 2(`load_external_s3`)가 coordinator 가 조립한 PXF
+`external_ddl` 의 프리픽스를 파싱해 그 객체들을 읽어 인메모리 `target` 에 넣으며, Phase 3
+(`cleanup_s3_prefix`)이 그 프리픽스를 지운다(운영 코드 변경 없이 백엔드 주입만으로 구성).
+`local_stage` 의 `MockLocalStageBackend` 에 대응하며, 결정적인 in-process 하니스
+(`tests/test_s3_stage_integration.py`)가 루프 닫힘·overwrite 선삭제·업로드 실패 시 Phase 2 skip·
+cleanup 비활성을 덮는다. 순수 함수·라우팅·2-phase e2e 는 `tests/test_s3_stage.py` 가 담당한다.
+
 ---
 
 ## 3. 결과 반환 실행 (`POST /query-execute`)
