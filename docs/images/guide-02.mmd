@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant CO as Coordinator
+    participant EX as Executor
+    participant S3 as S3 (오브젝트 스토어)
+    participant GP as Greenplum master
+
+    C->>CO: POST /jobs (exec_mode=s3_stage)
+    CO->>CO: 검증(staging_table/external_columns/insert_sql 필수) + IN N분할
+    CO->>CO: 각 task out_path = S3 키 확정 (prefix/{job_id}/{task_id}.csv)
+    CO-->>C: 202 {job_id}
+    Note over CO: run(): PENDING→RUNNING
+    par Phase 1 (executor 병렬, GP 미접속)
+        CO->>EX: POST /tasks (out_path=S3 키, csv_options)
+        EX->>EX: Impala SELECT(자기 슬라이스) → 로컬 임시 CSV write
+        EX->>S3: 로컬 CSV 업로드 (boto3) → prefix/{job_id}/{task_id}.csv
+        EX->>EX: 로컬 임시 CSV 삭제
+        EX-->>CO: 상태 폴링(READING→WRITING→DONE, rows_written)
+    end
+    Note over CO: 배리어(모든 업로드 DONE)
+    Note over CO,GP: Phase 2 — coordinator 중앙 적재
+    CO->>GP: CREATE EXTERNAL TABLE s3ext_{job_id} LOCATION('pxf://bucket/prefix/{job_id}/') FORMAT 'CSV'
+    Note over GP,S3: PXF 가 job 프리픽스 아래 모든 CSV 를 세그먼트 병렬 read
+    GP->>S3: 세그먼트별 S3 객체 read
+    CO->>GP: DELETE FROM target WHERE part IN(...)  (pre_delete/overwrite 시)
+    CO->>GP: INSERT INTO target SELECT ... FROM s3ext_{job_id} + COMMIT
+    CO->>GP: DROP EXTERNAL TABLE s3ext_{job_id}
+    Note over CO: Phase 3 — S3 정리
+    CO->>EX: POST /s3/{job_id}/cleanup
+    EX->>S3: prefix/{job_id}/ 객체 삭제 (delete_on_cleanup)
+    CO->>CO: finalize → DONE
+    C->>CO: GET /jobs/{job_id}/status → DONE
