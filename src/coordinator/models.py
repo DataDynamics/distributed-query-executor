@@ -257,6 +257,8 @@ class Job:
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
+    # 적재 전 파티션 선삭제(DELETE) 명시 제어. None=write_mode 를 따름, True/False=강제(s3_stage).
+    pre_delete: Optional[bool] = None
     # 요청별 Impala 쿼리 옵션(SET). executor 에서 전역 기본값 위에 병합되어 적용된다.
     impala_query_options: Optional[dict] = None
     # 템플릿 모드로 생성된 job 이면 사용한 template_id 와 렌더 파라미터를 보관(감사·재현용).
@@ -362,6 +364,7 @@ class Job:
             "partition_column": self.partition_column,
             "target_table": self.target_table,
             "write_mode": self.write_mode,
+            "pre_delete": self.pre_delete,
             "parallelism": self.parallelism,
             "split_strategy": self.split_strategy,
             "failure_policy": self.failure_policy,
@@ -403,6 +406,7 @@ class Job:
             partition_column=d["partition_column"],
             target_table=d["target_table"],
             write_mode=d["write_mode"],
+            pre_delete=d.get("pre_delete"),
             parallelism=d["parallelism"],
             split_strategy=d["split_strategy"],
             failure_policy=d["failure_policy"],
@@ -544,6 +548,15 @@ class CreateJobRequest(BaseModel):
     )
     username: Optional[str] = Field(default=None, description="작업을 실행한 사용자")
     write_mode: Literal["append", "overwrite_partitions"] = "append"
+    # 적재 전 파티션 선삭제(DELETE) 여부를 요청 단위로 명시 제어(현재 s3_stage Phase 2 에 적용).
+    # null(기본)이면 write_mode 를 따른다(overwrite_partitions→DELETE, append→미삭제). true 면
+    # write_mode 와 무관하게 강제로 선삭제, false 면 강제로 건너뛴다(append 인데도 멱등이 필요
+    # 없거나, overwrite_partitions 지만 대상이 이미 비어 있어 DELETE 를 생략하고 싶을 때).
+    pre_delete: Optional[bool] = Field(
+        default=None,
+        description="s3_stage 적재 전 파티션 DELETE 처리 여부. null=write_mode 를 따름, "
+        "true=강제 선삭제, false=선삭제 생략. overwrite_partitions 의 멱등 선삭제를 요청 단위로 덮어쓴다.",
+    )
     parallelism: int = Field(default=4, ge=1, le=128)
     split_strategy: Literal["contiguous", "round_robin"] = "contiguous"
     failure_policy: Literal["fail_fast", "best_effort"] = "fail_fast"

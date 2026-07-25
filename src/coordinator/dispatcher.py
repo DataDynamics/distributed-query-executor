@@ -521,13 +521,19 @@ class _DispatcherBase:
         insert_sql = stage_sql.rewrite_staging_name(
             job.insert_sql, job.staging_table, ext, (job.target_table,)
         )
-        # overwrite_partitions 멱등: job 전체 파티션 값을 모아 최종 INSERT 전에 선삭제.
+        # 적재 전 파티션 선삭제(DELETE) 여부: 요청의 pre_delete 가 명시되면 그것을, 아니면
+        # write_mode 를 따른다(overwrite_partitions→삭제, append→미삭제). 켜져 있으면 job 전체
+        # 파티션 값을 모아 최종 INSERT 전에 선삭제한다(재실행 멱등).
+        do_delete = (
+            job.pre_delete if job.pre_delete is not None
+            else (job.write_mode == "overwrite_partitions")
+        )
         pre_delete = (
             s3_sql.build_pre_delete(
                 job.target_table, job.partition_column,
                 [v for t in job.tasks for v in t.partition_values],
             )
-            if job.write_mode == "overwrite_partitions" else None
+            if do_delete else None
         )
         cleanup = [s3_sql.build_cleanup_ddl(ext)]
 

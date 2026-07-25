@@ -425,6 +425,10 @@ POST /jobs
   INSERT 의 소스로 곧장 쓴다). `staging_table` 은 `insert_sql` 의 `FROM` 이 참조하는 이름이고,
   coordinator 가 Phase 2 에서 이를 **job 고유 외부테이블 이름 `s3ext_<job_id>`** 로 치환한다.
 - `external_columns` 는 CSV 컬럼 순서(=SELECT 출력 순서)와 타입이 일치해야 한다.
+- **적재 전 파티션 DELETE 제어(`pre_delete`)**: Phase 2 의 선삭제 여부를 요청 단위로 명시한다.
+  `null`(기본)이면 `write_mode` 를 따르고(`overwrite_partitions`→DELETE, `append`→미삭제),
+  `true` 면 `write_mode` 와 무관하게 강제 선삭제, `false` 면 강제로 건너뛴다(예: `overwrite_partitions`
+  지만 대상이 이미 비어 있어 DELETE 를 생략하고 싶을 때, 또는 `append` 인데도 멱등이 필요할 때).
 
 ### 2-phase 내부 흐름
 

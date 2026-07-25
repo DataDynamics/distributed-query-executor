@@ -870,6 +870,7 @@ def create_app(
                 failure_policy=req.failure_policy,
                 username=req.username,
                 exec_mode=req.exec_mode,
+                pre_delete=req.pre_delete,
                 staging_table=req.staging_table,
                 staging_ddl=req.staging_ddl,
                 insert_sql=(

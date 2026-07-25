@@ -104,6 +104,30 @@ def test_s3_stage_mock_integration_overwrite_pre_deletes(monkeypatch):
         assert v in pre_delete
 
 
+def test_s3_stage_pre_delete_true_forces_delete_on_append(monkeypatch):
+    # write_mode=append 여도 pre_delete=true 면 선삭제(DELETE)를 강제한다.
+    backend = MockS3StageBackend()
+    client = _client(backend, monkeypatch)
+    job_id = client.post(
+        "/jobs", json=_job_json(write_mode="append", pre_delete=True)
+    ).json()["job_id"]
+    assert client.get(f"/jobs/{job_id}").json()["status"] == "DONE"
+    _ext, pre_delete, _ins = backend.loads[0]
+    assert pre_delete and pre_delete.startswith("DELETE FROM public.sales_mirror")
+
+
+def test_s3_stage_pre_delete_false_skips_delete_on_overwrite(monkeypatch):
+    # write_mode=overwrite_partitions 여도 pre_delete=false 면 선삭제를 건너뛴다.
+    backend = MockS3StageBackend()
+    client = _client(backend, monkeypatch)
+    job_id = client.post(
+        "/jobs", json=_job_json(write_mode="overwrite_partitions", pre_delete=False)
+    ).json()["job_id"]
+    assert client.get(f"/jobs/{job_id}").json()["status"] == "DONE"
+    _ext, pre_delete, _ins = backend.loads[0]
+    assert pre_delete is None  # 선삭제 생략
+
+
 def test_s3_stage_mock_integration_upload_failure_skips_phase2(monkeypatch):
     # Phase 1(업로드) 실패 → 배리어 후 Phase 2(적재) 건너뜀 → target 비고 job FAILED.
     backend = MockS3StageBackend(fail_export=True)
