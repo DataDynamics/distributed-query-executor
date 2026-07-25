@@ -484,6 +484,57 @@ Phase 2 가 `S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
 지원하므로, 하루=1 task 로 업로드를 펼치고 coordinator 가 job 프리픽스로 한 번에 적재하게 할 수
 있다(append).
 
+### 같은 Request JSON, `exec_mode` 로 모드 구분
+
+`/jobs` 의 요청 스키마는 **모든 적재 모드가 공유하는 하나**다(`copy`·`statement`·`stage_insert`·
+`local_stage`·`s3_stage`). 어떤 파이프라인으로 실행할지는 **`exec_mode` 필드 하나**가 정한다
+(유일한 discriminator). 같은 SELECT·파티션·target 을 두고 `exec_mode` 값만 바꾸면 COPY 로 넣을지,
+staging 경유로 넣을지, S3 외부테이블로 넣을지가 갈린다.
+
+```
+exec_mode: "copy"          → Impala read → GP COPY (executor)
+exec_mode: "statement"     → GP 에서 SQL 직접 실행
+exec_mode: "stage_insert"  → Impala → GP staging(TEMP) COPY → INSERT (executor per-task)
+exec_mode: "local_stage"   → executor 로컬 CSV → file:// 외부테이블 (coordinator 중앙, co-locate 필요)
+exec_mode: "s3_stage"      → executor S3 업로드 → PXF 외부테이블 (coordinator 중앙)
+```
+
+- **명시 지정**: 요청 본문의 `"exec_mode": "s3_stage"`.
+- **템플릿 기본값**: `template_id` 를 쓰면 manifest 의 `exec_mode: s3_stage` 가 값을 정한다(요청이
+  명시하면 요청이 이김 — 요청 > manifest > `copy` 순).
+- **모드별 필수 필드 검증**으로 잘못된 조합을 접수 시점에 차단한다: `s3_stage`/`local_stage` 는
+  `staging_table`·`external_columns`·`insert_sql`(없으면 `422 S3_STAGE_REQUIRES_FIELDS` /
+  `LOCAL_STAGE_REQUIRES_FIELDS`), `stage_insert` 는 `staging_table`·`wrapper_query`.
+
+**모드 무관 공용 옵션(= s3_stage 도 그대로 지원)**:
+
+| 옵션 | 의미 |
+|---|---|
+| `template_id` + `params` | 서버 템플릿을 파라미터로 렌더해 SQL 생성(raw `sql` 대신). s3_stage 는 `select`+`insert`+`external_columns` 조각을 렌더 |
+| `task_params` (+ `task_bound`) | 날짜 fan-out(하루=1 task). `exec_mode` 가 `stage_insert` 또는 `s3_stage` 일 때 지원 |
+| `write_mode` | `append` / `overwrite_partitions`(후자는 적재 전 파티션 DELETE) |
+| `pre_delete` | 적재 전 DELETE 를 `write_mode` 와 독립적으로 강제/생략(위 요청 절 참고) |
+| `parallelism` · `split_strategy` | 파티션 IN 값 N분할 방식 |
+| `failure_policy` | `fail_fast` / `best_effort` |
+| `Idempotency-Key`(헤더) · `dry_run` | 중복 제출 흡수 · 실행 없이 계획만 반환 |
+
+즉 raw SQL·템플릿·날짜 fan-out **세 입력 방식 모두** `exec_mode: s3_stage` 로 S3 외부테이블 적재에
+쓸 수 있고, s3_stage 를 고를 때 추가로 필요한 건 `external_columns`(PXF 외부테이블 컬럼 정의) 하나뿐이다.
+
+**같은 SELECT 를 s3_stage 로 돌리는 최소 요청 예**:
+
+```jsonc
+{
+  "template_id": "sales_migration_s3",     // 또는 raw "sql"
+  "params": [ {"name":"start_dt","value":"2026-07-01"},
+              {"name":"end_dt","value":"2026-07-03"} ],
+  "exec_mode": "s3_stage",                 // ← 이 한 줄이 모드 구분자
+  "external_columns": "user_id bigint, amount numeric, dt date",  // s3_stage 추가 필수
+  "write_mode": "overwrite_partitions",
+  "pre_delete": false                      // ← DELETE 명시 제어(선택)
+}
+```
+
 ### GP·S3 없이 통합 테스트
 
 실제 GP/S3 없이도 `POST /jobs`→`DONE` 전 과정(검증·분할·S3 키 확정·Phase 1 업로드·배리어·
