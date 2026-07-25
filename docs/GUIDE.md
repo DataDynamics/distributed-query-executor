@@ -432,6 +432,8 @@ POST /jobs
 
 ### 2-phase 내부 흐름
 
+![s3_stage 2-phase 내부 흐름](images/guide-02.svg)
+
 ```text
 Phase 1 (executor N개 병렬):
   각 task: Impala SELECT → 로컬 임시 CSV → S3 업로드 → 로컬 삭제
