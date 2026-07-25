@@ -247,7 +247,7 @@ def test_stage_insert_drops_leftover_temp_before_create():
 
 
 def test_stage_insert_create_succeeds_on_fresh_connection():
-    # 남은 TEMP 가 없는 새 연결에서도 정상 동작(DROP 은 무해한 no-op).
+    # 남은 TEMP 가 없는 새 연결에서도 정상 동작(선삭제 DROP 은 무해한 no-op).
     conn = _FakeGpConn()
     be = _make_backend(conn)
     n = be.stage_and_insert(
@@ -257,7 +257,12 @@ def test_stage_insert_create_succeeds_on_fresh_connection():
         "INSERT INTO public.t SELECT * FROM stg_t",
     )
     assert n == 5
-    assert "stg_t" in conn.tables  # 최종적으로 생성돼 있음
+    # CREATE TEMP TABLE 이 실제로 실행됐다(값 반환 자체가 already exists 예외 미발생을 뜻함).
+    assert any(s.strip().lower().startswith("create temp table stg_t")
+               for s in conn.executed)
+    # 최종적으로는 같은 트랜잭션의 종료 DROP 으로 정리되어 남지 않는다 — 커넥션 풀이 세션을
+    # 재사용해도 다음 task 의 CREATE 가 "already exists" 로 깨지지 않게 하는 설계다.
+    assert "stg_t" not in conn.tables
 
 
 def test_stage_insert_no_drop_when_ddl_absent():
