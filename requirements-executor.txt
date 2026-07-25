@@ -11,3 +11,6 @@ psycopg[binary]>=3.2
 # Impala SASL(LDAP/PLAIN) 인증
 thrift-sasl>=0.4.3
 pure-sasl>=0.6
+# S3 업로드 — s3_stage exec_mode 에서만 사용(로컬 CSV → S3 업로드). 지연 임포트라
+# s3_stage 를 안 쓰면 미설치여도 다른 모드는 동작하지만, 에어갭 wheel 번들엔 기본 포함한다.
+boto3>=1.34

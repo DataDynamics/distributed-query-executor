@@ -86,7 +86,7 @@ class Task:
     partition_column: str
     partition_values: list[str]
     username: Optional[str] = None
-    exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert" | "local_stage"
+    exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert" | "local_stage" | "s3_stage"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
@@ -189,12 +189,12 @@ class CreateTaskRequest(BaseModel):
     partition_column: str
     partition_values: list[str] = []
     username: Optional[str] = None
-    exec_mode: Literal["copy", "statement", "stage_insert", "local_stage"] = "copy"
+    exec_mode: Literal["copy", "statement", "stage_insert", "local_stage", "s3_stage"] = "copy"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
     impala_query_options: Optional[dict] = None
-    # local_stage 전용: 로컬 CSV 출력 경로 + CSV 방언(coordinator 가 확정해 전달).
+    # local_stage 는 로컬 CSV 경로, s3_stage 는 S3 객체 키를 out_path 로 받는다(coordinator 확정).
     out_path: Optional[str] = None
     csv_options: Optional[dict] = None
 

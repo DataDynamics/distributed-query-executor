@@ -1,0 +1,7 @@
+{# 외부테이블(=staging) → target 적재 INSERT. s3_stage 에서 coordinator 가 Phase 2 에 job
+   프리픽스로 PXF 외부테이블 하나를 만든 뒤 이 INSERT 를 실행한다(외부테이블이 staging 을 겸함).
+   여기서 참조한 staging_table 이름은 coordinator 가 job 고유 외부테이블 이름(s3ext_<job_id>)으로
+   치환한다. 테이블명은 따옴표 없이 bare 로 렌더한다. #}
+INSERT INTO {{ target_table }} (user_id, amount, region, dt)
+SELECT user_id, amount, region, dt
+FROM {{ staging_table }}

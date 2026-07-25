@@ -50,6 +50,9 @@ _ROLES_BY_MODE: dict[str, dict[str, tuple[str, ...]]] = {
     "statement":    {"required": ("select",),                          "optional": ("wrapper",)},
     "stage_insert": {"required": ("select", "insert"),                 "optional": ("staging_ddl",)},
     "local_stage":  {"required": ("select", "insert", "external_columns"), "optional": ("staging_ddl",)},
+    # s3_stage: 외부테이블(=staging)은 executor 가 external_columns 로 생성하므로 staging_ddl 은
+    # 렌더하지 않는다(local_stage 와 달리 optional 에도 없다). select+insert+external_columns 만.
+    "s3_stage":     {"required": ("select", "insert", "external_columns"), "optional": ()},
 }
 
 # manifest 가 기본값을 줄 수 있는 스칼라 필드(요청이 명시하면 요청이 이긴다). app.py 병합 대상.

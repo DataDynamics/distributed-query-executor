@@ -1,0 +1,41 @@
+# 쿼리 템플릿 예제 — 일별 매출 Impala→Greenplum 이관(s3_stage, S3 경유 스테이징).
+#
+# sales_migration 의 s3_stage 판이다. local_stage 와 같은 2-phase: Phase 1 에서 각 executor 가
+# Impala 결과를 로컬 CSV 로 떨어뜨린 뒤 S3 버킷에 올리고(로컬 삭제), 배리어 후 Phase 2 에서
+# coordinator 가 GP master 에 job 프리픽스로 PXF 외부테이블 하나를 만들어 target 에 INSERT 한다.
+# S3 객체는 세그먼트 로컬이 아니라 위치 무관하게 읽히므로 executor↔세그먼트 co-locate·파일예산
+# 배분이 불필요하다(외부테이블 생성·INSERT 는 local_stage 처럼 coordinator 중앙 수행).
+#
+# 사전 준비(운영):
+#   - executor config 의 s3.* (bucket/prefix/endpoint_url/자격증명) 를 채운다(업로드용).
+#   - GP 세그먼트에 PXF SERVER(s3.pxf_server)를 구성한다($PXF_BASE/servers/<server>/s3-site.xml
+#     에 S3 자격증명) — GP 읽기용 자격증명은 업로드용과 경로가 분리된다.
+#
+# 요청 예:
+#   {"template_id": "sales_migration_s3",
+#    "params": [{"name":"start_dt","value":"2026-07-01"},
+#               {"name":"end_dt","value":"2026-07-03"}]}
+
+id: sales_migration_s3
+description: 일별 매출 Impala→Greenplum 이관(s3_stage — S3 경유 PXF 외부테이블 적재)
+
+# 기본 실행 방식과 분할/적재 스칼라(요청에서 재정의 가능).
+exec_mode: s3_stage                # Impala SELECT → 로컬 CSV → S3 → PXF 외부테이블 → target INSERT
+partition_column: dt               # 이 컬럼의 IN 목록을 splitter 가 분할
+target_table: public.sales         # 최종 적재 대상(요청 target_table 로 재정의 가능)
+staging_table: stg_sales_s3        # 외부테이블(=staging) 이름. task 마다 task_id 로 고유화된다
+write_mode: overwrite_partitions   # 담당 파티션 선삭제 후 적재(재실행 멱등)
+strict_validation: false           # 렌더 SELECT 가 복합 쿼리일 수 있어 lenient 로 둔다
+
+# 파라미터 스키마 — 필수/타입/기본값을 선언한다. 렌더 전 검증에 쓰인다.
+params:
+  - {name: start_dt, type: date, required: true}    # 시작일(YYYY-MM-DD)
+  - {name: end_dt,   type: date, required: true}    # 종료일(YYYY-MM-DD)
+  - {name: regions,  type: list, required: false, default: []}   # 지역 필터(비면 전체)
+
+# role → 조각 파일 매핑. s3_stage 는 select(필수) + insert(필수) + external_columns(필수).
+#   staging_ddl 은 쓰지 않는다(외부테이블 DDL 은 executor 가 external_columns 로 생성한다).
+files:
+  select:           select.sql.j2
+  insert:           insert.sql.j2
+  external_columns: external_columns.sql.j2

@@ -112,9 +112,18 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   세션을 초기화해 stage_insert 의 TEMP 테이블이 다음 task 와 충돌하지 않게 한다.
   `exec_mode`: `copy`(COPY) / `statement`(INSERT 그대로 실행) / `stage_insert`(TEMP 경유) /
   `local_stage`(executor 가 로컬 CSV export → coordinator 가 `file://` 외부테이블로 세그먼트
-  로컬 병렬 read → target INSERT, 2-phase). local_stage 는 executor 를 GP 세그먼트 호스트에
-  co-locate 해야 한다(DESIGN). export fetch 는 형변환을 꺼 timestamp/date 를 wire 문자열
-  그대로 받아 CSV 로 쓴다(재파싱 비용 제거 — impyla `convert_types=False`).
+  로컬 병렬 read → target INSERT, 2-phase) / `s3_stage`(**local_stage 와 같은 2-phase**: Phase 1
+  executor `export_to_s3`(Impala→로컬 CSV→S3 업로드, GP 미접속) → 배리어 → Phase 2 coordinator
+  `load_external_s3`(GP master 에 **job 프리픽스 `<prefix>/<job_id>/` 로 PXF 외부테이블 하나**
+  생성 → target INSERT) → Phase 3 S3 정리). 외부테이블·INSERT 는 local_stage 처럼 coordinator
+  중앙 수행이고 heap staging 없이 external→target 직접. insert_sql 의 staging 참조를 job 고유
+  외부테이블 `s3ext_<job_id>` 로 치환(`s3_stage.external_table_name`). local_stage 는 co-locate 필요,
+  s3_stage 는 S3 가 위치 무관이라 **co-locate 불필요**(DESIGN §17.1). export fetch 는 형변환을 꺼
+  timestamp/date 를 wire 문자열 그대로 받아 CSV 로 쓴다(재파싱 비용 제거 — impyla
+  `convert_types=False`). s3_stage 업로드/삭제는 `src/executor/s3_client.py`(boto3 지연 임포트),
+  SQL 조립은 `src/core/s3_stage.py`(순수 함수 — 객체키·job 프리픽스·외부테이블명·PXF LOCATION·
+  외부테이블 DDL). `s3.*` 설정(coordinator·executor 공유). Phase 3 정리는 executor
+  `POST /s3/{job_id}/cleanup`(HttpDispatcher 위임) 또는 LocalDispatcher in-process.
 - `src/executor/app.py` — task 상태머신(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED),
   `executor.max_concurrent_tasks` 세마포어.
 - `src/core/logging.py` — 일 단위 롤링 + `[job_id][task_id]` 컨텍스트 주입 + **WARNING 전용
