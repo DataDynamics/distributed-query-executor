@@ -487,26 +487,6 @@ Phase 2 가 `S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
 지원하므로, 하루=1 task 로 업로드를 펼치고 coordinator 가 job 프리픽스로 한 번에 적재하게 할 수
 있다(append).
 
-`templates/sales_migration_s3_trino/` 는 **같은 이관을 소스만 Trino 로** 바꾼 판이다. 두 템플릿의
-차이는 딱 두 곳이다:
-
-| | `sales_migration_s3` | `sales_migration_s3_trino` |
-|---|---|---|
-| manifest | (없음 → `source.type`) | `datasource: trino` |
-| select 방언 | `FROM sales` / `dt IN ('2026-07-01')` | `FROM hive.default.sales` / `dt IN (DATE '2026-07-01')` |
-| insert · external_columns · Phase 2·3 | \<— 동일 —\> | \<— 동일 —\> |
-
-Trino 는 varchar→date **암묵 변환을 하지 않으므로** 날짜를 `DATE '...'` 로 명시해야 한다
-(`dt IN ('2026-07-01')` 은 타입 오류). `sql_in` 은 따옴표 리터럴 목록만 만들므로 템플릿에서
-직접 루프를 돌며 `DATE` 접두어를 붙이되 값은 `sql_str` 로 이스케이프한다. 렌더된 리터럴은
-splitter 를 거치며 `CAST('2026-07-01' AS DATE)` 로 재직렬화되는데, 이 표기는 Trino 와
-Greenplum 양쪽에서 유효하므로 `overwrite_partitions` 의 선삭제 DELETE 에도 그대로 쓰인다.
-
-`sql_dialect` 는 적지 않는다 — `datasource: trino` 에서 자동 유도된다.
-
-제출 전에 `dry_run: true` 로 계획을 받아 응답의 `datasource` 로 어느 엔진이 SELECT 를 읽을지
-확인할 수 있다.
-
 ### 같은 Request JSON, `exec_mode` 로 모드 구분
 
 `/jobs` 의 요청 스키마는 **모든 적재 모드가 공유하는 하나**다(`copy`·`statement`·`stage_insert`·
