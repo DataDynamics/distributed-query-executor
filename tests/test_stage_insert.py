@@ -223,8 +223,7 @@ class _FakePool:
 def _make_backend(gp_conn):
     be = ImpalaToGreenplumBackend(impala_dsn={}, greenplum_dsn="x")  # 연결 없음(pool lazy)
     be._gp_pool = _FakePool(gp_conn)
-    # _source_connect 는 datasource 인자를 받는다(기본 None=Impala). 더블도 같은 시그니처.
-    be._source_connect = lambda datasource=None: _FakeImpalaConn()
+    be._source_connect = lambda: _FakeImpalaConn()
     be._stream_to_copy = lambda *a, **k: (5, 0.0, 0.0, 0.0, 0.0)  # 스트리밍 스텁
     return be
 

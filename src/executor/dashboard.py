@@ -63,17 +63,10 @@ def masked_config(settings) -> list[dict]:
          "query-execute 위임 함수(단일). 소스별 항목이 없을 때의 폴백"),
         ("query", "func.by_source",
          ", ".join(
-             f"{name}→{entry.get('module') or '(없음)'}"
+             f"{name}→{entry.get('module', '')}"
              for name, entry in sorted(getattr(settings, "query_func_by_source", {}).items())
          ) or "(없음)",
-         "데이터소스별 query-execute 실행 함수(query.func.<name>.module)"),
-        ("query", "source.connect",
-         ", ".join(
-             f"{name}→{entry.get('connect')}"
-             for name, entry in sorted(getattr(settings, "query_func_by_source", {}).items())
-             if entry.get("connect")
-         ) or "(없음→모든 이관 읽기는 Impala)",
-         "이관(/jobs) 소스 접속 함수(query.func.<name>.connect). job 의 datasource 로 골라 SELECT 를 읽음"),
+         "데이터소스별 실행 함수(query.func.<name>.module). datasource 로 골라 실행"),
         ("impala", "host", settings.impala_host or "(미설정→Mock)",
          "Impala(소스) 호스트. 미설정 시 MockBackend"),
         ("impala", "port", settings.impala_port, "Impala 포트(HiveServer2)"),

@@ -113,7 +113,7 @@ def masked_config(settings) -> list[dict]:
         ("executor", "executors", ", ".join(settings.executors) or "(없음)",
          "디스패치 대상 executor 베이스 URL 목록"),
         ("source", "type", settings.source_type,
-         "기본 소스 엔진(datasource 미지정 시). 요청/manifest 의 datasource 가 이를 덮어쓴다"),
+         "소스 엔진: impala 전용. executor 의 task 읽기(SELECT)가 이 소스를 사용"),
         ("impala", "host", settings.impala_host or "(미설정→Mock)",
          "Impala(소스) 호스트. 미설정 시 MockBackend"),
         ("impala", "port", settings.impala_port, "Impala 포트(HiveServer2)"),

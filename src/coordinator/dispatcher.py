@@ -33,7 +33,6 @@ from typing import Optional, Protocol
 import httpx
 
 from core import s3_stage as s3_sql
-from core.config import is_custom_source
 from core.logging import job_log_context
 from core.phases import close_open_phases
 from . import stage as stage_sql
@@ -855,9 +854,6 @@ class HttpDispatcher(_DispatcherBase):
                 "staging_ddl": st_ddl,
                 "insert_sql": st_insert,
                 "impala_query_options": job.impala_query_options,
-                # 이 task 의 SELECT 를 읽을 소스 엔진. impala(기본)면 executor 가 built-in
-                # Impala 로 읽고, 그 외 이름이면 query.func.<name>.connect 커스텀 함수로 읽는다.
-                "datasource": job.datasource,
                 "username": job.username,
                 # local_stage 는 로컬 CSV 경로, s3_stage 는 S3 객체 키를 out_path 로 싣는다
                 # (둘 다 coordinator 가 확정한 "이 task 가 쓸 위치"). 외부테이블 생성/INSERT 는
@@ -1082,13 +1078,6 @@ class LocalDispatcher(_DispatcherBase):
                 logger.debug(
                     "적재 시작 exec_mode=%s target=%s", job.exec_mode, job.target_table
                 )
-                # 소스 엔진 인자는 **커스텀 소스일 때만** 넘긴다. impala(기본)면 인자 자체를
-                # 붙이지 않아 호출 시그니처가 예전과 완전히 동일해진다(기존 백엔드 구현·
-                # 테스트 더블이 새 kwarg 를 몰라도 그대로 동작).
-                src_kw = (
-                    {"datasource": job.datasource}
-                    if is_custom_source(job.datasource) else {}
-                )
                 # exec_mode 에 따라 backend 의 다른 실행 경로를 선택한다.
                 if job.exec_mode == "statement":
                     rows = await loop.run_in_executor(
@@ -1107,7 +1096,6 @@ class LocalDispatcher(_DispatcherBase):
                             on_progress=_progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,
-                            **src_kw,
                         ),
                     )
                 elif job.exec_mode == "local_stage":
@@ -1121,7 +1109,6 @@ class LocalDispatcher(_DispatcherBase):
                             _progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,
-                            **src_kw,
                         ),
                     )
                 elif job.exec_mode == "s3_stage":
@@ -1137,7 +1124,6 @@ class LocalDispatcher(_DispatcherBase):
                             _progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,
-                            **src_kw,
                         ),
                     )
                 else:
@@ -1150,7 +1136,6 @@ class LocalDispatcher(_DispatcherBase):
                             on_progress=_progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,
-                            **src_kw,
                         ),
                     )
                 task.rows_written = rows

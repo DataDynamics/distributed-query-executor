@@ -353,32 +353,27 @@ def _build_fanout(
     return sub_queries
 
 
-# 이관(/jobs)의 **소스**로 쓸 수 없는 datasource. Greenplum/history 는 적재 대상·메타 DB 라
-# SELECT 소스로 지정하면 거의 확실히 오설정이므로 접수 단계에서 막는다. 그 밖의 이름은
-# executor 설정(query.func.<name>.connect)에 달렸고 coordinator 는 알 수 없으므로 통과시키며,
-# 미설정이면 executor 가 task 를 명확한 오류로 실패시킨다(조용한 Impala 폴백은 하지 않는다).
-_JOB_SOURCE_DENY = ("greenplum", "history")
+# /jobs(이관)가 소스로 받아들이는 datasource. executor backend 가 Impala 전용이므로
+# 그 외 값을 선언한 템플릿은 이관 경로에서 거부한다(query-execute 는 제한 없음).
+_JOB_SOURCE_DATASOURCES = ("impala", "source")
 
 
-def _resolve_job_datasource(req: "CreateJobRequest", settings) -> str:
-    """이 job 의 SELECT 를 읽을 소스 엔진을 확정한다(요청 > manifest > 서버 ``source.type``).
+def _reject_unsupported_datasource(template_id: str, engine: TemplateEngine) -> None:
+    """manifest 의 ``datasource`` 가 이관 경로에서 실행 불가하면 422 로 막는다.
 
-    manifest 값은 호출 전에 이미 ``req.datasource`` 로 병합돼 있으므로(요청 미명시 시에만),
-    여기서는 요청/병합값 → 전역 기본 순으로만 접으면 된다. 반환값은 소문자 정규화한 이름이며
-    ``impala``(기본)면 executor 가 기존 built-in 경로로 읽는다. ``settings`` 는 create_app 이
-    주입받은 설정 객체다(모듈 전역이 아니라 인자로 받아 테스트에서 갈아끼울 수 있게 한다).
+    ``datasource`` 는 query-execute 가 실행 엔진을 고르는 스칼라다. 이관(``/jobs``)의 소스는
+    executor backend 가 Impala 로 고정돼 있어(``_source_connect``) 다른 값을 실행할 수단이
+    없다. 선언을 조용히 무시하면 "Trino 로 도는 줄 알았는데 Impala 로 돌았다" 는 오실행이
+    되므로, 여기서 명시적으로 실패시킨다. 미선언(대부분의 이관 템플릿)은 그대로 통과한다.
     """
-    ds = str(
-        req.datasource or getattr(settings, "source_type", "impala") or "impala"
-    ).strip().lower()
-    if ds in _JOB_SOURCE_DENY:
+    ds = str(engine.load_manifest(template_id).defaults.get("datasource") or "").strip().lower()
+    if ds and ds not in _JOB_SOURCE_DATASOURCES:
         raise QueryValidationError(
-            "JOB_DATASOURCE_UNSUPPORTED",
-            f"datasource={ds} 는 이관(/jobs)의 소스로 쓸 수 없습니다"
-            f"(적재 대상/메타 DB). 소스 엔진은 impala 또는 executor 에 "
-            f"query.func.<name>.connect 로 구성된 이름이어야 합니다.",
+            "TEMPLATE_DATASOURCE_UNSUPPORTED",
+            f"템플릿 {template_id} 의 datasource={ds} 는 이관(/jobs)에서 실행할 수 없습니다. "
+            f"이관의 소스는 Impala 전용입니다(허용: {', '.join(_JOB_SOURCE_DATASOURCES)}). "
+            "결과 반환 실행이 목적이면 POST /query-execute 를 쓰세요.",
         )
-    return ds
 
 
 def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
@@ -702,6 +697,11 @@ def create_app(
         # 날짜 fan-out 모드: task_params 가 있으면 IN 값 분할 대신 '하루 1 task' 로 펼친다
         # (_build_fanout 이 구간 도출 + task 별 SELECT 렌더 + req 필드 주입까지 끝낸다).
         fanout = bool(req.task_params)
+        # 템플릿이 impala 아닌 datasource 를 선언했으면 이관 경로에서는 거부한다. /jobs 의
+        # 소스는 Impala 전용이라(executor backend), 선언만 받고 무시하면 사용자가 Trino 로
+        # 도는 줄 아는 사이 Impala 로 실행되는 조용한 오실행이 된다.
+        if req.template_id and template_engine is not None:
+            _reject_unsupported_datasource(req.template_id, template_engine)
         if fanout:
             sub_queries = _build_fanout(
                 req, template_engine, now_dt().date(),
@@ -717,11 +717,6 @@ def create_app(
                     detail="템플릿 기능이 비활성화되어 있습니다(template.enabled=false).",
                 )
             _apply_template(req, template_engine)  # TemplateError → 422 예외 핸들러
-
-        # 소스 엔진 확정: 요청 > manifest(위 병합에서 req.datasource 에 이미 들어옴) >
-        # 서버 source.type. 여기서 정한 값이 Job 과 모든 task 에 실려 executor 의 읽기 경로를
-        # 정한다(impala 면 built-in, 그 외면 커스텀 접속 함수).
-        job_datasource = _resolve_job_datasource(req, settings)
 
         # 공통 필수 필드 검증(raw/템플릿 공통). 템플릿 모드는 렌더/병합 후 채워졌어야 한다.
         _missing = [n for n in ("sql", "partition_column", "target_table") if not getattr(req, n)]
@@ -912,7 +907,6 @@ def create_app(
                     else None
                 ),
                 impala_query_options=req.impala_query_options,
-                datasource=job_datasource,
                 template_id=req.template_id,
                 template_params=(_split_params(req.params)[0] if req.template_id else None),
                 external_columns=req.external_columns,

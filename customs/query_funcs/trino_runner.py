@@ -108,25 +108,15 @@ def _login_noninteractive(config: dict):
         return _login_session
 
 
-def connect(*, config: dict):
-    """config 로 지정한 Trino 에 접속해 **DB-API 2.0 Connection** 을 돌려준다.
-
-    두 곳이 쓴다:
-
-    - :func:`run` (query-execute, 결과 반환) — 상위 N행만 fetch 하고 닫는다.
-    - **이관(``/jobs``) 소스 읽기** — executor backend 가 이 연결의 커서를 ``fetchmany``
-      로 돌며 CSV/COPY 로 **스트리밍**한다. 그래서 여기서는 행을 만지지 않고 연결만
-      돌려준다(:func:`run` 처럼 limit 으로 자르면 이관이 잘린 결과를 적재하게 된다).
-
-    executor 설정 ``query.func.<datasource>.connect`` 가 이 함수를 가리키면, 그 datasource
-    를 지정한 job 의 SELECT 가 Impala 대신 Trino 에서 실행된다. 접속 파라미터는 같은
-    이름의 ``query.func.<datasource>.config.*`` 를 공유하므로 :func:`run` 과 설정이 하나다.
-    """
+def run(sql: str, *, config: dict, limit: int) -> QueryResult:
+    """config 로 지정한 Trino 에 sql 을 실행해 상위 limit 행을 반환한다."""
     import trino  # 지연 임포트(이 예제 함수를 쓰는 배포에만 trino 패키지가 필요)
 
     # 사내 대화형 login() 이 설정돼 있으면 먼저 비대화형으로 인증한다(1회 캐시).
     # 반환된 세션/토큰을 접속에 써야 하는 조직 표준이면 아래 kwargs 조립에 반영한다.
     _login_noninteractive(config)
+
+    started = time.perf_counter()
 
     # config 값은 문자열이므로 여기서 형변환/기본값을 적용한다(자유 정의 파라미터도 여기서 해석).
     kwargs = {
@@ -162,19 +152,11 @@ def connect(*, config: dict):
         kwargs["catalog"], kwargs["schema"], kwargs["user"],
     )
     try:
-        return trino.dbapi.connect(**kwargs)
+        conn = trino.dbapi.connect(**kwargs)
     except Exception:
         logger.exception("trino 접속 실패: %s:%s", kwargs["host"], kwargs["port"])
         raise
 
-
-def run(sql: str, *, config: dict, limit: int) -> QueryResult:
-    """config 로 지정한 Trino 에 sql 을 실행해 상위 limit 행을 반환한다.
-
-    접속은 :func:`connect` 가 만든다(이관 소스 읽기와 접속 로직·설정을 공유).
-    """
-    started = time.perf_counter()
-    conn = connect(config=config)
     try:
         cur = conn.cursor()
         try:

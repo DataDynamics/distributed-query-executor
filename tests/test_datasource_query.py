@@ -289,36 +289,9 @@ def test_collect_query_funcs_by_source(monkeypatch):
     funcs = cc._collect_query_funcs()
     assert set(funcs) == {"trino", "impala"}
     assert funcs["trino"] == {
-        "module": "pkg.trino:run", "connect": "",
-        "config": {"host": "t.example", "port": "8080"}}
+        "module": "pkg.trino:run", "config": {"host": "t.example", "port": "8080"}}
     # 설정이 없는 소스는 config 가 빈 dict 다(폴백 판단은 호출부 몫).
-    assert funcs["impala"] == {"module": "pkg.impala:run", "connect": "", "config": {}}
-
-
-def test_collect_query_funcs_two_entry_points(monkeypatch):
-    """한 소스가 module(결과 반환)·connect(이관 스트리밍) 두 진입점을 함께 가질 수 있다."""
-    import core.config as cc
-    monkeypatch.setattr(cc, "_props", {
-        "query.func.trino.module": "customs.query_funcs.trino_runner:run",
-        "query.func.trino.connect": "customs.query_funcs.trino_runner:connect",
-        "query.func.trino.config.host": "t.example",
-    })
-    funcs = cc._collect_query_funcs()
-    assert funcs["trino"]["module"].endswith(":run")
-    assert funcs["trino"]["connect"].endswith(":connect")
-    # 두 진입점이 같은 config 블록을 공유한다(설정을 두 벌 쓰지 않는다).
-    assert funcs["trino"]["config"] == {"host": "t.example"}
-
-
-def test_is_custom_source_builtin_names():
-    """빈 값/impala/source 는 built-in 경로(기존 동작), 그 외 이름만 커스텀 위임."""
-    import core.config as cc
-    assert cc.is_custom_source(None) is False
-    assert cc.is_custom_source("") is False
-    assert cc.is_custom_source("impala") is False
-    assert cc.is_custom_source("IMPALA") is False
-    assert cc.is_custom_source("source") is False
-    assert cc.is_custom_source("trino") is True
+    assert funcs["impala"] == {"module": "pkg.impala:run", "config": {}}
 
 
 # ------------- /query-run 데이터소스별 함수 선택(query.func.<name>.module) -------------

@@ -761,43 +761,20 @@ query-execute 는 요청 `datasource:"trino"` + `query.func.module` + `query.fun
 datasource: trino          # 이 템플릿의 SELECT 는 Trino 에서 실행
 ```
 
-**같은 `datasource` 가 이관(`/jobs`)의 SELECT 도 고른다.** 엔진 하나에 설정 블록 하나를 두고,
-진입점 두 개를 둔다:
+엔진마다 실행 함수를 다르게 두려면 소스별 설정을 쓴다. coordinator 가 `/query-run` 에
+`datasource` 를 실어 보내고 executor 가 여기서 함수를 고른다:
 
 ```properties
-# query-execute(결과 반환) — 상위 N행만 돌려주는 미리보기 계약
 query.func.trino.module=customs.query_funcs.trino_runner:run
-# 이관(/jobs) 소스 읽기 — DB-API 연결을 돌려주는 스트리밍 계약(행수 제한 없음)
-query.func.trino.connect=customs.query_funcs.trino_runner:connect
-# 두 함수가 공유하는 접속 설정
 query.func.trino.config.host=trino.example.com
 query.func.trino.config.catalog=hive
-query.func.trino.config.schema=default
+query.func.impala.module=customs.query_funcs.impala_runner:run
+query.func.impala.config.host=impala.example.com
 ```
 
-```yaml
-# templates/my_migration/manifest.yml — 이 이관의 SELECT 는 Trino 에서 읽는다
-exec_mode: s3_stage
-datasource: trino
-```
-
-이러면 `POST /jobs` 의 SELECT 를 Trino 가 읽고, 적재(Greenplum)·`exec_mode`·분할·fan-out 은
-그대로다. 요청 본문의 `datasource` 로 job 마다 덮어쓸 수도 있다.
-
-`connect` 항목이 없으면 **단일 `query.func.module` 로 폴백**하므로 소스별 설정을 안 쓰는
+그 이름의 항목이 없으면 **단일 `query.func.module` 로 폴백**하므로, 소스별 설정을 안 쓰는
 기존 배포는 그대로 동작한다. 현재 어느 함수가 뜨는지는 executor 대시보드 환경설정 탭의
-`query.func.module` / `query.func.by_source` / `query.source.connect` 행에서 확인한다.
-
-> **`module` 과 `connect` 를 바꿔 쓰면 안 된다.** `run()` 은 `limit`(최대 10000)으로 결과를
-> 자르는 미리보기 계약이라, 이관에 쓰면 **잘린 결과가 조용히 적재**된다. 이관은 반드시
-> `connect` 를 쓴다 — 연결만 돌려주고 backend 가 `fetchmany` 로 스트리밍한다.
-
-**설정이 없으면 조용히 Impala 로 폴백하지 않는다.** `datasource=trino` 인데
-`query.func.trino.connect` 가 없으면 task 가 명확한 오류로 실패한다(설정된 소스 목록을
-메시지에 담는다). 폴백하면 Trino 를 읽는 줄 알면서 Impala 를 읽어 엉뚱한 데이터를 적재하게 된다.
-
-**`impala_query_options` 는 Impala 에만 적용된다** — `configuration=` 은 impyla 전용 인자라
-커스텀 소스에는 전달하지 않는다.
+`query.func.module` / `query.func.by_source` 행에서 확인한다.
 
 > **`datasource` 와 `sql_dialect` 는 다른 축이다.** 전자는 *실행 엔진*, 후자는 *sqlglot 파서*다.
 > `sql_dialect` 를 생략하면 datasource 에서 유도되지만(trino→trino, greenplum/history→postgres),
@@ -806,8 +783,9 @@ datasource: trino
 > 그래서 impala 는 전역 `query.sql_dialect`(기본 hive)를 따르고, hive 가 못 읽는 문법을 쓰는
 > 템플릿만 manifest 에 `sql_dialect` 를 직접 적는다(`templates/daily_sales_interval` 이 그 예).
 
-`greenplum`/`history` 는 적재 대상·메타 DB 라 **이관 소스로는 거부**한다
-(`422 JOB_DATASOURCE_UNSUPPORTED`). query-execute 에서는 그대로 조회 가능하다.
+**이관(`/jobs`)에서는 impala 외 `datasource` 를 거부한다**(`422 TEMPLATE_DATASOURCE_UNSUPPORTED`).
+이관의 소스는 Impala 전용이라, 선언을 무시하면 Trino 로 도는 줄 알면서 Impala 로 실행되기 때문이다.
+결과 반환이 목적이면 `/query-execute` 를 쓴다.
 
 ### 커스텀 실행 함수
 

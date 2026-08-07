@@ -14,41 +14,7 @@ import time
 from contextlib import contextmanager
 from typing import Protocol
 
-from core.config import is_custom_source
-
 logger = logging.getLogger(__name__)
-
-# dotted path → 로드된 호출가능 객체 캐시. 커스텀 함수는 프로세스 수명 동안 고정이라
-# 매 호출마다 importlib 를 돌 필요가 없다.
-_dotted_cache: dict = {}
-
-
-def load_dotted(dotted: str):
-    """``module:func`` 또는 ``module.func`` dotted path 로 호출가능 객체를 import 한다.
-
-    query-execute 위임 함수(``query.func.<name>.module``)와 이관 소스 접속 함수
-    (``query.func.<name>.connect``)가 같은 규약을 쓰므로 로더를 한 곳에 둔다. import/getattr
-    실패와 호출 불가는 ``ValueError`` 로 올려, 호출부가 각자의 오류 코드로 변환하게 한다.
-    """
-    fn = _dotted_cache.get(dotted)
-    if fn is not None:
-        return fn
-    import importlib
-
-    mod_path, sep, attr = dotted.partition(":")
-    if not sep:  # ':' 가 없으면 마지막 '.' 을 함수명 경계로 본다
-        mod_path, _, attr = dotted.rpartition(".")
-    if not mod_path or not attr:
-        raise ValueError(f"잘못된 함수 경로: {dotted!r} (module:func 형식이어야 함)")
-    try:
-        module = importlib.import_module(mod_path)
-        fn = getattr(module, attr)
-    except Exception as exc:
-        raise ValueError(f"커스텀 함수 로드 실패: {dotted} ({exc})") from exc
-    if not callable(fn):
-        raise ValueError(f"커스텀 함수가 호출 가능하지 않습니다: {dotted}")
-    _dotted_cache[dotted] = fn
-    return fn
 
 
 def _emit(on_stage, name: str, event: str, meta: dict | None = None) -> None:
@@ -170,13 +136,10 @@ class Backend(Protocol):
         on_progress=None,
         query_options=None,
         on_stage=None,
-        datasource=None,
     ) -> int:
         """[copy 모드] 소스에서 sub_query를 읽어 target_table에 COPY 적재, 행 수 반환.
 
         query_options: 이 task 의 Impala 쿼리 옵션(SET). 전역 기본값 위에 병합된다.
-        datasource: SELECT 를 읽을 소스 엔진 이름. None/impala 면 built-in Impala(기존 동작),
-            그 외 이름이면 query.func.<name>.connect 커스텀 함수의 연결로 읽는다.
         on_stage: 세부 단계 경계 콜백 ``on_stage(name, event, meta=None)``. 모니터링용이며
             None 이면 계측을 생략한다(core.phases 참고).
         """
@@ -195,7 +158,6 @@ class Backend(Protocol):
         on_progress=None,
         query_options=None,
         on_stage=None,
-        datasource=None,
     ) -> int:
         """[stage_insert 모드] Impala 결과를 Greenplum staging 테이블에 COPY 적재 후,
         staging 을 소스로 하는 INSERT 를 실행한다. INSERT 영향 행 수를 반환."""
@@ -209,7 +171,6 @@ class Backend(Protocol):
         on_progress=None,
         query_options=None,
         on_stage=None,
-        datasource=None,
     ) -> int:
         """[local_stage 1단계] Impala SELECT 결과를 로컬 CSV 파일 하나로 스트리밍 저장, 행수 반환.
 
@@ -258,7 +219,6 @@ class Backend(Protocol):
         on_progress=None,
         query_options=None,
         on_stage=None,
-        datasource=None,
     ) -> int:
         """[s3_stage Phase 1] Impala SELECT 결과를 로컬 CSV 로 export 후 S3(``key``)에 업로드.
 
@@ -298,7 +258,7 @@ class MockBackend:
     def __init__(self, rows_per_value: int = 100):
         self.rows_per_value = rows_per_value
 
-    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
+    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None) -> int:
         # 파티션 값 개수 × rows_per_value 를 적재한 것으로 가정(값이 없으면 최소 1로 간주).
         total = max(1, len(partition_values)) * self.rows_per_value
         # 실제 I/O 는 없지만, 대시보드/테스트에서 단계 타임라인이 보이도록 합성 이벤트를 방출한다.
@@ -322,7 +282,7 @@ class MockBackend:
         _emit(on_stage, "COMMIT", "end")
         return self.rows_per_value
 
-    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
         # stage_insert 모드: rows_per_value 행을 staging→target 으로 옮긴 것으로 가정.
         _emit(on_stage, "IMPALA_SUBMIT", "start")
         _emit(on_stage, "IMPALA_SUBMIT", "end")
@@ -341,7 +301,7 @@ class MockBackend:
         _emit(on_stage, "COMMIT", "end")
         return self.rows_per_value
 
-    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
+    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None) -> int:
         # local_stage 1단계: 실제 파일은 만들지 않고 합성 단계 이벤트만 방출, rows_per_value 반환.
         total = self.rows_per_value
         _emit(on_stage, "IMPALA_SUBMIT", "start")
@@ -371,7 +331,7 @@ class MockBackend:
         return self.rows_per_value
 
     def export_to_s3(self, impala_select, key, job_id, task_id, csv_options=None,
-                     on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
+                     on_progress=None, query_options=None, on_stage=None) -> int:
         # s3_stage Phase 1: 실제 파일/업로드 없이 단계 이벤트만 방출하고 rows_per_value 반환.
         total = self.rows_per_value
         _emit(on_stage, "IMPALA_SUBMIT", "start")
@@ -422,14 +382,9 @@ class ImpalaToGreenplumBackend:
                  query_options: dict | None = None, copy_preflight: bool = True,
                  pool_max: int = 8, pipeline: bool = True, queue_size: int = 8,
                  copy_format: str = "text", stage_convert_types: bool = False,
-                 s3_config: dict | None = None, s3_client=None,
-                 source_funcs: dict | None = None):
+                 s3_config: dict | None = None, s3_client=None):
         # Impala 소스 접속 dict(impyla connect 에 그대로 전달).
         self.impala_dsn = impala_dsn
-        # 데이터소스 이름 → 커스텀 소스 접속 함수({name: {"connect": dotted, "config": {...}}}).
-        # task 의 datasource 가 여기 있으면 Impala 대신 그 함수의 연결로 SELECT 를 읽는다.
-        # 비어 있으면(기본) 모든 읽기가 예전처럼 Impala 로 간다.
-        self.source_funcs: dict = dict(source_funcs or {})
         # local_stage export 의 impyla 커서에 넘길 convert_types 값. False 면 형변환을 꺼
         # TIMESTAMP/DATE/DECIMAL 을 wire 문자열 그대로 받아(재파싱 비용 제거) CSV 로 바로 쓴다.
         self.stage_convert_types = stage_convert_types
@@ -466,29 +421,8 @@ class ImpalaToGreenplumBackend:
             )
         return self._s3_client
 
-    def _source_connect(self, datasource: str | None = None):
-        """소스 연결을 연다. 기본은 Impala(impyla)이고, datasource 가 지정되면 커스텀 함수.
-
-        커스텀 경로는 ``query.func.<datasource>.connect`` 가 가리키는 함수를 ``connect(config=...)``
-        로 호출해 **DB-API 2.0 Connection** 을 받는다. 이후 커서 fetch 루프는 Impala 와 완전히
-        같으므로(스트리밍 로직 공유) 이관 규모에서도 행이 잘리지 않는다.
-
-        설정이 없으면 조용히 Impala 로 폴백하지 않고 명확히 실패한다 — Trino 로 읽는 줄 알고
-        Impala 를 읽어 엉뚱한 데이터를 적재하는 사고를 막기 위해서다.
-        """
-        if is_custom_source(datasource):
-            name = str(datasource).strip().lower()
-            entry = self.source_funcs.get(name) or {}
-            dotted = str(entry.get("connect") or "").strip()
-            if not dotted:
-                raise ValueError(
-                    f"datasource={name} 의 소스 접속 함수가 설정되지 않았습니다. "
-                    f"executor 설정에 query.func.{name}.connect=<module:func> 를 지정하세요"
-                    f"(현재 설정된 소스: {sorted(self.source_funcs) or '(없음)'})."
-                )
-            logger.debug("커스텀 소스 연결 시도: datasource=%s func=%s", name, dotted)
-            fn = load_dotted(dotted)
-            return fn(config=dict(entry.get("config") or {}))
+    def _source_connect(self):
+        """Impala 소스 연결을 연다(impyla). 드라이버는 지연 임포트한다."""
         # 연결 실패 시 상위엔 드라이버 예외만 올라가므로, 어느 호스트로 붙었는지
         # backend 레벨에서 남긴다(연결/인증 문제 진단의 첫 단서).
         logger.debug(
@@ -506,35 +440,21 @@ class ImpalaToGreenplumBackend:
         datetime/Decimal 로 되돌려 파싱한다. CSV 로 다시 쓸 export 경로에서는 그 변환이
         순수 낭비이므로 ``cursor(convert_types=False)`` 로 꺼서 문자열 그대로 받는다
         (INT/DOUBLE/BOOL 은 네이티브라 영향 없음). 해당 kwarg 미지원 구버전이면 기본 커서로 폴백.
-
-        ``convert_types`` 는 impyla 전용 최적화라 커스텀 소스(Trino 등)의 커서는 이 kwarg 를
-        모른다 — 같은 TypeError 폴백이 그대로 받아내므로 별도 분기가 필요 없다.
         """
         if convert_types is None:
             return conn.cursor()
         try:
             return conn.cursor(convert_types=convert_types)
         except TypeError:
-            logger.debug("cursor(convert_types=...) 미지원 드라이버 — 기본 커서로 폴백")
+            logger.warning("impyla cursor(convert_types=...) 미지원 — 기본 커서로 폴백")
             return conn.cursor()
 
-    def _source_execute(self, cur, sql: str, query_options, datasource: str | None = None) -> None:
-        """소스 커서로 sql 을 실행한다. Impala 는 전역+요청별 옵션을 configuration 으로 병합한다.
+    def _source_execute(self, cur, sql: str, query_options) -> None:
+        """Impala 커서로 sql 을 실행한다. 전역+요청별 옵션을 configuration 으로 병합한다.
 
         병합 결과가 비어 있으면(둘 다 미지정) configuration 인자를 아예 넘기지 않고
         그대로 실행한다(요청자 의도: 옵션이 없으면 기본 동작 유지).
-
-        ``configuration=`` 은 impyla 전용 kwarg 이므로 **커스텀 소스에는 넘기지 않는다**
-        (Trino 커서는 이 인자를 몰라 TypeError 가 난다). Impala 옵션은 Impala 에만 적용된다.
         """
-        if is_custom_source(datasource):
-            if query_options or self.query_options:
-                logger.debug(
-                    "datasource=%s 는 Impala 가 아니므로 impala_query_options 를 적용하지 않는다",
-                    datasource,
-                )
-            cur.execute(sql)
-            return
         opts = {**self.query_options, **(query_options or {})}
         if opts:
             cur.execute(sql, configuration=opts)
@@ -741,7 +661,7 @@ class ImpalaToGreenplumBackend:
         logger.debug("statement 완료: %s행 반영", rows)
         return rows
 
-    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
+    def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
         """Impala SELECT → Greenplum staging(TEMP) COPY 적재 → staging→target INSERT.
 
         한 Greenplum 세션(연결) 안에서 CREATE TEMP TABLE → COPY → INSERT 를 수행하므로
@@ -764,11 +684,11 @@ class ImpalaToGreenplumBackend:
         보장해야 한다(예: job·파티션별 고유 staging_table 사용).
         """
         loaded = 0
-        impala_conn = self._source_connect(datasource)
+        impala_conn = self._source_connect()
         try:
             cur = impala_conn.cursor()
             _emit(on_stage, "IMPALA_SUBMIT", "start")
-            self._source_execute(cur, impala_select, query_options, datasource)
+            self._source_execute(cur, impala_select, query_options)
             columns = [d[0] for d in cur.description]
             _emit(on_stage, "IMPALA_SUBMIT", "end")
 
@@ -822,7 +742,7 @@ class ImpalaToGreenplumBackend:
         finally:
             impala_conn.close()
 
-    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
+    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None) -> int:
         """local_stage 1단계: Impala SELECT 결과를 out_path 의 로컬 CSV 파일로 스트리밍 저장.
 
         impyla 커서를 batch_size 단위로 fetch 하며 표준 라이브러리 ``csv`` 로 한 줄씩 쓴다.
@@ -844,13 +764,12 @@ class ImpalaToGreenplumBackend:
             os.makedirs(parent, exist_ok=True)
 
         written = 0
-        impala_conn = self._source_connect(datasource)
+        impala_conn = self._source_connect()
         try:
-            # convert_types=False 로 형변환을 꺼 timestamp/date/decimal 을 문자열 그대로 받는다
-            # (impyla 전용 최적화 — 커스텀 소스 커서는 미지원 kwarg 를 폴백으로 흘린다).
+            # convert_types=False 로 형변환을 꺼 timestamp/date/decimal 을 문자열 그대로 받는다.
             cur = self._open_source_cursor(impala_conn, convert_types=self.stage_convert_types)
             _emit(on_stage, "IMPALA_SUBMIT", "start")
-            self._source_execute(cur, sub_query, query_options, datasource)
+            self._source_execute(cur, sub_query, query_options)
             _emit(on_stage, "IMPALA_SUBMIT", "end")
             _emit(on_stage, "EXPORT_WRITE", "start")
             with open(out_path, "w", newline="", encoding="utf-8") as f:
@@ -929,7 +848,7 @@ class ImpalaToGreenplumBackend:
         return affected if affected and affected > 0 else 0
 
     def export_to_s3(self, impala_select, key, job_id, task_id, csv_options=None,
-                     on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
+                     on_progress=None, query_options=None, on_stage=None) -> int:
         """s3_stage Phase 1: Impala SELECT 결과를 로컬 CSV 로 export → S3 업로드 → 로컬 삭제.
 
         executor 가 GP 를 건드리지 않는 순수 Phase 1 이다(외부테이블 생성·INSERT 는
@@ -946,12 +865,9 @@ class ImpalaToGreenplumBackend:
         out_path = os.path.join(local_root, job_id, f"{task_id}.csv")
         try:
             # 1) Impala SELECT → 로컬 임시 CSV(IMPALA_SUBMIT/EXPORT_WRITE 이벤트는 export 가 방출).
-            # datasource 는 커스텀 소스일 때만 넘긴다 — impala(기본)면 위임 호출이 예전과
-            # 완전히 동일해진다(export_to_local_csv 는 공개 계약이라 인자 추가에 보수적).
             rows = self.export_to_local_csv(
                 impala_select, out_path, csv_options, on_progress,
                 query_options=query_options, on_stage=on_stage,
-                **({"datasource": datasource} if is_custom_source(datasource) else {}),
             )
             # 2) 로컬 CSV → S3 업로드 후 로컬 파일 즉시 삭제(로컬 디스크를 비운다).
             _emit(on_stage, "S3_UPLOAD", "start")
@@ -1039,7 +955,7 @@ class ImpalaToGreenplumBackend:
         """gp_segment_configuration 의 primary 세그먼트 호스트명 집합(호스트별 카운트 키에서 파생)."""
         return set(self.segment_host_counts())
 
-    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
+    def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None) -> int:
         """copy 모드: Impala 에서 sub_query 결과를 스트리밍해 Greenplum 에 COPY 적재한다.
 
         Impala 커서를 batch_size 단위로 fetch 하며 psycopg COPY(STDIN)로 흘려보내므로,
@@ -1054,11 +970,11 @@ class ImpalaToGreenplumBackend:
         반환: COPY 로 적재한 총 행 수.
         """
         rows_written = 0
-        impala_conn = self._source_connect(datasource)
+        impala_conn = self._source_connect()
         try:
             cur = impala_conn.cursor()
             _emit(on_stage, "IMPALA_SUBMIT", "start")
-            self._source_execute(cur, sub_query, query_options, datasource)
+            self._source_execute(cur, sub_query, query_options)
             columns = [d[0] for d in cur.description]
             _emit(on_stage, "IMPALA_SUBMIT", "end")
 
@@ -1262,9 +1178,6 @@ def build_backend(settings) -> Backend:
             copy_format=getattr(settings, "copy_format", "text"),
             stage_convert_types=getattr(settings, "stage_impala_convert_types", False),
             s3_config=build_s3_config(settings),
-            # datasource 별 커스텀 소스 접속 함수(query.func.<name>.connect). 비어 있으면
-            # 모든 읽기가 Impala 로 간다(기존 동작).
-            source_funcs=getattr(settings, "query_func_by_source", None),
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()

@@ -96,18 +96,8 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   sqlglot 에 impala 방언이 없고 Impala 문법이 한 방언으로 안 덮이므로(백틱=hive 만, `trunc(date)`+interval=
   trino 만), `parser.resolve_dialect` 는 trino/greenplum/history 만 유도하고 **impala 는 일부러 유도하지
   않는다**(전역 `query.sql_dialect` 기본 hive → 필요한 템플릿만 manifest 에 `sql_dialect` 명시 —
-  `templates/daily_sales_interval` 이 그 예).
-- **이관 소스 엔진 선택**(DESIGN §17.2) — `/jobs` 의 SELECT 도 같은 `datasource` 로 고른다(요청 >
-  manifest > `source.type`). coordinator 가 `Job.datasource` 에 확정해 모든 task 에 싣고, executor
-  backend `_source_connect(datasource)` 가 분기한다: 빈 값·`impala`·`source` 는 built-in impyla,
-  그 외 이름은 **`query.func.<ds>.connect`**(`connect(config) -> DB-API Connection`)로 위임.
-  **`module`(query-execute)과 `connect`(이관)는 계약이 다르다** — `run()` 은 `limit`(≤10000)으로 자르는
-  미리보기라 이관에 쓰면 잘린 결과가 조용히 적재된다. `connect` 는 연결만 주고 기존 `fetchmany`
-  스트리밍 루프를 그대로 쓴다. 판정은 `core.config.is_custom_source`(한 곳). `configuration=`(impyla
-  전용)은 Impala 에만 넘긴다. 미설정이면 Impala 폴백이 아니라 **명확한 실패**. 하위 호환 핵심:
-  impala/미지정이면 backend 호출에 `datasource` kwarg 를 **아예 붙이지 않아**(`src_kw` 조건부 확장)
-  기존 백엔드·테스트 더블이 무변경으로 동작한다. `greenplum`/`history` 는 이관 소스로 422
-  (`JOB_DATASOURCE_UNSUPPORTED`). 참조 구현 `customs/query_funcs/trino_runner.py:connect`.
+  `templates/daily_sales_interval` 이 그 예). 이관(`/jobs`)의 소스는 Impala 전용이라 impala 아닌 datasource
+  를 선언한 템플릿은 `422 TEMPLATE_DATASOURCE_UNSUPPORTED` 로 거부한다(조용한 오실행 방지).
 - `src/coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
   **날짜 fan-out**(DESIGN §18.8): `/jobs` 에 `task_params`(구간의 두 끝을 담은 params 이름 2개)를
   주면 IN 분할 대신 **하루=1 task** 로 펼친다(`app.py` `_build_fanout`/`_compute_task_offsets`,
