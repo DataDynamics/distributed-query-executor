@@ -231,6 +231,16 @@ class Settings:
             )
         )
 
+        # 실행 SQL 로깅(core.sql). HTTP 로깅과 달리 **기본 INFO 로 항상 남긴다** — 어떤
+        # 데이터소스에 어떤 쿼리를 보냈는지는 사고 추적의 1차 근거라 DEBUG 로만 남기면
+        # 정작 필요한 순간(운영 기본 레벨 INFO)에 기록이 없다. 감사 용도라 끄는 것은
+        # 명시적 설정으로만 가능하게 했다.
+        self.log_sql_enabled: bool = _to_bool(_get_nested("logging", "sql", "enabled", True))
+        # 로그에 남길 SQL 최대 길이(초과분은 절단하고 총 길이를 함께 표기).
+        self.log_sql_max_length: int = int(_get_nested("logging", "sql", "max_length", 4000))
+        # 바인드 파라미터(예: overwrite_partitions 선삭제의 파티션 값) 동반 기록 여부.
+        self.log_sql_params: bool = _to_bool(_get_nested("logging", "sql", "params", True))
+
         self.config_dir: Path = _CONFIG_DIR
         self.config_yaml_path: Path = _yaml_path
         self.config_properties_path: Path = _properties_path

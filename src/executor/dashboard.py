@@ -132,6 +132,12 @@ def masked_config(settings) -> list[dict]:
         ("logging", "dir", str(settings.log_dir), "로그 디렉터리(일 단위 롤링)"),
         ("logging", "rolling.backup_count", settings.log_rolling_backup_count,
          "로그 보관 일수(초과분 자동 삭제)"),
+        ("logging", "sql.enabled", settings.log_sql_enabled,
+         "실행 SQL 로깅(core.sql, INFO 로 항상 기록 — 로그 레벨과 무관)"),
+        ("logging", "sql.max_length", settings.log_sql_max_length,
+         "실행 SQL 로그 최대 길이(초과분 절단 표기)"),
+        ("logging", "sql.params", settings.log_sql_params,
+         "실행 SQL 의 바인드 파라미터 동반 기록"),
     ]
     return [{"section": s, "key": k, "value": v, "desc": d} for s, k, v, d in rows]
 

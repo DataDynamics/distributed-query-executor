@@ -899,7 +899,10 @@ def run(sql, *, config, limit):
   logging.getLogger(__name__)`)을 쓰면 executor 로그 파일(`executor-<포트>.log`, WARNING 이상은
   `*-warn.log`)에 그대로 남는다. `print()` 는 기록되지 않는다. 오류는 `logger.exception(...)` 으로
   트레이스를 남긴 뒤 **다시 raise** 한다(executor 가 502 로 응답). 추적 정보는 남기되 **비밀값은
-  절대 로그에 넣지 않는다**.
+  절대 로그에 넣지 않는다**. 실행한 SQL 자체는 **커스텀 함수가 따로 남길 필요가 없다** — 프레임워크가
+  호출 직전에 `core.sql` 로거로 `datasource` 와 함께 기록한다(`/query-run` 위임, 이관 경로의
+  `fetch_module` 모두). 중복해서 찍지 말고, 함수 안에서는 접속 대상·재시도 같은 **함수 고유 정보**만
+  남기는 편이 로그를 읽기 쉽다.
 - **이벤트 루프**: 커스텀 함수(또는 의존 라이브러리)가 `nest_asyncio` 처럼 이벤트 루프를 패치하면
   uvloop 에서 `can't patch loop of type uvloop.Loop` 로 실패한다. 그래서 executor 는 uvicorn 을
   `loop="asyncio"`(순수 파이썬 루프)로 기동한다(`executor/__main__.py`). 데이터 경로는 스레드에서

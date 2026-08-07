@@ -1454,11 +1454,17 @@ def create_app(
             if name == "greenplum":
                 if not settings.greenplum_dsn:
                     raise HTTPException(status_code=400, detail="greenplum.dsn 미설정")
-                result = await asyncio.to_thread(run_postgres_select, settings.greenplum_dsn, req.sql, limit=limit)
+                result = await asyncio.to_thread(
+                    run_postgres_select, settings.greenplum_dsn, req.sql,
+                    limit=limit, datasource="greenplum",
+                )
             elif name == "history":
                 if not settings.history_db_dsn:
                     raise HTTPException(status_code=400, detail="history.db_dsn(또는 monitor.db_dsn) 미설정")
-                result = await asyncio.to_thread(run_postgres_select, settings.history_db_dsn, req.sql, limit=limit)
+                result = await asyncio.to_thread(
+                    run_postgres_select, settings.history_db_dsn, req.sql,
+                    limit=limit, datasource="history",
+                )
             elif name == "impala":
                 # coordinator 에는 소스 드라이버(impyla)가 없다 — executor 로 프록시해야 한다.
                 raise HTTPException(
@@ -1515,7 +1521,10 @@ def create_app(
             for url in order:
                 target = url.rstrip("/") + "/query-run"
                 try:
-                    resp = await http.post(target, json={"sql": sql, "limit": limit})
+                    # datasource 를 함께 실어 executor 쪽 실행 SQL 로그에도 엔진 이름이 남게 한다.
+                    resp = await http.post(
+                        target, json={"sql": sql, "limit": limit, "datasource": name},
+                    )
                 except httpx.HTTPError as e:
                     last_err = e
                     logger.warning("query-execute 프록시 실패, 다음 executor 로 failover: %s (%s)", url, e)
@@ -1570,7 +1579,9 @@ def create_app(
             if not dsn:
                 raise HTTPException(status_code=400, detail=f"{datasource} 접속 정보(dsn) 미설정")
             try:
-                result = await asyncio.to_thread(run_postgres_select, dsn, sql, limit=limit)
+                result = await asyncio.to_thread(
+                    run_postgres_select, dsn, sql, limit=limit, datasource=datasource,
+                )
             except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
                 raise HTTPException(status_code=502, detail=f"{datasource} 쿼리 실패: {e}")
             # coordinator 가 직접 실행했으므로 executor 는 없다(executed_by=null).

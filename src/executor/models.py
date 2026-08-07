@@ -226,3 +226,8 @@ class QueryRunRequest(BaseModel):
 
     sql: str
     limit: int = 100
+    # 실행 엔진 이름(로그 표기 전용, 예: trino). 실행 함수 선택에는 쓰지 않는다 —
+    # 위임 대상은 언제나 query.func.module 하나다. coordinator 가 확정한 datasource 를
+    # 실어 보내야 executor 로그에 "어느 엔진으로 실행했는가"가 남는다. 구버전
+    # coordinator 가 안 보내도 되도록 선택 필드로 두고, 없으면 source 로 표기한다.
+    datasource: Optional[str] = None

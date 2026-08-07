@@ -148,7 +148,23 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
 - `src/executor/app.py` — task 상태머신(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED),
   `executor.max_concurrent_tasks` 세마포어.
 - `src/core/logging.py` — 일 단위 롤링 + `[job_id][task_id]` 컨텍스트 주입 + **WARNING 전용
-  로그(`*-warn.log`) 분리**.
+  로그(`*-warn.log`) 분리**. 식별자는 `contextvars`(`job_id_var`/`task_id_var`) + record
+  factory 로 모든 레코드에 자동으로 붙는다. **`with_log_context(fn, *args)`** 는 그 컨텍스트를
+  **워커 스레드까지** 들고 가는 콜러블을 만든다 — `loop.run_in_executor` 는 `asyncio.to_thread`
+  와 달리 contextvars 를 복사하지 않아, 감싸지 않으면 백엔드 스레드의 로그(특히 실행 SQL)가
+  `[-][-]` 로 남아 어느 job 의 쿼리인지 잃는다.
+- `src/core/sqllog.py` — **실행 SQL 로깅**(`core.sql` 로거). 데이터소스에 던지는 모든 SQL 을
+  `SQL 실행 datasource=<엔진> phase=<단계> [target=…] | <SQL> [| params=…]` 한 줄로 남긴다.
+  HTTP 로깅과 달리 **DEBUG 를 요구하지 않고 INFO 로 항상** 기록한다(운영 기본 레벨에서 "무엇을
+  읽어 무엇을 적재했나"가 비면 사고 추적이 불가능하다 — 끄려면 `logging.sql.enabled=false`).
+  SQL 은 `mask_text` 마스킹 → 공백 접기(한 줄=한 레코드 유지) → `max_length` 절단 순서로
+  가공하고, 절단 시 `… (총 N자 중 M자 절단)` 을 붙여 전문이 아님을 숨기지 않는다.
+  `datasource_of(cursor)` 가 커서에서 엔진 이름을 추론하므로(커스텀 어댑터는 `_name`, impyla 는
+  없음 → `impala`) `_source_execute` 시그니처를 바꾸지 않고도 소스별 표기가 갈린다.
+  계측 지점: `backend._source_execute`(소스 SELECT 전부) / GP 측 statement·COPY·staging DDL·
+  INSERT·DELETE·외부테이블 DDL·CLEANUP·카탈로그 조회·`DISCARD ALL` / `dbprobe` 미리보기 /
+  executor `POST /query-run`(커스텀 함수 — coordinator 가 `datasource` 를 실어 보낸다).
+  순수 함수(`collapse_sql`/`format_sql`/`format_params`)는 테스트 대상(`tests/test_sql_logging.py`).
 - `src/core/http_logging.py` — **HTTP 요청/응답 DEBUG 로깅 미들웨어**(`core.http` 로거). 로그
   레벨이 DEBUG 일 때만(`logger.isEnabledFor(DEBUG)` 가드) 각 요청/응답을 남기고, 아니면 즉시
   통과(오버헤드 ~0). **순수 ASGI 미들웨어**(BaseHTTPMiddleware 아님) — `receive`/`send` 를 감싸
@@ -226,6 +242,8 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
 - HTTP 로깅: `logging.http.{enabled,bodies,max_body,headers,exclude_paths}`(기본 on/on/2048/off/
   health·metrics·정적·docs). **로그 레벨이 DEBUG 일 때만** 요청/응답이 기록된다(별도 스위치 아님 —
   `enabled=false` 로 DEBUG 여도 끌 수 있음). 자세히는 `src/core/http_logging.py`.
+- 실행 SQL 로깅: `logging.sql.{enabled,max_length,params}`(기본 on/4000/on). HTTP 로깅과 달리
+  **로그 레벨과 무관하게 INFO 로 항상** 남는다. 자세히는 `src/core/sqllog.py`.
 - 멀티 coordinator: `store.backend=postgres` + 공유 `history.db_dsn`, `executor.self_report=true`.
 - 백엔드: `impala.host` + `greenplum.dsn` 둘 다 있으면 실제 백엔드, 아니면 `MockBackend`
   (소스는 Impala 전용). query-execute 의 소스 실행은 별개로 `/query-run` 커스텀 함수에 위임한다(예제

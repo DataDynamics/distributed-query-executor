@@ -34,7 +34,7 @@ import httpx
 
 from core import s3_stage as s3_sql
 from core.config import is_custom_source
-from core.logging import job_log_context
+from core.logging import job_log_context, with_log_context
 from core.phases import close_open_phases
 from . import stage as stage_sql
 from .config import Settings
@@ -335,7 +335,9 @@ class _DispatcherBase:
         backend = self._get_stage_backend()
         loop = asyncio.get_running_loop()
         try:
-            host_segments = await loop.run_in_executor(None, backend.segment_host_counts)
+            host_segments = await loop.run_in_executor(
+                None, with_log_context(backend.segment_host_counts)
+            )
         except Exception as exc:
             logger.warning(
                 "job %s: 세그먼트 토폴로지 조회 실패 → 파일 예산 배분 생략(기존 배정 유지): %s",
@@ -419,7 +421,9 @@ class _DispatcherBase:
         # 오타/잘못된 gp_hostname 을 load 전에 조기 실패시킨다(런타임 파일 미발견 예방).
         if self.settings.stage_validate_hosts:
             try:
-                seg_hosts = await loop.run_in_executor(None, backend.segment_hosts)
+                seg_hosts = await loop.run_in_executor(
+                    None, with_log_context(backend.segment_hosts)
+                )
             except Exception as exc:
                 # 조회 실패(권한/미지원 등)는 검증 생략으로 폴백한다 — 적재 자체를 막지 않는다.
                 logger.warning(
@@ -468,7 +472,8 @@ class _DispatcherBase:
             # 블로킹 GP 호출이므로 스레드로 넘겨 이벤트 루프를 막지 않는다.
             rows = await loop.run_in_executor(
                 None,
-                lambda: backend.load_external_csv(
+                with_log_context(
+                    backend.load_external_csv,
                     external_ddl, job.staging_ddl, staging_load,
                     pre_delete, job.insert_sql, cleanup,
                 ),
@@ -553,7 +558,8 @@ class _DispatcherBase:
         try:
             rows = await loop.run_in_executor(
                 None,
-                lambda: backend.load_external_s3(
+                with_log_context(
+                    backend.load_external_s3,
                     external_ddl, pre_delete, insert_sql, cleanup,
                 ),
             )
@@ -1061,7 +1067,7 @@ class LocalDispatcher(_DispatcherBase):
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(
-                None, self._get_backend().cleanup_s3_prefix, prefix
+                None, with_log_context(self._get_backend().cleanup_s3_prefix, prefix)
             )
         except Exception as exc:
             logger.warning("job %s: local S3 정리 실패: %s", job.job_id, exc)

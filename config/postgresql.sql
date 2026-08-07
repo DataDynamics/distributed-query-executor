@@ -167,7 +167,7 @@ CREATE INDEX IF NOT EXISTS idx_executor_reservation_updated_at
 
 
 -- ─────────────────────────────────────────────────────────────────────────
--- 4c) coordinator_status — (Phase 3) coordinator heartbeat. 죽은 coordinator 가 소유한
+-- 4c) coordinator_status — (Phase 3) coordinator 생존 신호. 죽은 coordinator 가 소유한
 --     비종료 job 을 다른 coordinator 가 정합(FAILED)할 수 있도록, 각 coordinator 가 자기
 --     생존을 주기적으로 upsert 한다. updated_at 신선도로 생존 판정.
 -- ─────────────────────────────────────────────────────────────────────────

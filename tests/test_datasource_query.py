@@ -52,7 +52,7 @@ async def test_executor_query_unconfigured_greenplum(monkeypatch):
 async def test_executor_query_greenplum_preview(monkeypatch):
     monkeypatch.setattr(core_config.settings, "greenplum_dsn", "postgresql://x")
     import executor.app as ea
-    monkeypatch.setattr(ea, "run_postgres_select", lambda dsn, sql, *, limit: _fake_result())
+    monkeypatch.setattr(ea, "run_postgres_select", lambda dsn, sql, *, limit, datasource="greenplum": _fake_result())
     async with _exec_client(create_executor_app()) as c:
         r = await c.post("/datasources/greenplum/query", json={"sql": "SELECT * FROM t", "limit": 50})
     assert r.status_code == 200
@@ -69,7 +69,7 @@ async def test_executor_query_impala_preview(monkeypatch):
     import executor.app as ea
     monkeypatch.setattr(
         ea, "run_impala_select",
-        lambda dsn, sql, *, query_options, limit: _fake_result(),
+        lambda dsn, sql, *, query_options, limit, datasource="impala": _fake_result(),
     )
     async with _exec_client(create_executor_app()) as c:
         r = await c.post("/datasources/impala/query", json={"sql": "SELECT 1"})
@@ -116,7 +116,7 @@ def test_coordinator_impala_requires_executor(client):
 def test_coordinator_history_preview(client, monkeypatch):
     import coordinator.app as ca
     monkeypatch.setattr(core_config.settings, "history_db_dsn", "postgresql://x")
-    monkeypatch.setattr(ca, "run_postgres_select", lambda dsn, sql, *, limit: _fake_result())
+    monkeypatch.setattr(ca, "run_postgres_select", lambda dsn, sql, *, limit, datasource="greenplum": _fake_result())
     body = client.post("/datasources/history/query", json={"sql": "SELECT 1"}).json()
     assert body["datasource"] == "history"
     assert body["columns"] == ["a", "b"]
@@ -211,6 +211,48 @@ async def test_query_run_calls_custom_func(monkeypatch):
     assert body["columns"] == ["a"] and body["rows"] == [[1]] and body["limit"] == 50
     # 커스텀 함수는 sql·자유 설정 dict·limit 을 그대로 넘겨받는다.
     assert captured == {"sql": "SELECT 42", "config": {"host": "trino.example.com", "port": "8080"}, "limit": 50}
+
+
+async def test_query_run_이_datasource_를_실행_sql_로그에_남긴다(monkeypatch, caplog):
+    """coordinator 가 실어 보낸 datasource 로 실행 SQL 이 기록된다(커스텀 함수 경로).
+
+    커스텀 함수는 사내 API 라 자체 로깅을 기대할 수 없으므로, executor 가 "어떤 엔진에
+    어떤 SQL 을 넘겼는지"를 확정적으로 남겨야 한다.
+    """
+    import logging
+
+    monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
+    import executor.app as ea
+    monkeypatch.setattr(ea, "_load_query_func", lambda dotted: (
+        lambda sql, *, config, limit: QueryResult(
+            columns=["a"], rows=[[1]], row_count=1, truncated=False, elapsed_ms=1.0)))
+    async with _exec_client(create_executor_app()) as c:
+        with caplog.at_level(logging.INFO, logger="core.sql"):
+            r = await c.post(
+                "/query-run",
+                json={"sql": "SELECT 42", "limit": 10, "datasource": "trino"},
+            )
+    assert r.status_code == 200, r.text
+    msg = [rec.getMessage() for rec in caplog.records if rec.name == "core.sql"][-1]
+    assert "datasource=trino" in msg and "SELECT 42" in msg
+
+
+async def test_query_run_datasource_생략시_source_로_기록된다(monkeypatch, caplog):
+    """구버전 coordinator 가 datasource 를 안 보내도 요청은 정상 처리된다(하위 호환)."""
+    import logging
+
+    monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
+    import executor.app as ea
+    monkeypatch.setattr(ea, "_load_query_func", lambda dotted: (
+        lambda sql, *, config, limit: QueryResult(
+            columns=["a"], rows=[[1]], row_count=1, truncated=False, elapsed_ms=1.0)))
+    async with _exec_client(create_executor_app()) as c:
+        with caplog.at_level(logging.INFO, logger="core.sql"):
+            r = await c.post("/query-run", json={"sql": "SELECT 1"})
+    assert r.status_code == 200
+    assert "datasource=source" in [
+        rec.getMessage() for rec in caplog.records if rec.name == "core.sql"
+    ][-1]
 
 
 async def test_query_run_accepts_dict_return(monkeypatch):

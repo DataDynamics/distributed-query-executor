@@ -195,7 +195,7 @@ CREATE INDEX IF NOT EXISTS idx_executor_reservation_updated_at
 
 
 -- ─────────────────────────────────────────────────────────────────────────
--- 4c) coordinator_status — (Phase 3) coordinator heartbeat.
+-- 4c) coordinator_status — (Phase 3) coordinator 생존 신호.
 --     PK(coordinator_id)=분산키. 각 coordinator 가 자기 생존을 주기적으로 UPSERT.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.coordinator_status (

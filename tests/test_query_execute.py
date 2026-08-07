@@ -92,7 +92,7 @@ def test_render_query_missing_select_role(tmp_path):
 def test_query_execute_greenplum_direct(qe_client, monkeypatch):
     monkeypatch.setattr(core_config.settings, "greenplum_dsn", "postgresql://x")
     import coordinator.app as ca
-    monkeypatch.setattr(ca, "run_postgres_select", lambda dsn, sql, *, limit: _fake_result())
+    monkeypatch.setattr(ca, "run_postgres_select", lambda dsn, sql, *, limit, datasource="greenplum": _fake_result())
     client = qe_client()
     resp = client.post("/query-execute", json={
         "template_id": "sales_migration",
@@ -123,7 +123,7 @@ def test_query_execute_order_search_example(qe_client, monkeypatch):
     import coordinator.app as ca
     captured = {}
 
-    def _capture(dsn, sql, *, limit):
+    def _capture(dsn, sql, *, limit, datasource="greenplum"):
         captured["sql"] = sql
         return _fake_result()
 
@@ -154,7 +154,8 @@ def test_query_execute_order_search_optional_amount_omitted(qe_client, monkeypat
     import coordinator.app as ca
     captured = {}
     monkeypatch.setattr(ca, "run_postgres_select",
-                        lambda dsn, sql, *, limit: (captured.update(sql=sql) or _fake_result()))
+                        lambda dsn, sql, *, limit, datasource="greenplum":
+                        (captured.update(sql=sql) or _fake_result()))
     client = qe_client()
     resp = client.post("/query-execute", json={
         "template_id": "order_search",

@@ -47,6 +47,14 @@ logging:
     headers: ${log.http.headers:false}            # 요청/응답 헤더 포함(민감 헤더 값 마스킹)
     # 로깅 제외 경로(쉼표 구분, 정확 일치 또는 prefix/ 하위)
     exclude_paths: ${log.http.exclude_paths:/health,/metrics,/assets,/favicon.ico,/docs,/redoc,/openapi.json}
+  # 실행 SQL 로깅(core.sql 로거). HTTP 로깅과 달리 **DEBUG 를 요구하지 않고 INFO 로 항상**
+  # 남긴다 — 어떤 데이터소스(impala/trino/greenplum/history)에 어떤 쿼리를 던졌는지는
+  # 사고 추적의 1차 근거라, 운영 기본 레벨에서 기록이 없으면 안 된다. 로그 줄에는
+  # core.logging 이 [job_id][task_id] 를 자동으로 붙인다.
+  sql:
+    enabled: ${log.sql.enabled:true}              # 실행 SQL 기록 여부(감사 목적이라 기본 on)
+    max_length: ${log.sql.max_length:4000}        # SQL 한 건의 최대 기록 길이(초과분 절단 표기)
+    params: ${log.sql.params:true}                # 바인드 파라미터(파티션 값 등) 동반 기록
 
 # ───────── Coordinator ─────────
 coordinator:

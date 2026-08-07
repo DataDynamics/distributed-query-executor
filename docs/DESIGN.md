@@ -352,6 +352,16 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 
 **HTTP 요청/응답 로깅.** 로그 레벨이 **DEBUG일 때만**(`app.debug=true` 또는 `log.level=DEBUG`) 각 요청/응답을 `core.http` 로거로 자동 기록한다(별도 스위치 아님 — DEBUG여도 `logging.http.enabled=false`로 끔). 구현은 **순수 ASGI 미들웨어**(`core.http_logging`)로 `receive`/`send` 메시지를 **엿보기만** 해 다운스트림 본문 읽기를 깨지 않는다. 본문 복사본은 `max_body`(기본 2KB)까지만 보관하고 원본은 항상 그대로 흘려보내므로 스트리밍/대용량 응답도 로그만 절단될 뿐 정상 전달된다. 본문·헤더 자격증명 (DSN·`password`/`token`/`Authorization` 등)은 마스킹(`core.masking`)하고, 잡음 경로(`/health`· `/metrics`·`/assets`·`/docs` 등)는 기본 제외한다. 설정 `logging.http.{enabled,bodies,max_body, headers,exclude_paths}`, 순수 함수(`format_body`/`format_headers`/`is_excluded`)는 테스트 대상 (`tests/test_http_logging.py`).
 
+**실행 SQL 로깅.** 데이터소스에 실제로 던진 SQL 은 **로그 레벨과 무관하게 INFO 로 모두** `core.sql` 로거에 남긴다(`core.sqllog.log_sql`). HTTP 로깅과 정책이 다른 이유는 목적이 다르기 때문이다 — HTTP 본문은 개발 중 디버깅 재료라 DEBUG 로 충분하지만, "어떤 엔진에 어떤 쿼리를 보내 무엇을 적재했는가"는 **사고 추적·감사의 1차 근거**라 운영 기본 레벨(INFO)에서 비어 있으면 안 된다. 끄려면 `logging.sql.enabled=false` 로 명시해야 한다.
+
+한 줄 형식은 `SQL 실행 datasource=<엔진> phase=<단계> [target=<대상>] | <SQL> [| params=<바인드값>]` 이고, 앞에는 `core.logging` 이 주입하는 `[job_id][task_id]` 가 붙는다. `datasource` 를 반드시 싣는 이유는 같은 SELECT 라도 Impala 커서로 읽었는지 커스텀 API(Trino 등)로 읽었는지에 따라 결과가 달라지기 때문이다 — 이 값이 없으면 로그만으로는 `datasource` 오설정 사고를 판별할 수 없다. 값은 **커서에서 추론**한다(`datasource_of` — 커스텀 어댑터는 `_name`, impyla 커서는 속성이 없어 `impala`). 덕분에 `_source_execute` 의 시그니처를 바꾸지 않고도 소스별 표기가 갈린다(기존 호출부·테스트 더블 무변경).
+
+가공은 **마스킹(`core.masking.mask_text`) → 공백 접기 → 절단** 순서다. 접기는 로그 파일이 한 줄=한 레코드 형식이라 여러 줄 SQL 이 레코드 경계를 깨뜨리는 것을 막고, 절단은 `logging.sql.max_length`(기본 4000자) 기준이며 잘린 경우 `… (총 N자 중 M자 절단)` 을 덧붙여 **전문이 아니라는 사실을 숨기지 않는다**(표시가 없으면 로그의 SQL 을 그대로 재실행 가능한 원문으로 오해한다). 바인드 파라미터(예: `overwrite_partitions` 선삭제의 파티션 값)는 `logging.sql.params` 로 켜고 끈다.
+
+계측 지점은 소스 읽기 `backend._source_execute` 한 곳(copy·stage_insert·local_stage·s3_stage 전부 여기를 지난다)과, Greenplum 측의 statement 실행·COPY·staging DDL/DROP·INSERT·DELETE·외부테이블 DDL·CLEANUP·카탈로그 조회·`DISCARD ALL`, 그리고 `core.dbprobe` 미리보기와 executor `POST /query-run`(커스텀 함수 위임 — coordinator 가 확정한 `datasource` 를 요청에 실어 보내 executor 로그에도 엔진 이름이 남게 한다)이다.
+
+식별자 주입에는 스레드 경계 문제가 하나 있다. 블로킹 DB 호출은 `loop.run_in_executor(None, …)` 로 스레드 풀에 넘기는데, 이 API 는 `asyncio.to_thread` 와 달리 **contextvars 를 복사하지 않는다**. 그대로 넘기면 워커 스레드가 기본 컨텍스트에서 시작해 그 안의 SQL 로그가 `[-][-]` 로 남는다. 그래서 `core.logging.with_log_context(fn, *args)` 로 호출 시점의 컨텍스트를 복사해 감싼다(coordinator 의 local_stage/s3_stage Phase 2, 세그먼트 카탈로그 조회, local 모드 S3 정리). executor 쪽 task 실행은 이전부터 `contextvars.copy_context()` 로 같은 처리를 하고 있었다. 순수 함수(`collapse_sql`/`format_sql`/`format_params`)는 테스트 대상(`tests/test_sql_logging.py`).
+
 ---
 
 ## 15. 실패 처리

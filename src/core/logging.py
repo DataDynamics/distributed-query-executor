@@ -58,6 +58,31 @@ def job_log_context(job_id: str, task_id: str | None = None):
         job_id_var.reset(jtok)
 
 
+def with_log_context(fn, *args, **kwargs):
+    """현재 로그 컨텍스트(job_id/task_id)를 **다른 스레드까지** 들고 가는 무인자 콜러블을 만든다.
+
+    왜 필요한가: 블로킹 DB 호출은 ``loop.run_in_executor(None, ...)`` 로 스레드 풀에
+    넘기는데, ``run_in_executor`` 는 ``asyncio.to_thread`` 와 달리 **contextvars 를
+    복사하지 않는다**. 그대로 넘기면 워커 스레드는 기본값 컨텍스트에서 시작하므로,
+    그 안에서 찍히는 로그(특히 :mod:`core.sqllog` 의 실행 SQL)가 ``[-][-]`` 로 남아
+    "이 쿼리가 어느 job/task 의 것인가"를 잃는다.
+
+    이 함수는 **호출 시점**(= 아직 코루틴 쪽 컨텍스트)에서 컨텍스트를 복사해 두고,
+    워커 스레드에서는 그 복사본 안에서 ``fn`` 을 실행하는 클로저를 돌려준다::
+
+        rows = await loop.run_in_executor(None, with_log_context(backend.move, sql, ...))
+
+    인자:
+        fn: 스레드에서 실행할 함수.
+        *args, **kwargs: ``fn`` 에 그대로 전달할 인자.
+
+    반환:
+        ``run_in_executor`` 에 넘길 수 있는 무인자 콜러블(반환값은 ``fn`` 의 반환값).
+    """
+    ctx = contextvars.copy_context()
+    return lambda: ctx.run(fn, *args, **kwargs)
+
+
 # 메인 로그 한 줄 포맷: 레벨 / 시각(ms 포함) / PID / 서비스명(programname) /
 # 파일:함수:줄번호 / [job_id][task_id] / 메시지. job_id·task_id 는 record factory 가
 # 모든 LogRecord 에 주입하므로 포맷 문자열에서 바로 참조할 수 있다.

@@ -16,6 +16,11 @@ from typing import Protocol
 
 from core.config import is_custom_source
 from core.dbprobe import _is_missing
+from core.sqllog import datasource_of, log_sql
+
+# 적재 대상(그리고 local_stage/s3_stage 의 외부테이블·staging)이 도는 엔진 이름.
+# 실행 SQL 로그의 datasource 표기에 쓴다 — 소스(impala/trino 등)와 구분하기 위한 상수.
+GP_DATASOURCE = "greenplum"
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +284,7 @@ class _GreenplumPool:
             prev = conn.autocommit
             conn.autocommit = True  # DISCARD ALL 은 트랜잭션 블록 밖에서만 실행 가능
             try:
+                log_sql(GP_DATASOURCE, "DISCARD ALL", phase="SESSION_RESET")
                 conn.execute("DISCARD ALL")  # TEMP 테이블·SET·준비문 등 세션 상태 전부 제거
             finally:
                 conn.autocommit = prev
@@ -695,8 +701,14 @@ class ImpalaToGreenplumBackend:
 
         병합 결과가 비어 있으면(둘 다 미지정) configuration 인자를 아예 넘기지 않고
         그대로 실행한다(요청자 의도: 옵션이 없으면 기본 동작 유지).
+
+        모든 소스 읽기(copy·stage_insert·local_stage·s3_stage)가 이 한 곳을 지나므로
+        실행 SQL 로깅도 여기서 한다. datasource 는 커서에서 추론한다 — 커스텀 소스
+        어댑터면 그 이름(trino 등), impyla 커서면 impala. 덕분에 시그니처를 바꾸지 않아
+        기존 호출부·테스트 더블이 그대로 동작한다.
         """
         opts = {**self.query_options, **(query_options or {})}
+        log_sql(datasource_of(cur), sql, phase="SOURCE_SELECT")
         if opts:
             cur.execute(sql, configuration=opts)
         else:
@@ -890,7 +902,7 @@ class ImpalaToGreenplumBackend:
         with self._gp_pool.connection() as conn:
             with conn.cursor() as cur:
                 _emit(on_stage, "INSERT", "start")
-                logger.debug("statement 실행: %s", sql)
+                log_sql(GP_DATASOURCE, sql, phase="STATEMENT")
                 cur.execute(sql)
                 affected = cur.rowcount
                 _emit(on_stage, "INSERT", "end",
@@ -945,11 +957,15 @@ class ImpalaToGreenplumBackend:
                         # 이름을 여러 task 가 재사용하면 두 번째 task 부터 충돌한다. 선삭제로 세션
                         # 상태와 무관하게 멱등적으로 재생성한다. search_path 상 pg_temp 가 우선이라
                         # 동명의 영구 테이블은 건드리지 않고 이 세션의 TEMP 만 떨군다.
-                        gp_cur.execute(f"DROP TABLE IF EXISTS {staging_table}")
+                        drop_sql = f"DROP TABLE IF EXISTS {staging_table}"
+                        log_sql(GP_DATASOURCE, drop_sql, phase="STAGING_DDL", target=staging_table)
+                        gp_cur.execute(drop_sql)
+                        log_sql(GP_DATASOURCE, staging_ddl, phase="STAGING_DDL", target=staging_table)
                         gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
                         _emit(on_stage, "STAGING_DDL", "end")
                     # staging_ddl 이 없으면 생성을 건너뛰고 기존 staging_table 에 그대로 COPY.
                     copy_sql, copy_types = self._build_copy(gp_cur, staging_table, columns)
+                    log_sql(GP_DATASOURCE, copy_sql, phase="STREAM_COPY", target=staging_table)
                     logger.debug("stage_insert COPY 시작(pipeline=%s, format=%s): %s",
                                  self.pipeline, self.copy_format, copy_sql)
                     _emit(on_stage, "STREAM_COPY", "start")
@@ -962,6 +978,7 @@ class ImpalaToGreenplumBackend:
                     logger.debug("stage_insert 적재 완료(%s행) → INSERT 실행: %s",
                                  loaded, insert_sql)
                     _emit(on_stage, "INSERT", "start")
+                    log_sql(GP_DATASOURCE, insert_sql, phase="INSERT")
                     gp_cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM staging
                     affected = gp_cur.rowcount
                     _emit(on_stage, "INSERT", "end",
@@ -974,7 +991,9 @@ class ImpalaToGreenplumBackend:
                     if staging_ddl:
                         # staging_table 은 coordinator 가 CREATE/INSERT 와 같은 형태(따옴표
                         # 없는 bare 식별자)로 보낸 이름이라 그대로 DROP 한다.
-                        gp_cur.execute(f"DROP TABLE IF EXISTS {staging_table}")
+                        drop_sql = f"DROP TABLE IF EXISTS {staging_table}"
+                        log_sql(GP_DATASOURCE, drop_sql, phase="CLEANUP", target=staging_table)
+                        gp_cur.execute(drop_sql)
                         logger.debug("stage_insert staging 정리: DROP %s", staging_table)
                 _emit(on_stage, "COMMIT", "start")
                 gp.commit()
@@ -1048,12 +1067,15 @@ class ImpalaToGreenplumBackend:
             with gp.cursor() as cur:
                 if staging_ddl:
                     _emit(on_stage, "STAGING_DDL", "start")
+                    log_sql(GP_DATASOURCE, staging_ddl, phase="STAGING_DDL")
                     cur.execute(staging_ddl)  # CREATE TABLE staging (...) DISTRIBUTED BY ...
                     _emit(on_stage, "STAGING_DDL", "end")
                 _emit(on_stage, "PXF_EXTERNAL_DDL", "start")
+                log_sql(GP_DATASOURCE, external_ddl, phase="PXF_EXTERNAL_DDL")
                 cur.execute(external_ddl)  # CREATE EXTERNAL TABLE ext (...) LOCATION('file://...')
                 _emit(on_stage, "PXF_EXTERNAL_DDL", "end")
                 _emit(on_stage, "STAGE_LOAD", "start")
+                log_sql(GP_DATASOURCE, staging_load_sql, phase="STAGE_LOAD")
                 cur.execute(staging_load_sql)  # INSERT INTO staging SELECT * FROM ext (세그먼트 로컬 병렬)
                 loaded = cur.rowcount
                 _emit(on_stage, "STAGE_LOAD", "end",
@@ -1061,10 +1083,12 @@ class ImpalaToGreenplumBackend:
                 if pre_delete_sql:
                     # overwrite_partitions 멱등: 최종 INSERT 전에 대상 파티션 선삭제.
                     _emit(on_stage, "DELETE", "start")
+                    log_sql(GP_DATASOURCE, pre_delete_sql, phase="DELETE")
                     cur.execute(pre_delete_sql)
                     _emit(on_stage, "DELETE", "end",
                           {"rows": cur.rowcount if cur.rowcount and cur.rowcount > 0 else None})
                 _emit(on_stage, "INSERT", "start")
+                log_sql(GP_DATASOURCE, insert_sql, phase="INSERT")
                 cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM staging
                 affected = cur.rowcount
                 _emit(on_stage, "INSERT", "end",
@@ -1081,6 +1105,7 @@ class ImpalaToGreenplumBackend:
                 with self._gp_pool.connection() as gp:
                     with gp.cursor() as cur:
                         for sql in cleanup_sqls:
+                            log_sql(GP_DATASOURCE, sql, phase="CLEANUP")
                             cur.execute(sql)
                     gp.commit()
             except Exception:
@@ -1140,15 +1165,18 @@ class ImpalaToGreenplumBackend:
         with self._gp_pool.connection() as gp:
             with gp.cursor() as cur:
                 _emit(on_stage, "S3_EXTERNAL_DDL", "start")
+                log_sql(GP_DATASOURCE, external_ddl, phase="S3_EXTERNAL_DDL")
                 cur.execute(external_ddl)  # CREATE EXTERNAL TABLE ext (...) LOCATION('pxf://...')
                 _emit(on_stage, "S3_EXTERNAL_DDL", "end")
                 if pre_delete_sql:
                     # overwrite_partitions 멱등: 최종 INSERT 전에 대상 파티션 선삭제.
                     _emit(on_stage, "DELETE", "start")
+                    log_sql(GP_DATASOURCE, pre_delete_sql, phase="DELETE")
                     cur.execute(pre_delete_sql)
                     _emit(on_stage, "DELETE", "end",
                           {"rows": cur.rowcount if cur.rowcount and cur.rowcount > 0 else None})
                 _emit(on_stage, "INSERT", "start")
+                log_sql(GP_DATASOURCE, insert_sql, phase="INSERT")
                 cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM ext (세그먼트 병렬 read)
                 affected = cur.rowcount
                 _emit(on_stage, "INSERT", "end",
@@ -1164,6 +1192,7 @@ class ImpalaToGreenplumBackend:
                 with self._gp_pool.connection() as gp:
                     with gp.cursor() as cur:
                         for sql in cleanup_sqls:
+                            log_sql(GP_DATASOURCE, sql, phase="CLEANUP")
                             cur.execute(sql)
                     gp.commit()
             except Exception:
@@ -1186,10 +1215,12 @@ class ImpalaToGreenplumBackend:
         그대로 전파한다."""
         with self._gp_pool.connection() as gp:
             with gp.cursor() as cur:
-                cur.execute(
+                seg_sql = (
                     "SELECT hostname, count(*) FROM gp_segment_configuration "
                     "WHERE content >= 0 GROUP BY hostname"
                 )
+                log_sql(GP_DATASOURCE, seg_sql, phase="CATALOG")
+                cur.execute(seg_sql)
                 counts = {r[0]: int(r[1]) for r in cur.fetchall()}
                 logger.debug("gp_segment_configuration 호스트별 primary 세그먼트 수: %s", counts)
                 return counts
@@ -1236,14 +1267,17 @@ class ImpalaToGreenplumBackend:
                         # 묶여 commit 되므로 재실행해도 중복 없이 해당 파티션만 새 데이터로 교체.
                         _emit(on_stage, "DELETE", "start")
                         placeholders = ", ".join(["%s"] * len(partition_values))
-                        gp_cur.execute(
+                        delete_sql = (
                             f"DELETE FROM {target_table} "
-                            f"WHERE {partition_column} IN ({placeholders})",
-                            partition_values,
+                            f"WHERE {partition_column} IN ({placeholders})"
                         )
+                        log_sql(GP_DATASOURCE, delete_sql, phase="DELETE",
+                                target=target_table, params=partition_values)
+                        gp_cur.execute(delete_sql, partition_values)
                         _emit(on_stage, "DELETE", "end",
                               {"rows": gp_cur.rowcount if gp_cur.rowcount and gp_cur.rowcount > 0 else None})
                     copy_sql, copy_types = self._build_copy(gp_cur, target_table, columns)
+                    log_sql(GP_DATASOURCE, copy_sql, phase="STREAM_COPY", target=target_table)
                     logger.debug("copy COPY 시작(pipeline=%s, format=%s): %s",
                                  self.pipeline, self.copy_format, copy_sql)
                     _emit(on_stage, "STREAM_COPY", "start")
@@ -1286,16 +1320,14 @@ def _target_columns(gp_cur, target_table: str) -> list[str]:
     """
     schema, table = _split_schema_table(target_table)
     if schema:
-        gp_cur.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema=%s AND table_name=%s",
-            (schema, table),
-        )
+        sql = ("SELECT column_name FROM information_schema.columns "
+               "WHERE table_schema=%s AND table_name=%s")
+        params = (schema, table)
     else:
-        gp_cur.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name=%s",
-            (table,),
-        )
+        sql = "SELECT column_name FROM information_schema.columns WHERE table_name=%s"
+        params = (table,)
+    log_sql(GP_DATASOURCE, sql, phase="PREFLIGHT", target=target_table, params=params)
+    gp_cur.execute(sql, params)
     return [r[0] for r in gp_cur.fetchall()]
 
 
@@ -1309,13 +1341,14 @@ def _resolve_copy_types(gp_cur, table: str, columns: list[str]) -> list | None:
     temp staging 테이블도 같은 세션이면 search_path(pg_temp)로 ``regclass`` 가 해석된다.
     조회 자체가 실패하면(권한/구문 등) None 을 돌려 안전하게 텍스트로 되돌린다.
     """
+    type_sql = (
+        "SELECT a.attname, t.typname FROM pg_attribute a "
+        "JOIN pg_type t ON t.oid = a.atttypid "
+        "WHERE a.attrelid = %s::regclass AND a.attnum > 0 AND NOT a.attisdropped"
+    )
     try:
-        gp_cur.execute(
-            "SELECT a.attname, t.typname FROM pg_attribute a "
-            "JOIN pg_type t ON t.oid = a.atttypid "
-            "WHERE a.attrelid = %s::regclass AND a.attnum > 0 AND NOT a.attisdropped",
-            (table,),
-        )
+        log_sql(GP_DATASOURCE, type_sql, phase="CATALOG", target=table, params=(table,))
+        gp_cur.execute(type_sql, (table,))
         typmap = {name.lower(): typ for name, typ in gp_cur.fetchall()}
     except Exception:
         logger.warning("바이너리 COPY 타입 조회 실패 (table=%s)", table, exc_info=True)

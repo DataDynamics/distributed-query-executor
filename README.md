@@ -121,9 +121,21 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 `impala.host` 와 `greenplum.dsn` 이 모두 채워져 있으면 실제 `ImpalaToGreenplumBackend` 가 동작하고,
 둘 중 하나라도 비면 실입출력 없이 API 만 확인할 수 있는 `MockBackend` 로 자동 대체됩니다. 로깅은
 하루 단위로 파일이 갈리며, 작업 로그 앞에는 `[job_id][task_id]` 컨텍스트가 붙고 WARNING 이상만 모으는
-`*-warn.log` 가 별도로 남습니다. `app.debug=true`(또는 `log.level=DEBUG`)이면 HTTP 요청/응답도
-`core.http` 로거로 기록됩니다(비밀값 마스킹). 설정 항목의 전체 목록과 세부 동작은 `config.yml` 과
-[`docs/DESIGN.md`](docs/DESIGN.md) 를 참고하세요.
+`*-warn.log` 가 별도로 남습니다.
+
+데이터소스에 실제로 던진 SQL 은 **로그 레벨과 무관하게 INFO 로 모두** 기록됩니다(`core.sql` 로거).
+어느 엔진이 실행했는지가 `datasource=` 로 함께 남으므로, Trino 로 읽을 줄 알았던 쿼리가 Impala 로
+나간 것 같은 사고를 로그만으로 판별할 수 있습니다.
+
+```
+INFO 2026-08-07 09:51:15.091 18355 executor sqllog.py:log_sql:121 [job_abc123][task_0] - SQL 실행 datasource=trino phase=SOURCE_SELECT | SELECT a, b FROM hive.default.sales WHERE dt BETWEEN DATE '2026-07-01' AND DATE '2026-07-03'
+INFO 2026-08-07 09:51:15.091 18355 executor sqllog.py:log_sql:121 [job_abc123][task_0] - SQL 실행 datasource=greenplum phase=INSERT | INSERT INTO public.sales SELECT * FROM dwtemp.s3ext_job_abc123
+```
+
+비밀값은 마스킹되고 SQL 은 한 줄로 접혀 `log.sql.max_length`(기본 4000자)에서 잘립니다(잘린 경우
+`… (총 N자 중 M자 절단)` 이 붙습니다). 끄려면 `log.sql.enabled=false`. `app.debug=true`(또는
+`log.level=DEBUG`)이면 HTTP 요청/응답도 `core.http` 로거로 기록됩니다(비밀값 마스킹). 설정 항목의
+전체 목록과 세부 동작은 `config.yml` 과 [`docs/DESIGN.md`](docs/DESIGN.md) 를 참고하세요.
 
 ## 핵심 개념
 

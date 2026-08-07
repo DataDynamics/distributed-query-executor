@@ -35,6 +35,7 @@ from core.http_logging import install_http_logging
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
+from core.sqllog import log_sql
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
@@ -642,15 +643,22 @@ def create_app(
                 result = await asyncio.to_thread(
                     run_impala_select, dsn, req.sql,
                     query_options=settings.impala_query_options, limit=limit,
+                    datasource="impala",
                 )
             elif name == "greenplum":
                 if not settings.greenplum_dsn:
                     raise HTTPException(status_code=400, detail="greenplum.dsn 미설정")
-                result = await asyncio.to_thread(run_postgres_select, settings.greenplum_dsn, req.sql, limit=limit)
+                result = await asyncio.to_thread(
+                    run_postgres_select, settings.greenplum_dsn, req.sql,
+                    limit=limit, datasource="greenplum",
+                )
             elif name == "history":
                 if not settings.history_db_dsn:
                     raise HTTPException(status_code=400, detail="history.db_dsn(또는 monitor.db_dsn) 미설정")
-                result = await asyncio.to_thread(run_postgres_select, settings.history_db_dsn, req.sql, limit=limit)
+                result = await asyncio.to_thread(
+                    run_postgres_select, settings.history_db_dsn, req.sql,
+                    limit=limit, datasource="history",
+                )
             else:
                 raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {name}")
         except HTTPException:
@@ -683,6 +691,9 @@ def create_app(
             fn = _load_query_func(settings.query_func_module)
         except ValueError as e:
             raise HTTPException(status_code=502, detail=str(e))
+        # 커스텀 함수가 내부에서 무엇을 하든, executor 가 어떤 엔진에 어떤 SQL 을 넘겼는지는
+        # 여기서 확정적으로 남긴다(커스텀 함수의 자체 로깅 여부에 의존하지 않는다).
+        log_sql(req.datasource or "source", req.sql, phase="QUERY_EXECUTE")
         try:
             result = await asyncio.to_thread(
                 fn, req.sql, config=dict(settings.query_func_config), limit=limit

@@ -20,6 +20,8 @@ import math
 import time
 from dataclasses import dataclass
 
+from core.sqllog import log_sql
+
 # 미리보기 반환 행수 상한/기본값. 임의 SQL 이라도 응답 크기는 이 범위로 제한한다.
 MAX_PREVIEW_ROWS = 10_000
 DEFAULT_PREVIEW_ROWS = 100
@@ -172,11 +174,16 @@ def _shape(columns, raw_rows, limit: int, started: float) -> QueryResult:
     )
 
 
-def run_postgres_select(dsn: str, sql: str, *, limit: int) -> QueryResult:
+def run_postgres_select(
+    dsn: str, sql: str, *, limit: int, datasource: str = "greenplum"
+) -> QueryResult:
     """psycopg 로 PostgreSQL/Greenplum 에 ``sql`` 을 실행해 상위 ``limit`` 행을 반환한다.
 
     커밋하지 않고 연결을 닫는다(implicit rollback) — 테스트가 데이터를 영구화하지 않도록.
     행을 돌려주지 않는 SQL(SET·DDL 등)은 columns/rows 가 빈 리스트가 된다.
+
+    ``datasource`` 는 실행 SQL 로그의 엔진 표기용이다(``greenplum``/``history``).
+    같은 psycopg 경로라도 어느 DB 에 던진 쿼리인지 로그에서 구분하기 위해 받는다.
     """
     import psycopg  # 지연 임포트
 
@@ -184,6 +191,7 @@ def run_postgres_select(dsn: str, sql: str, *, limit: int) -> QueryResult:
     conn = psycopg.connect(dsn)
     try:
         with conn.cursor() as cur:
+            log_sql(datasource, sql, phase="PREVIEW")
             cur.execute(sql)
             if cur.description is None:
                 return _shape([], [], limit, started)
@@ -195,11 +203,13 @@ def run_postgres_select(dsn: str, sql: str, *, limit: int) -> QueryResult:
 
 
 def run_impala_select(
-    impala_dsn: dict, sql: str, *, query_options=None, limit: int
+    impala_dsn: dict, sql: str, *, query_options=None, limit: int,
+    datasource: str = "impala",
 ) -> QueryResult:
     """impyla 로 Impala 에 ``sql`` 을 실행해 상위 ``limit`` 행을 반환한다.
 
     ``query_options`` 가 있으면 ``configuration`` 으로 넘긴다(executor 의 백엔드와 동일).
+    ``datasource`` 는 실행 SQL 로그의 엔진 표기용이다(기본 ``impala``).
     """
     from impala.dbapi import connect as impala_connect  # 지연 임포트(executor 전용 드라이버)
 
@@ -208,6 +218,7 @@ def run_impala_select(
     try:
         cur = conn.cursor()
         opts = dict(query_options or {})
+        log_sql(datasource, sql, phase="PREVIEW")
         if opts:
             cur.execute(sql, configuration=opts)
         else:
