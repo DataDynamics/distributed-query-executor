@@ -34,6 +34,20 @@ query-execute 의 trino 경로가 이 함수에 실행을 위임한다(프레임
 
 이 예제는 표준 dbprobe 의 정형(_shape) 로직을 재사용해 ``fetchmany(limit+1)`` 로 truncated
 를 판정한다. 조직 표준(게이트웨이/래퍼/커넥션 풀 등)이 있으면 이 함수 본문만 바꾸면 된다.
+
+**커스텀 API 가 pandas DataFrame 을 돌려주는 경우**(사내 표준이 trino 드라이버가 아니라
+"SQL → DataFrame" API 인 경우)는 설정 한 줄로 그 경로를 쓴다::
+
+    query.func.config.dataframe_module=mycorp.trino_api:query
+
+그러면 ``run`` 이 ``trino.dbapi`` 커서 대신 그 함수를 호출하고, 받은 DataFrame 을 그대로
+``_shape`` 에 넘긴다(``_run_dataframe_api``). 커스텀 API 계약::
+
+    query(sql: str, *, config: dict, limit: int) -> pandas.DataFrame
+
+DataFrame 을 손으로 풀 필요가 없다 — ``_shape`` 가 컬럼명·행·truncated 를 뽑고, numpy
+스칼라(``np.int64`` 등)와 결측(``NaN``/``NaT``/``pd.NA``)을 JSON 안전한 값으로 정규화한다.
+pandas 는 이 저장소의 의존성이 아니라 덕타이핑으로 인식하므로, 쓰는 배포에만 설치하면 된다.
 """
 from __future__ import annotations
 
@@ -108,8 +122,61 @@ def _login_noninteractive(config: dict):
         return _login_session
 
 
+def _load_dotted(dotted: str):
+    """``module:func`` 또는 ``module.func`` dotted path 로 함수를 import 한다.
+
+    ``login_module`` 로딩과 같은 규약이다. 실패는 그대로 올려 executor 가 502 로 응답하게 한다.
+    """
+    mod_name, _, func_name = dotted.replace(":", ".").rpartition(".")
+    if not mod_name or not func_name:
+        raise ValueError(f"잘못된 함수 경로: {dotted!r} (module:func 형식이어야 함)")
+    return getattr(importlib.import_module(mod_name), func_name)
+
+
+def _run_dataframe_api(sql: str, *, config: dict, limit: int) -> QueryResult:
+    """사내 커스텀 API 로 Trino SQL 을 실행하고, 받은 **DataFrame** 을 그대로 정형한다.
+
+    ``query.func.config.dataframe_module`` 이 설정된 배포에서 이 경로가 쓰인다. 커스텀 API
+    계약은 이 파일의 ``run`` 과 같은 모양이되 반환만 DataFrame 이다::
+
+        def query(sql: str, *, config: dict, limit: int) -> pandas.DataFrame
+
+    ``limit`` 은 API 가 서버측으로 밀어 넣을 수 있게 함께 넘기지만, **잘림 판정과 상한
+    적용은 여기서 다시 한다**(``_shape``) — API 가 limit 을 무시해도 응답 크기가 보장된다.
+
+    DataFrame 을 직접 풀어(``itertuples`` 등) 넘길 필요는 없다. ``_shape`` 가 컬럼명·행·
+    truncated 를 뽑고, numpy 스칼라(np.int64 등)와 결측(NaN/NaT/pd.NA)을 JSON 안전한
+    값(숫자/null)으로 정규화한다. 손으로 풀면 NaN 이 그대로 새어 표준 JSON 직렬화가 깨진다.
+
+    인덱스에 의미가 있는 DataFrame 이면(예: ``set_index('dt')``) API 쪽에서
+    ``reset_index()`` 로 컬럼화해 돌려줘야 한다 — SQL 결과셋에는 인덱스 개념이 없다.
+    """
+    dotted = (config.get("dataframe_module") or "").strip()
+    started = time.perf_counter()
+    logger.info("커스텀 DataFrame API 호출: %s (limit=%s) sql=%.200s", dotted, limit, sql)
+    fn = _load_dotted(dotted)
+    try:
+        df = fn(sql, config=config, limit=limit)
+    except Exception:
+        logger.exception("커스텀 DataFrame API 실패: %s / sql=%.500s", dotted, sql)
+        raise
+    result = _shape(None, df, limit, started)
+    logger.info("커스텀 DataFrame API 완료: %d행(truncated=%s) %.0fms",
+                result.row_count, result.truncated, result.elapsed_ms)
+    return result
+
+
 def run(sql: str, *, config: dict, limit: int) -> QueryResult:
-    """config 로 지정한 Trino 에 sql 을 실행해 상위 limit 행을 반환한다."""
+    """config 로 지정한 Trino 에 sql 을 실행해 상위 limit 행을 반환한다.
+
+    실행 경로는 설정으로 갈린다:
+
+    - ``query.func.config.dataframe_module`` 이 있으면 → **커스텀 API**(DataFrame 반환)
+    - 없으면(기본) → 아래의 ``trino.dbapi`` 커서 경로
+    """
+    if (config.get("dataframe_module") or "").strip():
+        return _run_dataframe_api(sql, config=config, limit=limit)
+
     import trino  # 지연 임포트(이 예제 함수를 쓰는 배포에만 trino 패키지가 필요)
 
     # 사내 대화형 login() 이 설정돼 있으면 먼저 비대화형으로 인증한다(1회 캐시).

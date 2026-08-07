@@ -775,6 +775,43 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
 함수 책임이다(예제는 `fetchmany(limit+1)`). 참조 구현은 `customs/query_funcs/trino_runner.py` 에
 있다(표준 `dbprobe._shape` 로 정형).
 
+#### 결과가 pandas DataFrame 인 경우
+
+사내 표준이 DB-API 드라이버가 아니라 **"SQL → DataFrame" 커스텀 API** 인 경우가 흔하다.
+설정 한 줄이면 `trino_runner` 가 드라이버 대신 그 API 를 쓴다:
+
+```properties
+query.func.module=customs.query_funcs.trino_runner:run
+query.func.config.dataframe_module=mycorp.trino_api:query
+```
+```python
+# 커스텀 API 계약 — run() 과 같은 모양이되 반환만 DataFrame
+def query(sql: str, *, config: dict, limit: int) -> pandas.DataFrame: ...
+```
+
+DataFrame 을 손으로 풀 필요가 없다. `_shape(None, df, limit, started)` 에 그대로 넘기면 된다:
+
+| 입력 | 결과 |
+|---|---|
+| DataFrame | 컬럼명·행·`truncated` 자동 추출 |
+| `np.int64` · `np.bool_` · `np.ndarray` | 파이썬 `int`/`bool`/`list` |
+| `NaN` · `NaT` · `pd.NA` · `inf` | `null` |
+| 컬럼명이 정수 등 | 문자열로 정규화 |
+
+> **직접 풀면 깨진다.** `_shape(list(df.columns), list(df.itertuples(...)), ...)` 로 우회하면
+> `np.int64` 가 `'7'` 문자열로, `NaN` 이 `NaN` 리터럴로 나가 표준 JSON 직렬화가 실패한다.
+> `np.float64` 는 `float` 하위형이라 우연히 통과하므로 **컬럼 dtype 에 따라 결과가 갈린다**.
+
+동작 세부:
+
+- 상위 **`limit+1` 행만** 잘라 변환한다(커서의 `fetchmany(limit+1)` 과 같은 규약). 큰
+  DataFrame 이 와도 정형 비용은 미리보기 크기에 비례하고, 커스텀 API 가 `limit` 을 무시해도
+  응답 크기는 보장된다.
+- **인덱스는 버린다**(`index=False`). SQL 결과셋에 인덱스 개념이 없기 때문이다. 인덱스에
+  의미가 있으면 API 쪽에서 `df.reset_index()` 로 컬럼화해 돌려준다.
+- pandas 는 이 저장소의 의존성이 아니라 **덕타이핑**으로 인식한다. 쓰는 배포에만 설치하면
+  되고, 없어도 기존 커서 경로는 그대로 동작한다.
+
 ```python
 # customs/query_funcs/trino_runner.py (발췌)
 from core.dbprobe import QueryResult, _shape
