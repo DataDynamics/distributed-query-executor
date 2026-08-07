@@ -1,4 +1,4 @@
-"""Impala 읽기 / Greenplum 쓰기 백엔드.
+"""소스에서 읽어 Greenplum 에 적재하는 백엔드.
 
 실제 백엔드는 impyla + psycopg 를 사용하며, coordinator 테스트(및 로컬 개발)에서 DB
 드라이버가 필요 없도록 지연 임포트(lazy import)한다. 라이브 클러스터 없이 개발/통합
@@ -18,15 +18,15 @@ from core.config import is_custom_source
 from core.dbprobe import _is_missing
 from core.sqllog import datasource_of, log_sql
 
-# 적재 대상(그리고 local_stage/s3_stage 의 외부테이블·staging)이 도는 엔진 이름.
-# 실행 SQL 로그의 datasource 표기에 쓴다 — 소스(impala/trino 등)와 구분하기 위한 상수.
+# 적재 대상이 도는 엔진의 이름이다(local_stage·s3_stage 의 외부테이블과 staging 도 여기에 속한다).
+# 실행 SQL 로그의 datasource 표기에 쓰며, 소스(impala·trino 등)와 구분하려고 상수로 뒀다.
 GP_DATASOURCE = "greenplum"
 
 logger = logging.getLogger(__name__)
 
 
-# dotted path → 로드된 호출가능 객체 캐시. 커스텀 함수는 프로세스 수명 동안 고정이라
-# 매 task 마다 importlib 를 돌 필요가 없다.
+# dotted path 로 로드한 호출가능 객체를 캐시한다. 커스텀 함수는 프로세스가 사는 동안 고정이므로
+# task 마다 importlib 를 다시 돌릴 필요가 없다.
 _dotted_cache: dict = {}
 
 
@@ -94,7 +94,7 @@ def _one_chunk(obj):
     - **columns/rows dict**: ``{"columns": [...], "rows": [[...]]}`` (``data`` 키도 허용)
     - **``(columns, rows)`` 튜플**
     """
-    from core.dbprobe import _is_dataframe  # 지연 임포트(모듈 로드 순환 방지)
+    from core.dbprobe import _is_dataframe  # 모듈 로드 순환을 피하려고 지연 임포트한다
 
     if _is_dataframe(obj):
         cols = [str(c) for c in obj.columns]
@@ -110,7 +110,7 @@ def _one_chunk(obj):
     if isinstance(obj, (list, tuple)):
         if not obj:
             return [], []
-        if isinstance(obj[0], dict):  # records — 컬럼 순서는 첫 행의 키 순서
+        if isinstance(obj[0], dict):  # records 형태이고, 컬럼 순서는 첫 행의 키 순서를 따른다
             cols = [str(k) for k in obj[0].keys()]
             return cols, [_clean_row([d.get(c) for c in cols]) for d in obj]
     return None
@@ -162,9 +162,9 @@ def _normalize_fetch_result(result) -> tuple[list, object]:
 
 
 class _FunctionCursor:
-    """커스텀 API 결과를 **커서처럼** 보이게 감싸는 어댑터(DB-API 커서가 없는 소스용).
+    """커스텀 API 결과를 **커서처럼** 보이게 감싸는 어댑터다(DB-API 커서가 없는 소스용).
 
-    읽기 루프가 쓰는 세 가지만 제공한다: ``execute`` → ``description`` → ``fetchmany``.
+    읽기 루프가 쓰는 세 가지, 즉 ``execute`` 와 ``description`` 과 ``fetchmany`` 만 제공한다.
     실행은 커서 생성 시점이 아니라 ``execute`` 시점에 일어나 Impala 커서와 순서가 같고,
     따라서 ``IMPALA_SUBMIT``/``EXPORT_WRITE`` 단계 경계도 그대로 맞는다.
     """
@@ -193,7 +193,7 @@ class _FunctionCursor:
         logger.debug("커스텀 소스 실행: datasource=%s 컬럼=%s", self._name, cols)
 
     def fetchmany(self, size: int | None = None) -> list:
-        """요청한 행 수만큼 배치에서 꺼내 돌려준다(소진되면 빈 목록 → 루프 종료)."""
+        """요청한 행 수만큼 배치에서 꺼내 돌려준다. 소진되면 빈 목록을 주어 루프가 끝나게 한다."""
         n = max(1, int(size or self._batch_size))
         out: list = []
         while len(out) < n:
@@ -205,7 +205,7 @@ class _FunctionCursor:
             if self._batches is None:
                 break
             nxt = next(self._batches, None)
-            if nxt is None:  # 이터레이터 소진
+            if nxt is None:  # 이터레이터가 소진됐다
                 break
             self._buf = list(nxt)
         return out
@@ -216,7 +216,7 @@ class _FunctionCursor:
 
 
 class _FunctionConnection:
-    """``_FunctionCursor`` 를 내주는 최소 커넥션 어댑터(실제 연결은 없다).
+    """``_FunctionCursor`` 를 내주는 최소 커넥션 어댑터다(실제 연결은 열지 않는다).
 
     읽기 경로는 ``conn.cursor(...)`` 와 ``conn.close()`` 만 쓰므로 이 둘만 제공한다.
     ``cursor`` 는 임의 kwarg(``convert_types`` 등 impyla 전용)를 받아 무시하므로
@@ -248,7 +248,7 @@ def _emit(on_stage, name: str, event: str, meta: dict | None = None) -> None:
 
 
 class _GreenplumPool:
-    """executor 1대용 간단한 Greenplum(psycopg) 커넥션 풀 — 외부 의존성 없이 표준 라이브러리로 구현.
+    """executor 한 대가 쓰는 간단한 Greenplum(psycopg) 커넥션 풀이다. 외부 의존성 없이 표준 라이브러리로만 구현했다.
 
     왜 필요한가: 풀이 없으면 task 마다 새로 connect 하므로 (1) 동시 GP 연결 수가 제어되지
     않고(다운스트림 max_connections 압박), (2) task 마다 인증·핸드셰이크 비용을 다시 치른다.
@@ -266,26 +266,26 @@ class _GreenplumPool:
     def __init__(self, dsn: str, maxsize: int, *, connect=None):
         self._dsn = dsn
         self._maxsize = max(1, int(maxsize))
-        # 동시 "사용 중" 연결 수를 maxsize 로 제한. 슬롯이 없으면 반납될 때까지 대기.
+        # 동시에 "사용 중"인 연결 수를 maxsize 로 제한한다. 슬롯이 없으면 반납될 때까지 기다린다.
         self._sema = threading.BoundedSemaphore(self._maxsize)
-        # 유휴(반납되어 재사용 가능한) 연결 보관. LIFO 라 최근 쓴 연결을 우선 재사용(캐시 친화).
+        # 반납되어 재사용할 수 있는 유휴 연결을 보관한다. LIFO 라 최근에 쓴 연결을 먼저 재사용해 캐시에 유리하다.
         self._idle: "queue.LifoQueue" = queue.LifoQueue()
         self._connect = connect or self._default_connect
 
     def _default_connect(self):
-        import psycopg  # 지연 임포트(드라이버 선택 설치)
+        import psycopg  # 드라이버를 선택 설치하므로 지연 임포트한다
 
         return psycopg.connect(self._dsn)
 
     def _reset(self, conn) -> bool:
-        """반납된 연결의 세션 상태를 깨끗이 비운다. 성공하면 True(재사용 가능)."""
+        """반납된 연결의 세션 상태를 깨끗이 비운다. 성공하면 True 를 돌려주며 재사용할 수 있다는 뜻이다."""
         try:
-            conn.rollback()  # 혹시 열린 트랜잭션이 있으면 정리(autocommit 전환 위해 선행)
+            conn.rollback()  # 열린 트랜잭션이 있으면 정리한다(autocommit 전환보다 먼저 해야 한다)
             prev = conn.autocommit
-            conn.autocommit = True  # DISCARD ALL 은 트랜잭션 블록 밖에서만 실행 가능
+            conn.autocommit = True  # DISCARD ALL 은 트랜잭션 블록 밖에서만 실행할 수 있다
             try:
                 log_sql(GP_DATASOURCE, "DISCARD ALL", phase="SESSION_RESET")
-                conn.execute("DISCARD ALL")  # TEMP 테이블·SET·준비문 등 세션 상태 전부 제거
+                conn.execute("DISCARD ALL")  # TEMP 테이블·SET·준비문 등 세션 상태를 전부 지운다
             finally:
                 conn.autocommit = prev
             return True
@@ -303,21 +303,21 @@ class _GreenplumPool:
     @contextmanager
     def connection(self):
         """풀에서 연결을 하나 빌려 준다(없으면 생성, maxsize 도달 시 반납 대기)."""
-        self._sema.acquire()  # 동시 연결 상한 확보(필요 시 블로킹)
+        self._sema.acquire()  # 동시 연결 슬롯을 확보한다(없으면 반납될 때까지 막힌다)
         conn = None
         try:
             try:
-                conn = self._idle.get_nowait()  # 유휴 연결 재사용
+                conn = self._idle.get_nowait()  # 유휴 연결이 있으면 재사용한다
             except queue.Empty:
-                conn = self._connect()  # 없으면 새로 연결(슬롯을 이미 잡았으니 상한 내)
+                conn = self._connect()  # 없으면 새로 연결한다(슬롯을 이미 잡았으므로 상한 안이다)
             try:
                 yield conn
             except Exception:
-                # 작업 중 오류 → 트랜잭션 상태가 불확실하므로 재사용하지 않고 폐기
+                # 작업 중 오류가 났다면 트랜잭션 상태가 불확실하므로 재사용하지 않고 폐기한다.
                 self._safe_close(conn)
                 conn = None
                 raise
-            # 정상 종료 → 세션 초기화 후 유휴 풀에 반납(초기화 실패면 폐기)
+            # 정상적으로 끝났으면 세션을 초기화한 뒤 유휴 풀에 반납한다. 초기화에 실패하면 폐기한다.
             if self._reset(conn):
                 self._idle.put(conn)
             else:
@@ -336,7 +336,7 @@ class _GreenplumPool:
 
 
 class Backend(Protocol):
-    """executor 가 사용하는 적재 백엔드의 구조적 인터페이스(덕 타이핑).
+    """executor 가 쓰는 적재 백엔드의 구조적 인터페이스다(덕 타이핑).
 
     세 가지 실행 모드를 메서드로 노출한다: ``move``(copy), ``execute``(statement),
     ``stage_and_insert``(stage_insert). 실제 구현(ImpalaToGreenplumBackend)과 테스트용
@@ -354,16 +354,16 @@ class Backend(Protocol):
         query_options=None,
         on_stage=None,
     ) -> int:
-        """[copy 모드] 소스에서 sub_query를 읽어 target_table에 COPY 적재, 행 수 반환.
+        """[copy 모드] 소스에서 sub_query 를 읽어 target_table 에 COPY 로 적재하고 행 수를 돌려준다.
 
-        query_options: 이 task 의 Impala 쿼리 옵션(SET). 전역 기본값 위에 병합된다.
+        query_options 는 이 task 의 Impala 쿼리 옵션(SET)이며 전역 기본값 위에 병합된다.
         on_stage: 세부 단계 경계 콜백 ``on_stage(name, event, meta=None)``. 모니터링용이며
             None 이면 계측을 생략한다(core.phases 참고).
         """
         ...
 
     def execute(self, sql: str, on_stage=None) -> int:
-        """[statement 모드] 대상 DB에서 sql(예: INSERT ... SELECT)을 실행, 영향받은 행 수 반환."""
+        """[statement 모드] 대상 DB 에서 sql(예: INSERT ... SELECT)을 실행하고 영향받은 행 수를 돌려준다."""
         ...
 
     def stage_and_insert(
@@ -376,8 +376,8 @@ class Backend(Protocol):
         query_options=None,
         on_stage=None,
     ) -> int:
-        """[stage_insert 모드] Impala 결과를 Greenplum staging 테이블에 COPY 적재 후,
-        staging 을 소스로 하는 INSERT 를 실행한다. INSERT 영향 행 수를 반환."""
+        """[stage_insert 모드] 소스 결과를 Greenplum staging 테이블에 COPY 로 적재한 뒤,
+        staging 을 소스로 하는 INSERT 를 실행하고 그 영향 행 수를 돌려준다."""
         ...
 
     def export_to_local_csv(
@@ -390,7 +390,7 @@ class Backend(Protocol):
         on_stage=None,
         datasource=None,
     ) -> int:
-        """[local_stage 1단계] Impala SELECT 결과를 로컬 CSV 파일 하나로 스트리밍 저장, 행수 반환.
+        """[local_stage 1단계] 소스 SELECT 결과를 로컬 CSV 파일 하나로 스트리밍 저장하고 행 수를 돌려준다.
 
         executor 가 자기 호스트 로컬 디스크(out_path)에 CSV 를 떨어뜨린다. 이후 Greenplum 이
         file:// 외부테이블로 이 파일을 세그먼트 로컬에서 병렬로 읽어 적재한다(2단계).
@@ -407,21 +407,21 @@ class Backend(Protocol):
         cleanup_sqls=None,
         on_stage=None,
     ) -> int:
-        """[local_stage 2단계] file:// 외부테이블 → staging 적재 → target INSERT(coordinator 실행).
+        """[local_stage 2단계] file:// 외부테이블을 만들어 staging 에 적재하고 target 으로 INSERT 한다(coordinator 가 실행한다).
 
         coordinator 가 조립한 SQL 들을 한 GP 트랜잭션으로 실행하고, 커밋 후 cleanup 을
         best-effort 로 수행한다. INSERT 영향 행 수를 반환한다."""
         ...
 
     def segment_host_counts(self) -> dict:
-        """[local_stage 파일 예산] gp_segment_configuration 의 호스트별 primary 세그먼트 수.
+        """[local_stage 파일 예산] gp_segment_configuration 에서 호스트별 primary 세그먼트 수를 읽는다.
 
         ``{hostname: S_h}`` 를 반환한다. coordinator 가 file:// "호스트당 파일 수 ≤ S_h"
         규칙에 맞춰 파일을 호스트에 배분하는 근거다. 빈 dict 면 배분/검증을 생략한다(목)."""
         ...
 
     def segment_hosts(self) -> set:
-        """[local_stage 검증] gp_segment_configuration 의 primary 세그먼트 호스트명 집합.
+        """[local_stage 검증] gp_segment_configuration 의 primary 세그먼트 호스트명 집합을 읽는다.
 
         coordinator 가 file:// URI 의 호스트가 실제 세그먼트 호스트인지 검증하는 데 쓴다.
         빈 집합을 반환하면 검증을 생략한다(목/조회 불가 시)."""
@@ -439,7 +439,7 @@ class Backend(Protocol):
         on_stage=None,
         datasource=None,
     ) -> int:
-        """[s3_stage Phase 1] Impala SELECT 결과를 로컬 CSV 로 export 후 S3(``key``)에 업로드.
+        """[s3_stage Phase 1] 소스 SELECT 결과를 로컬 CSV 로 내린 뒤 S3 의 ``key`` 로 업로드한다.
 
         executor 가 GP 를 건드리지 않는 순수 Phase 1 이다. 로컬 임시 CSV 는 업로드 후 삭제한다.
         외부테이블 생성/INSERT(Phase 2)는 coordinator 가 배리어 후 수행한다. 반환: export 행수."""
@@ -453,19 +453,19 @@ class Backend(Protocol):
         cleanup_sqls=None,
         on_stage=None,
     ) -> int:
-        """[s3_stage Phase 2] PXF 외부테이블 생성 → (선삭제) → target INSERT(coordinator 실행).
+        """[s3_stage Phase 2] PXF 외부테이블을 만들고 필요하면 선삭제한 뒤 target 으로 INSERT 한다(coordinator 가 실행한다).
 
-        S3 객체를 세그먼트가 직접 병렬 read 하므로 staging heap 없이 external→target 으로 곧장
+        S3 객체를 세그먼트가 직접 병렬로 읽으므로 staging heap 없이 external 에서 target 으로 곧장
         INSERT 한다. 커밋 후 cleanup(외부테이블 DROP)은 best-effort. INSERT 영향 행 수 반환."""
         ...
 
     def cleanup_s3_prefix(self, prefix: str) -> int:
-        """[s3_stage Phase 3] S3 프리픽스 아래 객체를 모두 삭제한다(job 스테이징 정리). 삭제 수 반환."""
+        """[s3_stage Phase 3] S3 프리픽스 아래 객체를 모두 지워 job 스테이징을 정리하고 삭제 수를 돌려준다."""
         ...
 
 
 class MockBackend:
-    """결정적인 행 수를 반환하고 실제 I/O는 하지 않음. 개발/테스트용.
+    """정해진 행 수만 돌려주고 실제 I/O 는 하지 않는다. 개발과 테스트에 쓴다.
 
     DB 드라이버(impyla/psycopg)나 라이브 클러스터 없이 coordinator·executor 의 흐름을
     검증할 수 있게, 입력에 따라 예측 가능한 행 수만 만들어 낸다.
@@ -478,7 +478,7 @@ class MockBackend:
         self.rows_per_value = rows_per_value
 
     def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None) -> int:
-        # 파티션 값 개수 × rows_per_value 를 적재한 것으로 가정(값이 없으면 최소 1로 간주).
+        # 파티션 값 개수 × rows_per_value 만큼 적재했다고 가정한다. 값이 없으면 최소 1로 본다.
         total = max(1, len(partition_values)) * self.rows_per_value
         # 실제 I/O 는 없지만, 대시보드/테스트에서 단계 타임라인이 보이도록 합성 이벤트를 방출한다.
         _emit(on_stage, "IMPALA_SUBMIT", "start")
@@ -494,7 +494,7 @@ class MockBackend:
         return total
 
     def execute(self, sql: str, on_stage=None) -> int:
-        # statement 모드: 항상 rows_per_value 행이 영향받은 것으로 가정.
+        # statement 모드에서는 항상 rows_per_value 행이 영향받았다고 가정한다.
         _emit(on_stage, "INSERT", "start")
         _emit(on_stage, "INSERT", "end", {"rows": self.rows_per_value})
         _emit(on_stage, "COMMIT", "start")
@@ -502,7 +502,7 @@ class MockBackend:
         return self.rows_per_value
 
     def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
-        # stage_insert 모드: rows_per_value 행을 staging→target 으로 옮긴 것으로 가정.
+        # stage_insert 모드에서는 rows_per_value 행을 staging 에서 target 으로 옮겼다고 가정한다.
         _emit(on_stage, "IMPALA_SUBMIT", "start")
         _emit(on_stage, "IMPALA_SUBMIT", "end")
         if staging_ddl:
@@ -521,7 +521,7 @@ class MockBackend:
         return self.rows_per_value
 
     def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
-        # local_stage 1단계: 실제 파일은 만들지 않고 합성 단계 이벤트만 방출, rows_per_value 반환.
+        # local_stage 1단계다. 실제 파일은 만들지 않고 합성한 단계 이벤트만 방출한 뒤 rows_per_value 를 돌려준다.
         total = self.rows_per_value
         _emit(on_stage, "IMPALA_SUBMIT", "start")
         _emit(on_stage, "IMPALA_SUBMIT", "end")
@@ -532,7 +532,7 @@ class MockBackend:
         return total
 
     def load_external_csv(self, external_ddl, staging_ddl, staging_load_sql, pre_delete_sql, insert_sql, cleanup_sqls=None, on_stage=None) -> int:
-        # local_stage 2단계: 실제 GP 호출 없이 단계 이벤트만 방출하고 rows_per_value 반환.
+        # local_stage 2단계다. 실제 GP 를 호출하지 않고 단계 이벤트만 방출한 뒤 rows_per_value 를 돌려준다.
         if staging_ddl:
             _emit(on_stage, "STAGING_DDL", "start")
             _emit(on_stage, "STAGING_DDL", "end")
@@ -551,7 +551,7 @@ class MockBackend:
 
     def export_to_s3(self, impala_select, key, job_id, task_id, csv_options=None,
                      on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
-        # s3_stage Phase 1: 실제 파일/업로드 없이 단계 이벤트만 방출하고 rows_per_value 반환.
+        # s3_stage Phase 1 이다. 파일도 업로드도 없이 단계 이벤트만 방출한 뒤 rows_per_value 를 돌려준다.
         total = self.rows_per_value
         _emit(on_stage, "IMPALA_SUBMIT", "start")
         _emit(on_stage, "IMPALA_SUBMIT", "end")
@@ -565,7 +565,7 @@ class MockBackend:
 
     def load_external_s3(self, external_ddl, pre_delete_sql, insert_sql, cleanup_sqls=None,
                          on_stage=None) -> int:
-        # s3_stage Phase 2: 실제 GP 호출 없이 단계 이벤트만 방출하고 rows_per_value 반환.
+        # s3_stage Phase 2 다. 실제 GP 를 호출하지 않고 단계 이벤트만 방출한 뒤 rows_per_value 를 돌려준다.
         _emit(on_stage, "S3_EXTERNAL_DDL", "start")
         _emit(on_stage, "S3_EXTERNAL_DDL", "end")
         if pre_delete_sql:
@@ -582,16 +582,16 @@ class MockBackend:
         return 0
 
     def segment_host_counts(self) -> dict:
-        # 목: 빈 dict → coordinator 의 파일 예산 배분/호스트 검증을 건너뛰게 한다.
+        # 목이므로 빈 dict 를 돌려준다. 그러면 coordinator 가 파일 예산 배분과 호스트 검증을 건너뛴다.
         return {}
 
     def segment_hosts(self) -> set:
-        # 호스트 집합은 호스트별 카운트의 키에서 파생(목이면 빈 집합).
+        # 호스트 집합은 호스트별 카운트의 키에서 파생한다(목이면 빈 집합이 된다).
         return set(self.segment_host_counts())
 
 
 class ImpalaToGreenplumBackend:
-    """실제 백엔드: Impala 에서 스트리밍해 psycopg COPY 로 Greenplum 에 적재.
+    """실제 백엔드다. 소스에서 스트리밍해 psycopg COPY 로 Greenplum 에 적재한다.
 
     소스는 impyla(Impala) 하나다. impala_dsn 은 impyla ``connect()`` 에 그대로 전달된다
     (auth_mechanism='LDAP', user/password, use_ssl=True, ca_cert='/path/to/ca.pem').
@@ -603,7 +603,7 @@ class ImpalaToGreenplumBackend:
                  copy_format: str = "text", stage_convert_types: bool = False,
                  s3_config: dict | None = None, s3_client=None,
                  source_fetch_module: str = "", source_func_config: dict | None = None):
-        # Impala 소스 접속 dict(impyla connect 에 그대로 전달).
+        # Impala 소스 접속 정보다. impyla 의 connect 에 그대로 넘긴다.
         self.impala_dsn = impala_dsn
         # 커서 없는 커스텀 소스(사내 API) 실행 함수와 그 설정. 비어 있으면(기본) 모든 읽기가
         # 예전처럼 Impala 커서로 간다 — job 의 datasource 가 impala 가 아닐 때만 쓰인다.
@@ -619,7 +619,7 @@ class ImpalaToGreenplumBackend:
         # copy 모드 COPY 전에 SELECT 컬럼이 대상 테이블에 존재하는지 사전검증할지 여부.
         # 대용량 스트리밍을 시작하기 전에 컬럼 불일치를 잡아 빠르게 실패시킨다.
         self.copy_preflight = copy_preflight
-        # COPY 파이프라인: Impala 읽기와 GP 쓰기를 별도 스레드로 겹칠지 여부 + 큐 크기.
+        # COPY 파이프라인 설정이다. 소스 읽기와 GP 쓰기를 별도 스레드로 겹칠지 여부와 큐 크기를 정한다.
         self.pipeline = pipeline
         self.queue_size = max(1, int(queue_size))
         # COPY 포맷(text|binary). binary 는 텍스트 인코딩을 건너뛰어 클라이언트 CPU 를 줄인다.
@@ -635,7 +635,7 @@ class ImpalaToGreenplumBackend:
     def _get_s3_client(self):
         """s3_stage 용 S3 클라이언트를 지연 생성해 반환한다(미구성이면 명확히 실패)."""
         if self._s3_client is None:
-            from executor.s3_client import build_s3_client  # 지연 임포트(옵션 의존성)
+            from executor.s3_client import build_s3_client  # 선택 의존성이라 지연 임포트한다
 
             self._s3_client = build_s3_client(self.s3_config)
         if self._s3_client is None:
@@ -646,10 +646,10 @@ class ImpalaToGreenplumBackend:
         return self._s3_client
 
     def _source_connect(self, datasource: str | None = None):
-        """소스 연결을 연다. 기본은 Impala(impyla 커서)이고, datasource 가 지정되면 커스텀 API.
+        """소스 연결을 연다. 기본은 Impala 의 impyla 커서이고, datasource 를 주면 커스텀 API 를 쓴다.
 
-        - ``impala``/``source``/미지정 → impyla 연결(기존 경로 그대로).
-        - 그 외 이름 → ``query.func.fetch_module`` 커스텀 함수를 커서처럼 감싼
+        - ``impala``·``source``·미지정이면 impyla 로 연결한다(기존 경로 그대로).
+        - 그 밖의 이름이면 ``query.func.fetch_module`` 커스텀 함수를 커서처럼 감싼
           :class:`_FunctionConnection`. **DB-API 커서가 없는 소스**(사내 API)를 위한 통로다.
 
         설정이 없으면 조용히 Impala 로 폴백하지 않고 명확히 실패한다 — Trino 로 읽는 줄 알고
@@ -676,7 +676,7 @@ class ImpalaToGreenplumBackend:
             "Impala 연결 시도: host=%s port=%s",
             self.impala_dsn.get("host"), self.impala_dsn.get("port"),
         )
-        from impala.dbapi import connect as impala_connect  # 지연 임포트
+        from impala.dbapi import connect as impala_connect  # 드라이버가 없을 수 있어 지연 임포트한다
 
         return impala_connect(**self.impala_dsn)
 
@@ -734,7 +734,7 @@ class ImpalaToGreenplumBackend:
         return f"COPY {table} ({col_list}) FROM STDIN", None
 
     def _stream_to_copy(self, cur, gp_cur, copy_sql: str, on_progress, types=None):
-        """Impala 결과를 Greenplum COPY(STDIN)로 흘려보낸다. 설정에 따라 파이프라인/직렬 선택.
+        """소스 결과를 Greenplum COPY(STDIN)로 흘려보낸다. 설정에 따라 파이프라인과 직렬 중에 고른다.
 
         types 가 있으면(바이너리 COPY) copy 진입 후 ``set_types`` 로 각 컬럼 타입을 지정한다.
         반환: (적재 행수, read_wait, write_wait, finalize_wait, read_starve) — 초 단위.
@@ -745,7 +745,7 @@ class ImpalaToGreenplumBackend:
         return self._stream_serial(cur, gp_cur, copy_sql, on_progress, types)
 
     def _stream_serial(self, cur, gp_cur, copy_sql: str, on_progress, types=None):
-        """직렬 스트리밍(한 스레드): fetch→write 를 번갈아 수행. read_starve 는 0.
+        """한 스레드로 직렬 스트리밍한다. fetch 와 write 를 번갈아 수행하므로 read_starve 는 언제나 0 이다.
 
         읽기·쓰기가 교차 실행되므로 구간별 시간을 따로 누적한다:
         - ``read_wait``  : ``fetchmany`` — Impala 가 행을 보내 줄 때까지 대기(소스 지연).
@@ -760,16 +760,16 @@ class ImpalaToGreenplumBackend:
         t_end = time.monotonic()
         with gp_cur.copy(copy_sql) as copy:
             if types:
-                copy.set_types(types)  # 바이너리 COPY: 각 컬럼의 PG 타입을 지정
+                copy.set_types(types)  # 바이너리 COPY 라 각 컬럼의 PG 타입을 지정한다
             while True:
                 t = time.monotonic()
-                batch = cur.fetchmany(self.batch_size)   # Impala 읽기
+                batch = cur.fetchmany(self.batch_size)   # 소스에서 읽는다
                 read_wait += time.monotonic() - t
                 if not batch:
                     break
                 t = time.monotonic()
                 for row in batch:
-                    copy.write_row(row)                  # Greenplum 쓰기(버퍼 인코딩+송신)
+                    copy.write_row(row)                  # Greenplum 으로 쓴다(버퍼 인코딩 + 송신)
                 write_wait += time.monotonic() - t
                 loaded += len(batch)
                 if on_progress:
@@ -779,7 +779,7 @@ class ImpalaToGreenplumBackend:
         return loaded, read_wait, write_wait, finalize_wait, 0.0
 
     def _stream_pipelined(self, cur, gp_cur, copy_sql: str, on_progress, types=None):
-        """파이프라인 스트리밍(2스레드): 리더가 배치를 큐에 채우고, 라이터(현재 스레드)가 COPY.
+        """두 스레드로 파이프라인 스트리밍한다. 리더가 배치를 큐에 채우고 라이터(현재 스레드)가 COPY 한다.
 
         읽기(Impala fetch)와 쓰기(GP COPY)를 겹쳐 실행해 벽시계를 줄인다. 큐는 bounded 라
         한쪽이 느리면 자연히 backpressure 가 걸린다(메모리 ≈ queue_size × batch_size 행).
@@ -789,9 +789,9 @@ class ImpalaToGreenplumBackend:
         이미 읽었고, thread.start() 가 메모리 배리어라 안전하다.
 
         진단 지표(라이터 관점에서 벽시계를 분해):
-        - ``read_starve`` : 라이터가 다음 배치를 기다리며 큐가 빌 때 막힌 시간 → **Impala 가
-          못 따라와** 라이터가 굶는 시간. 크면 소스(Impala)가 병목.
-        - ``write_wait``  : 라이터가 실제 ``write_row`` 에 쓴 시간 → GP 쓰기 비용.
+        - ``read_starve`` 는 라이터가 다음 배치를 기다리며 큐가 비어 막힌 시간이다. 곧 **소스가
+          못 따라와** 라이터가 굶는 시간이므로, 이 값이 크면 소스가 병목이다.
+        - ``write_wait`` 은 라이터가 실제로 ``write_row`` 에 쓴 시간이고 곧 GP 쓰기 비용이다.
         - ``finalize_wait`` : COPY 종료(서버 ingest 완료) 대기.
         대략 ``duration ≈ read_starve + write_wait + finalize`` 로, 어느 항이 큰지가 곧 병목이다.
         ``read_wait`` (리더의 순수 fetch 시간)은 참고용으로 함께 보고한다.
@@ -842,10 +842,10 @@ class ImpalaToGreenplumBackend:
         try:
             with gp_cur.copy(copy_sql) as copy:
                 if types:
-                    copy.set_types(types)  # 바이너리 COPY: 각 컬럼의 PG 타입을 지정
+                    copy.set_types(types)  # 바이너리 COPY 라 각 컬럼의 PG 타입을 지정한다
                 while True:
                     t = time.monotonic()
-                    batch = q.get()               # 큐가 비면 대기 = Impala 를 기다리며 굶는 시간
+                    batch = q.get()               # 큐가 비면 대기한다. 이 시간이 곧 소스를 기다리며 굶는 시간이다
                     read_starve += time.monotonic() - t
                     if batch is None:
                         break
@@ -882,7 +882,7 @@ class ImpalaToGreenplumBackend:
         겹치므로 라이터 관점의 read_starve(=Impala 대기)+write_wait+finalize 가 벽시계에 가깝다.
         rows_per_sec 는 실제 벽시계 근사값(파이프라인이면 겹침 반영)으로 계산한다.
         """
-        wall = max(read_starve + write_wait + finalize_wait,  # 파이프라인 벽시계 근사
+        wall = max(read_starve + write_wait + finalize_wait,  # 파이프라인 벽시계에 가까운 값
                    read_wait + write_wait + finalize_wait)     # 직렬 벽시계
         return {
             "rows": loaded,
@@ -894,7 +894,7 @@ class ImpalaToGreenplumBackend:
         }
 
     def execute(self, sql: str, on_stage=None) -> int:
-        """statement 모드: 대상 Greenplum 에서 SQL(예: INSERT ... SELECT)을 그대로 실행.
+        """statement 모드에서 대상 Greenplum 에 SQL(예: INSERT ... SELECT)을 그대로 실행한다.
 
         COPY를 쓰지 않으므로 컬럼 매핑은 SQL(INSERT 컬럼 목록/SELECT)이 책임진다.
         반환값은 cursor.rowcount(영향받은 행 수, 미지원 시 0).
@@ -915,7 +915,7 @@ class ImpalaToGreenplumBackend:
         return rows
 
     def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
-        """Impala SELECT → Greenplum staging(TEMP) COPY 적재 → staging→target INSERT.
+        """소스 SELECT 결과를 Greenplum staging(TEMP)에 COPY 로 넣고, 다시 staging 에서 target 으로 INSERT 한다.
 
         한 Greenplum 세션(연결) 안에서 CREATE TEMP TABLE → COPY → INSERT 를 수행하므로
         TEMP 테이블이 INSERT 시점까지 보인다. INSERT 직후(같은 트랜잭션) staging_table 을
@@ -963,7 +963,7 @@ class ImpalaToGreenplumBackend:
                         log_sql(GP_DATASOURCE, staging_ddl, phase="STAGING_DDL", target=staging_table)
                         gp_cur.execute(staging_ddl)  # CREATE TEMP TABLE <staging_table> (...)
                         _emit(on_stage, "STAGING_DDL", "end")
-                    # staging_ddl 이 없으면 생성을 건너뛰고 기존 staging_table 에 그대로 COPY.
+                    # staging_ddl 이 없으면 생성을 건너뛰고 기존 staging_table 에 그대로 COPY 한다.
                     copy_sql, copy_types = self._build_copy(gp_cur, staging_table, columns)
                     log_sql(GP_DATASOURCE, copy_sql, phase="STREAM_COPY", target=staging_table)
                     logger.debug("stage_insert COPY 시작(pipeline=%s, format=%s): %s",
@@ -971,7 +971,7 @@ class ImpalaToGreenplumBackend:
                     _emit(on_stage, "STREAM_COPY", "start")
                     loaded, read_wait, write_wait, finalize_wait, read_starve = \
                         self._stream_to_copy(cur, gp_cur, copy_sql, on_progress, copy_types)
-                    # STREAM_COPY 종료 = Impala 조회 완료 시점, loaded = 읽은(=staging 적재) 건수.
+                    # STREAM_COPY 가 끝나는 시점이 곧 소스 조회 완료 시점이고, loaded 는 읽어서 staging 에 넣은 건수다.
                     _emit(on_stage, "STREAM_COPY", "end",
                           self._copy_stats(loaded, read_wait, write_wait,
                                            finalize_wait, read_starve))
@@ -983,11 +983,11 @@ class ImpalaToGreenplumBackend:
                     affected = gp_cur.rowcount
                     _emit(on_stage, "INSERT", "end",
                           {"rows": affected if affected and affected > 0 else loaded})
-                    # 이번 실행에 우리가 만든(staging_ddl 있는) staging 을 같은 트랜잭션 안에서
-                    # 드롭한다 → 커밋 시 확정되어, 커넥션 풀 재사용 시 잔존 TEMP 로 인한 다음
-                    # task 의 "already exists" 를 원천 차단(DISCARD ALL 동작에 의존하지 않음).
-                    # staging_ddl 이 없으면(기존 영구 테이블에 직접 COPY) 사용자 테이블이므로
-                    # 절대 드롭하지 않는다.
+                    # 이번 실행에서 우리가 만든 staging(staging_ddl 이 있는 경우)을 같은 트랜잭션 안에서
+                    # 드롭한다. 그래야 커밋 시점에 확정되어, 커넥션 풀이 세션을 재사용해도 잔존 TEMP
+                    # 때문에 다음 task 가 "already exists" 로 깨지지 않는다(DISCARD ALL 의 동작에
+                    # 기대지 않는다). staging_ddl 이 없다면 기존 영구 테이블에 직접 COPY 한 것이라
+                    # 사용자 테이블이므로 절대 드롭하지 않는다.
                     if staging_ddl:
                         # staging_table 은 coordinator 가 CREATE/INSERT 와 같은 형태(따옴표
                         # 없는 bare 식별자)로 보낸 이름이라 그대로 DROP 한다.
@@ -1003,7 +1003,7 @@ class ImpalaToGreenplumBackend:
             impala_conn.close()
 
     def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
-        """local_stage 1단계: Impala SELECT 결과를 out_path 의 로컬 CSV 파일로 스트리밍 저장.
+        """local_stage 1단계로, 소스 SELECT 결과를 out_path 의 로컬 CSV 파일에 스트리밍 저장한다.
 
         impyla 커서를 batch_size 단위로 fetch 하며 표준 라이브러리 ``csv`` 로 한 줄씩 쓴다.
         전체 결과를 메모리에 올리지 않는다. CSV 방언(delimiter/null/quote)은 GP file:// 외부
@@ -1053,10 +1053,10 @@ class ImpalaToGreenplumBackend:
             impala_conn.close()
 
     def load_external_csv(self, external_ddl, staging_ddl, staging_load_sql, pre_delete_sql, insert_sql, cleanup_sqls=None, on_stage=None) -> int:
-        """local_stage 2단계: file:// 외부테이블 생성 → staging 적재 → target INSERT.
+        """local_stage 2단계로, file:// 외부테이블을 만들어 staging 에 적재한 뒤 target 으로 INSERT 한다.
 
         coordinator 가 조립한 SQL 을 한 GP 트랜잭션으로 순서대로 실행한다:
-          (staging_ddl?) → external_ddl → staging_load_sql → (pre_delete_sql?) → insert_sql
+          staging_ddl(선택), external_ddl, staging_load_sql, pre_delete_sql(선택), insert_sql 순이다.
         커밋 뒤 cleanup_sqls(외부테이블 DROP 등)를 별도 트랜잭션에서 best-effort 로 수행한다
         (실패해도 적재 결과에는 영향이 없으므로 로깅만 한다). 반환: INSERT 영향 행 수.
 
@@ -1076,12 +1076,12 @@ class ImpalaToGreenplumBackend:
                 _emit(on_stage, "PXF_EXTERNAL_DDL", "end")
                 _emit(on_stage, "STAGE_LOAD", "start")
                 log_sql(GP_DATASOURCE, staging_load_sql, phase="STAGE_LOAD")
-                cur.execute(staging_load_sql)  # INSERT INTO staging SELECT * FROM ext (세그먼트 로컬 병렬)
+                cur.execute(staging_load_sql)  # 세그먼트가 로컬 파일을 병렬로 읽어 staging 에 넣는다
                 loaded = cur.rowcount
                 _emit(on_stage, "STAGE_LOAD", "end",
                       {"rows": loaded if loaded and loaded > 0 else None})
                 if pre_delete_sql:
-                    # overwrite_partitions 멱등: 최종 INSERT 전에 대상 파티션 선삭제.
+                    # overwrite_partitions 의 멱등성을 위해 최종 INSERT 전에 대상 파티션을 먼저 지운다.
                     _emit(on_stage, "DELETE", "start")
                     log_sql(GP_DATASOURCE, pre_delete_sql, phase="DELETE")
                     cur.execute(pre_delete_sql)
@@ -1098,7 +1098,7 @@ class ImpalaToGreenplumBackend:
             _emit(on_stage, "COMMIT", "end")
         logger.debug("local_stage load 완료: file:// 외부테이블→staging→target INSERT %s행 커밋",
                      affected)
-        # 정리(외부테이블 DROP 등)는 별도 트랜잭션 + best-effort. 실패해도 적재는 이미 커밋됨.
+        # 외부테이블 DROP 같은 정리는 별도 트랜잭션에서 best-effort 로 한다. 실패해도 적재는 이미 커밋된 상태다.
         if cleanup_sqls:
             _emit(on_stage, "CLEANUP", "start")
             try:
@@ -1130,14 +1130,14 @@ class ImpalaToGreenplumBackend:
         local_root = self.s3_config.get("local_tmp_dir") or "/tmp"
         out_path = os.path.join(local_root, job_id, f"{task_id}.csv")
         try:
-            # 1) Impala SELECT → 로컬 임시 CSV(IMPALA_SUBMIT/EXPORT_WRITE 이벤트는 export 가 방출).
+            # 1) 소스 SELECT 결과를 로컬 임시 CSV 로 내린다(IMPALA_SUBMIT·EXPORT_WRITE 이벤트는 export 가 방출한다).
             rows = self.export_to_local_csv(
                 impala_select, out_path, csv_options, on_progress,
                 query_options=query_options, on_stage=on_stage,
-                # 커스텀 소스일 때만 인자를 붙인다 — impala 면 호출이 예전과 완전히 동일.
+                # 커스텀 소스일 때만 인자를 붙인다. impala 면 호출 모양이 예전과 완전히 같아진다.
                 **({"datasource": datasource} if is_custom_source(datasource) else {}),
             )
-            # 2) 로컬 CSV → S3 업로드 후 로컬 파일 즉시 삭제(로컬 디스크를 비운다).
+            # 2) 로컬 CSV 를 S3 에 올린 뒤 로컬 파일을 곧바로 지워 디스크를 비운다.
             _emit(on_stage, "S3_UPLOAD", "start")
             self._get_s3_client().upload(out_path, key)
             _emit(on_stage, "S3_UPLOAD", "end", {"rows": rows})
@@ -1169,7 +1169,7 @@ class ImpalaToGreenplumBackend:
                 cur.execute(external_ddl)  # CREATE EXTERNAL TABLE ext (...) LOCATION('pxf://...')
                 _emit(on_stage, "S3_EXTERNAL_DDL", "end")
                 if pre_delete_sql:
-                    # overwrite_partitions 멱등: 최종 INSERT 전에 대상 파티션 선삭제.
+                    # overwrite_partitions 의 멱등성을 위해 최종 INSERT 전에 대상 파티션을 먼저 지운다.
                     _emit(on_stage, "DELETE", "start")
                     log_sql(GP_DATASOURCE, pre_delete_sql, phase="DELETE")
                     cur.execute(pre_delete_sql)
@@ -1177,7 +1177,7 @@ class ImpalaToGreenplumBackend:
                           {"rows": cur.rowcount if cur.rowcount and cur.rowcount > 0 else None})
                 _emit(on_stage, "INSERT", "start")
                 log_sql(GP_DATASOURCE, insert_sql, phase="INSERT")
-                cur.execute(insert_sql)  # INSERT INTO target SELECT ... FROM ext (세그먼트 병렬 read)
+                cur.execute(insert_sql)  # 세그먼트가 S3 객체를 병렬로 읽어 target 에 넣는다
                 affected = cur.rowcount
                 _emit(on_stage, "INSERT", "end",
                       {"rows": affected if affected and affected > 0 else None})
@@ -1185,7 +1185,7 @@ class ImpalaToGreenplumBackend:
             gp.commit()
             _emit(on_stage, "COMMIT", "end")
         logger.debug("s3_stage Phase 2 완료: pxf 외부테이블→target INSERT %s행 커밋", affected)
-        # 정리(외부테이블 DROP)는 별도 트랜잭션 + best-effort. 실패해도 적재는 이미 커밋됨.
+        # 외부테이블 DROP 정리는 별도 트랜잭션에서 best-effort 로 한다. 실패해도 적재는 이미 커밋된 상태다.
         if cleanup_sqls:
             _emit(on_stage, "CLEANUP", "start")
             try:
@@ -1254,17 +1254,18 @@ class ImpalaToGreenplumBackend:
 
             with self._gp_pool.connection() as gp:
                 with gp.cursor() as gp_cur:
-                    # 사전검증(preflight): COPY 로 한 행도 흘려보내기 전에, Impala SELECT 가
-                    # 내는 컬럼이 모두 대상 테이블에 존재하는지 확인한다. 불일치면 여기서
-                    # 명확한 에러로 즉시 실패(런타임 COPY 오류로 대용량 읽기 후 깨지는 것 방지).
+                    # COPY 로 한 행도 흘려보내기 전에 사전검증(preflight)을 한다. 소스 SELECT 가
+                    # 내는 컬럼이 모두 대상 테이블에 있는지 확인하고, 맞지 않으면 여기서 명확한
+                    # 오류로 즉시 실패시킨다. 대용량을 다 읽고 나서 런타임 COPY 오류로 깨지는
+                    # 것을 막기 위해서다.
                     if self.copy_preflight:
                         _emit(on_stage, "PREFLIGHT", "start")
                         target_cols = _target_columns(gp_cur, target_table)
                         _check_copy_columns(columns, target_cols, target_table)
                         _emit(on_stage, "PREFLIGHT", "end")
                     if write_mode == "overwrite_partitions" and partition_values:
-                        # 멱등성: 적재 대상 파티션을 먼저 삭제 → DELETE+COPY 가 같은 트랜잭션에
-                        # 묶여 commit 되므로 재실행해도 중복 없이 해당 파티션만 새 데이터로 교체.
+                        # 멱등성을 위해 적재 대상 파티션을 먼저 지운다. DELETE 와 COPY 가 같은 트랜잭션에
+                        # 묶여 커밋되므로, 다시 실행해도 중복 없이 그 파티션만 새 데이터로 교체된다.
                         _emit(on_stage, "DELETE", "start")
                         placeholders = ", ".join(["%s"] * len(partition_values))
                         delete_sql = (
@@ -1301,7 +1302,7 @@ class ImpalaToGreenplumBackend:
 
 
 def _split_schema_table(target_table: str) -> tuple[str, str]:
-    """``schema.table`` 을 (schema, table) 로 분리한다(스키마 없으면 ('', table)).
+    """``schema.table`` 을 (schema, table) 로 나눈다. 스키마가 없으면 ('', table) 이 된다.
 
     따옴표는 제거하고, 점이 여러 개면 마지막을 테이블, 그 앞을 스키마로 본다.
     """
@@ -1363,7 +1364,7 @@ def _resolve_copy_types(gp_cur, table: str, columns: list[str]) -> list | None:
 
 
 def _check_copy_columns(select_columns, target_columns, target_table: str) -> None:
-    """copy 모드 COPY 전 컬럼 정합성 검사(순수 함수 — DB 없이 단위 테스트 가능).
+    """copy 모드에서 COPY 하기 전에 컬럼 정합성을 검사한다(순수 함수라 DB 없이 단위 테스트할 수 있다).
 
     Impala SELECT 가 내는 각 컬럼명이 대상 테이블에 존재하는지(대소문자 무시) 확인한다.
     없는 컬럼이 있으면 ``ValueError`` 로 명확한 사유를 올려 조기 실패시킨다.
@@ -1454,7 +1455,7 @@ def build_backend(settings) -> Backend:
             copy_format=getattr(settings, "copy_format", "text"),
             stage_convert_types=getattr(settings, "stage_impala_convert_types", False),
             s3_config=build_s3_config(settings),
-            # 커서 없는 커스텀 소스(job.datasource 가 impala 가 아닐 때) 실행 함수·설정.
+            # 커서가 없는 커스텀 소스를 실행할 함수와 설정이다(job.datasource 가 impala 가 아닐 때 쓴다).
             source_fetch_module=getattr(settings, "query_func_fetch_module", ""),
             source_func_config=getattr(settings, "query_func_config", None),
         )

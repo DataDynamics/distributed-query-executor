@@ -1,4 +1,4 @@
-"""Coordinator FastAPI 애플리케이션 팩토리.
+"""Coordinator FastAPI 애플리케이션을 만드는 팩토리 모듈이다.
 
 이 모듈은 분산 쿼리 Coordinator의 HTTP API를 구성하는 진입점이다. 핵심 책임은
 다음과 같다.
@@ -11,7 +11,7 @@
 - **상태/결과 조회 및 취소**: job/task 단위 상태·진행률·결과 조회와 취소 API를 제공.
 - **모니터링**: coordinator/executor 헬스·시스템 메트릭, 클러스터 요약, 대시보드.
 
-Coordinator 자신은 쿼리 결과 행을 받지 않는다. 실제 데이터 이동(Impala→Greenplum)은
+Coordinator 자신은 쿼리 결과 행을 받지 않는다. 실제 데이터 이동(소스에서 Greenplum 으로)은
 executor가 수행하고, 여기서는 분배·상태추적·집계만 담당한다.
 
 `create_app()`은 의존성(runner/store/settings)을 주입받는 팩토리로, 테스트에서
@@ -110,10 +110,10 @@ def _query_params_to_dict(params: list) -> dict:
 
 
 def _split_params(params) -> tuple[dict, dict]:
-    """요청 params 를 ``(값 dict, 부호 dict)`` 로 가른다 — dict/배열 두 형태를 모두 받는다.
+    """요청 params 를 값 dict 와 부호 dict 로 가른다. dict 와 배열 두 형태를 모두 받는다.
 
-    - ``{"region": "KR"}`` (하위 호환, 부호 없음) → ``({"region": "KR"}, {})``
-    - ``[{"name": "from_date_no", "value": 7, "sign": "-"}, ...]`` → 값과 부호를 분리
+    - ``{"region": "KR"}`` 처럼 dict 면 부호가 없으므로 ``({"region": "KR"}, {})`` 가 된다(하위 호환).
+    - ``[{"name": "from_date_no", "value": 7, "sign": "-"}, ...]`` 처럼 배열이면 값과 부호를 나눈다.
 
     부호는 값에 적용하지 **않는다**. ``sign`` 은 SQL 연산자의 방향(``- interval``)을
     뜻하므로 값에 다시 붙이면 이중 적용이 된다. 렌더 컨텍스트에는 :func:`_render_params`
@@ -141,7 +141,7 @@ def _split_params(params) -> tuple[dict, dict]:
 
 
 def _render_params(values: dict, signs: dict) -> dict:
-    """값 dict + 부호 dict → 렌더 컨텍스트(부호는 ``<name>_sign`` 으로 노출).
+    """값 dict 와 부호 dict 를 합쳐 렌더 컨텍스트를 만든다. 부호는 ``<name>_sign`` 이름으로 노출한다.
 
     템플릿은 ``current_date() {{ from_date_no_sign | sql_sign }} interval
     {{ from_date_no | sql_num }} day`` 처럼 연산자 방향을 데이터로 받는다.
@@ -151,7 +151,7 @@ def _render_params(values: dict, signs: dict) -> dict:
     return ctx
 
 
-# 템플릿 렌더 시 manifest 기본값과 병합하는 스칼라 필드(요청이 명시하면 요청이 이긴다).
+# 템플릿을 렌더할 때 manifest 기본값과 병합할 스칼라 필드다. 요청이 명시하면 요청이 이긴다.
 _TEMPLATE_SCALAR_KEYS = (
     "exec_mode", "partition_column", "target_table", "staging_table",
     "write_mode", "split_strategy", "failure_policy", "parallelism",
@@ -165,10 +165,10 @@ _MAX_FANOUT_TASKS = 366
 
 
 def _param_offset(name: str, value, sign: Optional[str]) -> int:
-    """(값, 부호) → 오늘 기준 **부호 있는 오프셋(일)**.
+    """(값, 부호) 쌍에서 오늘을 기준으로 한 **부호 있는 오프셋(일)** 을 구한다.
 
-    ``sign`` 이 있으면 값은 크기로만 보고 부호는 sign 이 결정한다(``value:7, sign:"-"``
-    → ``-7``). ``sign`` 이 없으면 값 자체의 부호를 쓴다(``value:-7`` → ``-7``). 이렇게
+    ``sign`` 이 있으면 값은 크기로만 보고 부호는 sign 이 결정하므로 ``value:7, sign:"-"``
+    은 ``-7`` 이 된다. ``sign`` 이 없으면 값 자체의 부호를 쓰므로 ``value:-7`` 도 ``-7`` 이다. 이렇게
     두 표기가 같은 뜻이 되어, 부호가 SQL 에 박힌 쿼리(``- interval 7 day``)와 값에
     부호가 있는 쿼리를 같은 방식으로 다룰 수 있다.
     """
@@ -187,15 +187,16 @@ def _param_offset(name: str, value, sign: Optional[str]) -> int:
 def _compute_task_offsets(lo: int, hi: int, bound: str) -> list[tuple[int, int]]:
     """구간 ``[lo, hi]`` 를 하루 단위 task 의 ``(시작 오프셋, 끝 오프셋)`` 목록으로 자른다.
 
-    ``bound`` 가 task 하나의 폭을 정한다 — 어느 쪽이 맞는지는 **템플릿의 비교식**이 결정한다:
+    ``bound`` 가 task 하나의 폭을 정하며, 어느 쪽이 맞는지는 **템플릿의 비교식**이 결정한다.
 
-    - ``point``: ``(d, d)``. ``BETWEEN a AND b``(양끝 포함)나 ``= a`` 처럼 경계를 모두
-      포함하는 비교용. task 수 = 날짜 수. 예 ``[-7, 1]`` → 9개.
-    - ``pair`` : ``(d, d+1)``. ``>= a AND < b``(반열림) 비교용. 경계 중복 없이 이어붙는다.
-      task 수 = 날짜 수 - 1. 예 ``[-7, 1]`` → 8개.
+    - ``point`` 는 ``(d, d)`` 로, ``BETWEEN a AND b`` 나 ``= a`` 처럼 경계를 모두 포함하는
+      비교에 쓴다. task 수가 날짜 수와 같아서 ``[-7, 1]`` 이면 9개가 된다.
+    - ``pair`` 는 ``(d, d+1)`` 로, ``>= a AND < b`` 같은 반열림 비교에 쓴다. 경계가 겹치지
+      않고 이어붙으며 task 수는 날짜 수보다 하나 적어서 ``[-7, 1]`` 이면 8개가 된다.
 
-    잘못 고르면 조용히 틀린다(point + 반열림 → 0행, pair + BETWEEN → 경계 날짜 중복
-    적재). 그래서 manifest 가 자기 SQL 에 맞는 값을 못 박아 두는 것을 권한다.
+    잘못 고르면 오류 없이 조용히 틀린다. point 에 반열림을 쓰면 0행이 나오고, pair 에
+    BETWEEN 을 쓰면 경계 날짜가 중복 적재된다. 그래서 manifest 가 자기 SQL 에 맞는 값을
+    못 박아 두기를 권한다.
     """
     pairs = ([(d, d) for d in range(lo, hi + 1)] if bound == "point"
              else [(d, d + 1) for d in range(lo, hi)])
@@ -215,7 +216,7 @@ def _compute_task_offsets(lo: int, hi: int, bound: str) -> list[tuple[int, int]]
 
 
 def _offset_value_sign(offset: int) -> tuple[int, str]:
-    """오프셋 → ``(절대값, 부호)``. Impala ``interval`` 이 절대값만 받으므로 부호를 분리한다."""
+    """오프셋을 ``(절대값, 부호)`` 로 나눈다. Impala 의 ``interval`` 이 절대값만 받기 때문이다."""
     return abs(offset), ("-" if offset < 0 else "+")
 
 
@@ -248,7 +249,7 @@ def _validate_sign_contract(engine: TemplateEngine, template_id: str, names: lis
 def _build_fanout(
     req: "CreateJobRequest", engine: Optional[TemplateEngine], today, *, default_dialect: str
 ) -> list:
-    """날짜 fan-out: task_params 가 가리키는 두 끝 → 하루 단위 구간 → **하루 = 1 sub-query**.
+    """날짜 fan-out 을 만든다. task_params 가 가리키는 두 끝에서 구간을 얻어 하루씩 자르고, **하루를 sub-query 하나**로 펼친다.
 
     IN 값 분할(validate_and_parse+split)을 우회한다. 동작:
       1) task_params 두 개의 (값, sign)에서 오늘 기준 오프셋 구간을 도출하고,
@@ -311,9 +312,9 @@ def _build_fanout(
         return ctx
 
     request_scalars = {k: getattr(req, k) for k in _TEMPLATE_SCALAR_KEYS if k in req.model_fields_set}
-    # INSERT/staging 은 날짜 독립 → 대표 구간으로 1회 렌더(모든 task 공유).
+    # INSERT 와 staging 은 날짜와 무관하므로 대표 구간으로 한 번만 렌더해 모든 task 가 공유한다.
     base = engine.render(req.template_id, _ctx(pairs[0]), request_scalars=request_scalars)
-    # manifest 스칼라 기본값 채움(요청이 명시하지 않은 것만). exec_mode 는 아래에서 확정.
+    # 요청이 명시하지 않은 값만 manifest 스칼라 기본값으로 채운다. exec_mode 는 아래에서 확정한다.
     for key, val in base.defaults.items():
         if key == "exec_mode":
             continue
@@ -327,14 +328,14 @@ def _build_fanout(
             f"지원합니다(현재 {base.exec_mode}).",
         )
     if base.exec_mode == "s3_stage":
-        # s3_stage: 외부테이블(=staging)은 executor 가 external_columns 로 생성한다. INSERT 와
-        # 외부테이블 컬럼 정의를 job 필드에 싣는다(하루=1 task 마다 자체 S3 왕복, append 적재).
+        # s3_stage 에서는 외부테이블이 staging 을 겸하고 executor 가 external_columns 로 만든다.
+        # INSERT 와 외부테이블 컬럼 정의를 job 필드에 싣는다(하루가 task 하나이며 append 로 적재한다).
         req.insert_sql = base.insert
         req.external_columns = base.external_columns
     else:
         if base.staging_ddl:
             req.staging_ddl = base.staging_ddl
-        req.wrapper_query = base.insert  # stage_insert INSERT → job.insert_sql 로 실린다
+        req.wrapper_query = base.insert  # stage_insert 의 INSERT 이며 job.insert_sql 로 실린다
     # 필수필드(partition_column) 충족용 표시값. 이 모드는 IN 분할을 안 하므로 실제 분할에는
     # 쓰이지 않는다 — manifest 가 컬럼을 선언했으면 그걸, 아니면 task_params 이름을 보여준다.
     if not req.partition_column:
@@ -345,11 +346,11 @@ def _build_fanout(
     for pair in pairs:
         ctx = _ctx(pair)
         select_sql = engine.render_query(req.template_id, ctx)
-        validate_select_query(select_sql, dialect=dialect)  # 단일 SELECT 방어(다중 문/비-SELECT 차단)
-        # 관측용 파티션 값: point 는 그 하루, pair 는 [시작일, 끝일).
+        validate_select_query(select_sql, dialect=dialect)  # 다중 문과 비-SELECT 를 막는 방어다
+        # 관측용 파티션 값이다. point 는 그 하루를, pair 는 [시작일, 끝일) 구간을 담는다.
         marks = [ctx["task_date"]] if req.task_bound == "point" else [ctx["task_date"], ctx["task_date_end"]]
         sub_queries.append(SubQuery(sql=select_sql, partition_values=marks))
-    req.sql = sub_queries[0].sql  # original_sql 기록/필수필드 검증용 대표값
+    req.sql = sub_queries[0].sql  # original_sql 기록과 필수 필드 검증에 쓸 대표값이다
     return sub_queries
 
 
@@ -385,7 +386,7 @@ def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
             setattr(req, key, val)
     req.exec_mode = result.exec_mode
 
-    # 렌더된 SQL 조각 주입.
+    # 렌더된 SQL 조각을 요청에 주입한다.
     req.sql = result.select
     if result.exec_mode in ("copy", "statement"):
         if result.wrapper:
@@ -393,21 +394,21 @@ def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
     elif result.exec_mode == "stage_insert":
         if result.staging_ddl:
             req.staging_ddl = result.staging_ddl
-        req.wrapper_query = result.insert  # stage_insert 는 wrapper_query 를 INSERT 로 사용
+        req.wrapper_query = result.insert  # stage_insert 는 wrapper_query 를 INSERT 로 쓴다
     elif result.exec_mode == "local_stage":
         if result.staging_ddl:
             req.staging_ddl = result.staging_ddl
         req.insert_sql = result.insert
         req.external_columns = result.external_columns
     elif result.exec_mode == "s3_stage":
-        # s3_stage: 외부테이블(=staging)은 executor 가 external_columns 로 생성하므로 staging_ddl
-        # 은 쓰지 않는다. INSERT(external→target)와 외부테이블 컬럼 정의만 주입한다.
+        # s3_stage 에서는 외부테이블이 staging 을 겸하고 external_columns 로 만들어지므로 staging_ddl
+        # 을 쓰지 않는다. external 에서 target 으로 넣는 INSERT 와 외부테이블 컬럼 정의만 주입한다.
         req.insert_sql = result.insert
         req.external_columns = result.external_columns
 
 
 def _request_fingerprint(req: "CreateJobRequest") -> str:
-    """요청 본문의 안정적 지문(sha256 hex).
+    """요청 본문의 안정적인 지문을 sha256 hex 로 만든다.
 
     같은 ``Idempotency-Key`` 를 **다른 본문**으로 재사용했는지 감지하는 데 쓴다. 키를
     쓸 때만 계산하며(비용 절약), 키가 없으면 호출하지 않는다. dict 를 정렬 직렬화해
@@ -458,7 +459,7 @@ def create_app(
     settings = settings or default_settings
     store = store or build_job_store(settings)
     monitor = HealthMonitor(settings)
-    # 쿼리 템플릿 엔진: 켜져 있으면 1개 생성해 요청 렌더링에 재사용(단일 워커라 in-process 안전).
+    # 쿼리 템플릿 엔진이 켜져 있으면 하나만 만들어 요청 렌더링에 재사용한다. 단일 워커라 in-process 로 안전하다.
     template_engine = TemplateEngine(settings) if settings.template_enabled else None
     started_at = now_dt()
     start_monotonic = time.monotonic()
@@ -474,10 +475,10 @@ def create_app(
     _select_policy = getattr(settings, "executor_select", "round_robin")
     selection_enabled = _select_policy in ("least_loaded", "p2c")
     selector = ExecutorSelector(policy=_select_policy) if selection_enabled else None
-    # 부하 뷰 소스(Phase 3): HA(self_report 공유 테이블, URL 키) vs 단일(monitor 폴링).
-    #   auto    → status_repo 있으면 공유 테이블, 없으면 monitor
-    #   self_report → 공유 테이블(없으면 monitor 폴백)
-    #   monitor → 항상 monitor 폴링
+    # Phase 3 의 부하 뷰 소스를 정한다. HA 는 self_report 공유 테이블(URL 키)을, 단일 구성은
+    # monitor 폴링을 쓴다. auto 면 status_repo 가 있을 때 공유 테이블을 쓰고 없으면 monitor 를
+    # 쓰며, self_report 면 공유 테이블을 쓰되 없으면 monitor 로 폴백하고, monitor 면 언제나
+    # monitor 를 폴링한다.
     _health_source = getattr(settings, "executor_health_source", "auto")
     _use_shared = (
         status_repo is not None and _health_source in ("auto", "self_report")
@@ -496,15 +497,15 @@ def create_app(
             settings.history_db_dsn, settings.coordinator_id, table=settings.reservation_table
         )
         load_view = ReservingLoadView(load_view, reservations, settings.reservation_ttl_s)
-    # 죽은 coordinator 소유 job 정합(Phase 3-C): 공유 postgres store + heartbeat 일 때만.
+    # Phase 3-C 의 죽은 coordinator 소유 job 정합이다. 공유 postgres store 와 heartbeat 가 함께 있을 때만 돈다.
     heartbeat = None
     if getattr(settings, "store_backend", "memory") == "postgres" and settings.history_db_dsn \
             and getattr(settings, "orphan_reconcile_interval_s", 0) > 0:
         heartbeat = CoordinatorHeartbeat(
             settings.history_db_dsn, settings.coordinator_id, table=settings.coordinator_status_table
         )
-    # 이 coordinator 가 기동 후 executor 별로 배정한 누적 task 수(배정 분포 관측용, Phase 2).
-    # 멀티 coordinator 에선 인스턴스별 카운트다(전역 분포는 각 인스턴스 합산).
+    # 이 coordinator 가 기동한 뒤 executor 별로 배정한 누적 task 수다. 배정 분포를 관측해 선택
+    # 정책이 균형을 맞추는지 확인하는 용도이며, 멀티 coordinator 면 인스턴스별 값이다.
     assign_counts: dict = {}
     if runner is None:
         # executor_mode 에 따라 디스패처 선택: local 은 in-process 직접 실행,
@@ -529,7 +530,7 @@ def create_app(
         need_monitor = status_repo is None or (selection_enabled and not _use_shared)
         if need_monitor:
             await monitor.start()
-        # HA: coordinator heartbeat + 죽은 coordinator 소유 job 정합 백그라운드 루프.
+        # HA 용 백그라운드 루프다. coordinator heartbeat 를 남기고 죽은 coordinator 소유 job 을 정합한다.
         ha_task = asyncio.create_task(_ha_loop()) if heartbeat is not None else None
         try:
             yield
@@ -580,7 +581,7 @@ def create_app(
     # 에어갭: 내장 정적 에셋(/assets)과 오프라인 docs(/docs·/redoc)를 등록한다.
     mount_static(app)
     register_offline_docs(app)
-    # HTTP 요청/응답 DEBUG 로깅(로그 레벨이 DEBUG 일 때만 자동 기록). 잡음 경로는 기본 제외.
+    # HTTP 요청/응답을 DEBUG 로 남긴다. 로그 레벨이 DEBUG 일 때만 자동으로 기록하고 잡음 경로는 기본 제외한다.
     install_http_logging(app, settings)
     # 핸들러들이 클로저로 직접 참조하지만, 미들웨어/디버깅/테스트에서 꺼내 쓸 수
     # 있도록 핵심 의존성을 app.state 에도 보관해 둔다.
@@ -589,7 +590,7 @@ def create_app(
     app.state.settings = settings
     app.state.monitor = monitor
     app.state.status_repo = status_repo
-    # 헬스 기반 선택 관련(관측/테스트용). 선택 비활성이면 selector/load_view 는 None.
+    # 헬스 기반 선택에 쓰는 값이며 관측과 테스트용이다. 선택이 꺼져 있으면 selector 와 load_view 는 None 이다.
     app.state.selector = selector
     app.state.load_view = load_view
     app.state.assign_counts = assign_counts
@@ -632,8 +633,8 @@ def create_app(
         # 검증 실패로 작업이 저장되지 않더라도 이 요청에서 찍히는 모든 로그에
         # [job_id] 가 일관되게 붙도록 한다(요청 추적성 확보).
         job_id = new_job_id()
-        # 요청 멱등: 클라이언트가 Idempotency-Key 헤더를 주면 중복 제출(타임아웃 재시도 등)을
-        # 흡수해 같은 job 을 돌려준다(중복 적재 방지). 미지정이면 기존 동작 그대로.
+        # 요청 멱등을 처리한다. 클라이언트가 Idempotency-Key 헤더를 주면 타임아웃 재시도 같은 중복
+        # 제출을 흡수해 같은 job 을 돌려주므로 중복 적재를 막는다. 헤더가 없으면 기존 동작 그대로다.
         idempotency_key = request.headers.get("Idempotency-Key") or None
         with job_log_context(job_id):
             return _create_job(req, background, job_id, idempotency_key)
@@ -688,7 +689,7 @@ def create_app(
                     status_code=400,
                     detail="템플릿 기능이 비활성화되어 있습니다(template.enabled=false).",
                 )
-            _apply_template(req, template_engine)  # TemplateError → 422 예외 핸들러
+            _apply_template(req, template_engine)  # TemplateError 는 422 예외 핸들러가 받는다
 
         # 공통 필수 필드 검증(raw/템플릿 공통). 템플릿 모드는 렌더/병합 후 채워졌어야 한다.
         _missing = [n for n in ("sql", "partition_column", "target_table") if not getattr(req, n)]
@@ -715,7 +716,7 @@ def create_app(
                 dialect=dialect,
                 strict=req.strict_validation,
             )
-            # 파티션 컬럼 기준으로 parallelism 개의 sub-query로 분할(전략에 따라 분배 방식 결정).
+            # 파티션 컬럼을 기준으로 parallelism 개의 sub-query 로 나눈다. 분배 방식은 전략이 정한다.
             sub_queries = split(parsed, req.parallelism, req.split_strategy)
 
         if req.exec_mode == "stage_insert":
@@ -732,10 +733,10 @@ def create_app(
                     "staging_ddl 은 선택이며, 없으면 기존 staging_table 을 사용합니다(생성 건너뜀).",
                 )
         elif req.exec_mode == "local_stage":
-            # local_stage: 각 executor 가 세그먼트 호스트 로컬 CSV 로 export(Phase 1) →
-            # coordinator 가 GP file:// 외부테이블로 적재(Phase 2). 분할된 SELECT 는 그대로
-            # export 하므로 wrapper 를 쓰지 않는다(아래 wrapper 분기로 내려가지 않도록 여기서
-            # 분기를 끊는다). 외부테이블 컬럼 정의·staging·최종 INSERT 는 요청자가 명시한다.
+            # local_stage 는 Phase 1 에서 각 executor 가 세그먼트 호스트의 로컬 CSV 로 export 하고,
+            # Phase 2 에서 coordinator 가 GP file:// 외부테이블로 적재한다. 분할된 SELECT 를 그대로
+            # export 하므로 wrapper 를 쓰지 않으며, 아래 wrapper 분기로 내려가지 않도록 여기서 끊는다.
+            # 외부테이블 컬럼 정의와 staging, 최종 INSERT 는 요청자가 명시한다.
             if not (req.staging_table and req.external_columns and req.insert_sql):
                 raise QueryValidationError(
                     "LOCAL_STAGE_REQUIRES_FIELDS",
@@ -743,10 +744,10 @@ def create_app(
                     "필요합니다. staging_ddl 은 선택입니다.",
                 )
         elif req.exec_mode == "s3_stage":
-            # s3_stage: 각 executor 가 Impala 결과를 로컬 CSV → S3 업로드 → PXF 외부테이블 →
-            # target INSERT → S3 정리로 자체 완결한다(local_stage 형제, 세그먼트 co-locate 불필요).
-            # 외부테이블이 staging 을 겸하며, 그 이름(staging_table)·컬럼(external_columns)·
-            # 최종 INSERT(insert_sql)를 요청자가 명시한다(래퍼 분기로 내려가지 않게 여기서 끊는다).
+            # s3_stage 는 local_stage 의 형제이고 세그먼트에 co-locate 할 필요가 없다. 소스 결과를 로컬
+            # CSV 로 내려 S3 에 올린 뒤 PXF 외부테이블을 거쳐 target 으로 INSERT 하고 S3 를 정리한다.
+            # 외부테이블이 staging 을 겸하므로 그 이름(staging_table)과 컬럼(external_columns), 최종
+            # INSERT(insert_sql)를 요청자가 명시한다. 래퍼 분기로 내려가지 않도록 여기서 끊는다.
             if not (req.staging_table and req.external_columns and req.insert_sql):
                 raise QueryValidationError(
                     "S3_STAGE_REQUIRES_FIELDS",
@@ -756,7 +757,7 @@ def create_app(
             # stage_insert 가 아니면서 래퍼 쿼리가 주어진 경우: 분할된 각 sub-query를
             # 래퍼의 placeholder 자리에 치환해 최종 실행 SQL을 만든다(예: 집계/CTE로 감싸기).
             if req.wrapper_placeholder not in req.wrapper_query:
-                # placeholder 가 없으면 어디에 sub-query를 끼워 넣을지 알 수 없으므로 거부.
+                # placeholder 가 없으면 sub-query 를 어디에 끼워 넣을지 알 수 없으므로 거부한다.
                 raise QueryValidationError(
                     "WRAPPER_PLACEHOLDER_MISSING",
                     f"wrapper_query 에 placeholder '{req.wrapper_placeholder}' 가 없습니다.",
@@ -778,9 +779,9 @@ def create_app(
             for sq in sub_queries:
                 sq.sql = wrap(sq.sql, req.wrapper_query, req.wrapper_placeholder)
 
-        # 분할된 task 에 executor 배정. 헬스 기반 선택(least_loaded/p2c)이 켜져 있으면
-        # 부하 뷰를 보고 한가한 노드에 분산 배정(같은 job 의 task 가 한 노드로 몰리지 않도록
-        # 임시 부하 가산). 그 외에는 기존 라운드로빈. local 모드(executors 없음)면 전부 None.
+        # 분할된 task 에 executor 를 배정한다. 헬스 기반 선택(least_loaded·p2c)이 켜져 있으면 부하
+        # 뷰를 보고 한가한 노드에 나눠 배정하며, 같은 job 의 task 가 한 노드로 몰리지 않도록 임시
+        # 부하를 가산한다. 그 밖에는 기존 라운드로빈을 쓰고, executors 가 없는 local 모드면 전부 None 이다.
         if selection_enabled and load_view is not None and settings.executors:
             # 배정용 selector 는 요청마다 새로 만든다(동기 핸들러는 스레드풀에서 돌아
             # 디스패처의 selector 와 상태를 공유하지 않게 — 스레드 안전).
@@ -833,14 +834,13 @@ def create_app(
             )
 
         # ── Admission control(과부하 보호) ──
-        # 동시 실행 슬롯 + 대기 큐 상한을 합한 용량을 기준으로 수용 여부를 결정한다.
-        # 의도적으로 "거부는 여기서, 대기는 runner 안에서" 로 역할을 나눈다:
-        #   - 정상 부하: try_admit() 통과 → 작업은 PENDING 으로 저장되고, runner.run 내부의
-        #     슬롯 세마포어에서 자연스럽게 줄을 서다(큐잉) 슬롯이 나면 RUNNING 으로 전이.
-        #   - 폭주: 실행+대기 용량(capacity)을 넘는 요청만 try_admit() 이 False 를 돌려
-        #     아래에서 429 로 즉시 거부 → 무한정 쌓이는 PENDING 으로 인한 메모리/다운스트림
-        #     과부하를 차단한다.
-        # runner가 admission 속성을 갖지 않을 수도 있으므로(테스트용 더미 등) getattr 로 방어.
+        # 동시 실행 슬롯과 대기 큐 상한을 합한 용량을 기준으로 수용 여부를 결정한다. 여기서는
+        # 거부만 하고 대기는 runner 안에서 처리하도록 의도적으로 역할을 나눴다. 정상 부하라면
+        # try_admit() 을 통과해 작업이 PENDING 으로 저장되고, runner.run 안의 슬롯 세마포어에서
+        # 줄을 서다가 슬롯이 나면 RUNNING 으로 넘어간다. 폭주해서 실행과 대기를 합한 용량을
+        # 넘긴 요청만 try_admit() 이 False 를 돌려 아래에서 429 로 즉시 거부하는데, PENDING 이
+        # 무한정 쌓여 메모리와 다운스트림이 과부하되는 것을 막기 위해서다.
+        # 테스트용 더미처럼 runner 가 admission 속성을 갖지 않을 수도 있어 getattr 로 방어한다.
         admission = getattr(runner, "admission", None)
         if admission is not None and not admission.try_admit():
             logger.warning(
@@ -952,8 +952,8 @@ def create_app(
                 req.partition_column,
                 req.target_table,
             )
-            # 응답을 막지 않도록 실제 실행은 백그라운드로 예약한다. run 내부에서 PENDING
-            # 대기→RUNNING 전이와 종료 시 슬롯 반납까지 책임진다.
+            # 응답을 막지 않도록 실제 실행은 백그라운드로 예약한다. run 이 PENDING 대기에서 RUNNING
+            # 으로 넘어가는 전이와 종료 시 슬롯 반납까지 책임진다.
             background.add_task(runner.run, job)
         except Exception:
             # try_admit() 으로 점유한 슬롯을 보상 반납한다. 여기 도달했다는 것은
@@ -968,7 +968,7 @@ def create_app(
 
     @app.get("/jobs/{job_id}", tags=["Jobs"], summary="작업 상태 조회(태스크 포함)")
     def get_job(job_id: str):
-        # 단일 job의 상태 + 태스크 목록 요약을 반환. 없으면 404.
+        # 단일 job 의 상태와 태스크 목록 요약을 돌려준다. 없으면 404 다.
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -1113,7 +1113,7 @@ def create_app(
 
     @app.get("/jobs/{job_id}/result", tags=["Jobs"], summary="작업 결과(적재 요약) 조회")
     def get_job_result(job_id: str):
-        # 적재 결과 요약(태스크별 row count 등)을 반환.
+        # 태스크별 row count 같은 적재 결과 요약을 돌려준다.
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -1125,7 +1125,7 @@ def create_app(
         summary="태스크 상세 조회(sub-query 전문 포함)",
     )
     def get_task_detail(job_id: str, task_id: str):
-        # 특정 job 안의 단일 task 상세를 찾아 반환. job/ task 어느 쪽이 없어도 404.
+        # 특정 job 안의 단일 task 상세를 찾아 돌려준다. job 이든 task 든 없으면 404 다.
         job = store.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -1204,7 +1204,7 @@ def create_app(
         # executor 상태 수집: self-report 모드면 공유 테이블에서 읽고, 아니면
         # refresh=true 일 때 즉시 폴링(최신값), false 면 캐시 스냅샷(저비용)을 쓴다.
         if status_repo is not None:
-            # 멀티 coordinator: executor self-report 공유 테이블에서 조회
+            # 멀티 coordinator 면 executor self-report 공유 테이블에서 조회한다.
             executors = status_repo.read_all()
         else:
             executors = await monitor.poll_now() if refresh else monitor.snapshot()
@@ -1215,8 +1215,8 @@ def create_app(
             collect_system_metrics, settings.monitor_disk_path
         )
 
-        # 전체 job을 상태별로 집계한다. running 은 순수 실행 중,
-        # active 는 실행 + 분할 중(SPLITTING) + 대기(PENDING)까지 포함한 "처리 중" 합계.
+        # 전체 job 을 상태별로 집계한다. running 은 순수하게 실행 중인 것만 세고, active 는 실행과
+        # 분할 중(SPLITTING), 대기(PENDING)까지 포함한 "처리 중" 합계다.
         by_status: dict[str, int] = {}
         for job in store.list():
             by_status[job.status.value] = by_status.get(job.status.value, 0) + 1
@@ -1244,8 +1244,8 @@ def create_app(
                 "total": len(store.list()),
                 "by_status": by_status,
             },
-            # 이 coordinator 가 기동 후 executor 별로 배정한 누적 task 수(배정 분포 관측).
-            # 선택 정책이 균형을 맞추고 있는지 확인하는 용도. 멀티 coordinator 면 인스턴스별 값.
+            # 이 coordinator 가 기동한 뒤 executor 별로 배정한 누적 task 수다. 배정 분포를
+            # 관측해 선택 정책이 균형을 맞추는지 확인하며, 멀티 coordinator 면 인스턴스별 값이다.
             "assignment_counts": dict(assign_counts),
             "executor_select": _select_policy,
         })
@@ -1293,12 +1293,12 @@ def create_app(
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
-        # 프로세스가 살아 있는지 확인하는 liveness 프로브용 가벼운 응답.
+        # 프로세스가 살아 있는지 확인하는 liveness 프로브용으로 가볍게 응답한다.
         return {"status": "ok", "service": "coordinator", "version": __version__}
 
     @app.get("/healthz", tags=["Monitoring"], summary="헬스 체크 별칭(하위 호환)")
     def healthz():
-        # 쿠버네티스 등에서 흔히 쓰는 /healthz 경로 호환용 별칭.
+        # 쿠버네티스 등에서 흔히 쓰는 /healthz 경로와 호환하려고 둔 별칭이다.
         return {"status": "ok"}
 
     @app.get(
@@ -1307,7 +1307,7 @@ def create_app(
         summary="시스템 메트릭(CPU/메모리/디스크)",
     )
     def metrics():
-        # coordinator 호스트의 현재 CPU/메모리/디스크 메트릭(동기 수집).
+        # coordinator 호스트의 현재 CPU·메모리·디스크 메트릭을 동기로 수집한다.
         return collect_system_metrics(settings.monitor_disk_path)
 
     # ───────── 모니터링 대시보드 & 데이터 API ─────────
@@ -1323,9 +1323,9 @@ def create_app(
         total_all = len(all_jobs)
         running = sum(1 for j in all_jobs if j.status == JobStatus.RUNNING)
         active = sum(1 for j in all_jobs if j.status in _active_set)
-        # 대시보드 admission 게이지용: 실행 슬롯을 기다리는(PENDING) job 수.
+        # 대시보드 admission 게이지에 쓸, 실행 슬롯을 기다리는(PENDING) job 수다.
         pending = sum(1 for j in all_jobs if j.status == JobStatus.PENDING)
-        # 최신순 정렬(created_at 내림차순). created_at 이 없으면 빈 문자열로 안전 비교.
+        # created_at 내림차순으로 최신순 정렬한다. created_at 이 없으면 빈 문자열로 두어 비교를 안전하게 한다.
         jobs = sorted(all_jobs, key=lambda j: j.created_at or "", reverse=True)
         if status:
             s = status.lower()
@@ -1357,7 +1357,7 @@ def create_app(
         return format_at_fields(
             {
                 "jobs": rows, "total": total_all, "running": running, "active": active,
-                # admission 게이지(실행 슬롯/대기 큐 소진율) 표시용. 0 이하는 무제한.
+                # admission 게이지에 실행 슬롯과 대기 큐 소진율을 표시하는 데 쓴다. 0 이하는 무제한을 뜻한다.
                 "pending": pending,
                 "max_concurrent_jobs": settings.max_concurrent_jobs,
                 "max_pending_jobs": settings.max_pending_jobs,
@@ -1426,7 +1426,7 @@ def create_app(
         """
         limit = clamp_limit(req.limit)
 
-        # 1) executor 프록시: impala 처럼 coordinator 가 직접 못 붙는 데이터소스를 executor 경유.
+        # 1) executor 프록시다. impala 처럼 coordinator 가 직접 붙지 못하는 데이터소스는 executor 를 거친다.
         if req.executor_url:
             target = req.executor_url.rstrip("/") + f"/datasources/{name}/query"
             timeout = httpx.Timeout(settings.task_timeout_s, connect=settings.task_connect_timeout_s)
@@ -1449,7 +1449,7 @@ def create_app(
             body["proxied_to"] = req.executor_url
             return body
 
-        # 2) 로컬 실행: coordinator 가 직접 접속 가능한 데이터소스만.
+        # 2) 로컬 실행이다. coordinator 가 직접 접속할 수 있는 데이터소스만 여기서 처리한다.
         try:
             if name == "greenplum":
                 if not settings.greenplum_dsn:
@@ -1475,7 +1475,7 @@ def create_app(
                 raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {name}")
         except HTTPException:
             raise
-        except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
+        except Exception as e:  # 연결·인증·SQL 오류는 원인을 담아 502 로 돌려준다
             raise HTTPException(status_code=502, detail=f"{name} 쿼리 실패: {e}")
         return {"datasource": name, "limit": limit, **result.to_dict()}
 
@@ -1563,17 +1563,17 @@ def create_app(
         limit = clamp_limit(req.limit)
         params = _query_params_to_dict(req.params)
 
-        # 1) 템플릿에서 select 조각만 렌더(TemplateError → 422 핸들러).
+        # 1) 템플릿에서 select 조각만 렌더한다. TemplateError 는 422 핸들러가 받는다.
         sql = template_engine.render_query(req.template_id, params)
-        # 2) 경량 검증: 단일 행 반환 SELECT 인지(다중 문/비-SELECT 차단, QueryValidationError → 422).
+        # 2) 단일 행 반환 SELECT 인지 가볍게 검증한다. 다중 문과 비-SELECT 를 막고 QueryValidationError 는 422 가 된다.
         validate_select_query(sql, dialect=req.sql_dialect or DIALECT)
 
-        # 3) 데이터소스 결정(요청 > 서버 source.type).
+        # 3) 데이터소스를 정한다. 요청이 서버의 source.type 보다 우선한다.
         datasource = (req.datasource or getattr(settings, "source_type", "impala") or "impala").lower()
 
-        # 4) 실행 라우팅(2갈래로 통일):
-        #    - greenplum/history: 메타/타깃 DB → coordinator 가 직접 실행(psycopg).
-        #    - 그 외 소스(impala/trino/source 등): executor 의 커스텀 함수(/query-run)에 통일 위임.
+        # 4) 실행을 두 갈래로 라우팅한다. 메타·타깃 DB 인 greenplum 과 history 는 coordinator 가
+        #    psycopg 로 직접 실행하고, 그 밖의 소스(impala·trino·source 등)는 종류와 무관하게
+        #    executor 의 커스텀 함수(/query-run)로 위임한다.
         if datasource in ("greenplum", "history"):
             dsn = settings.greenplum_dsn if datasource == "greenplum" else settings.history_db_dsn
             if not dsn:
@@ -1582,7 +1582,7 @@ def create_app(
                 result = await asyncio.to_thread(
                     run_postgres_select, dsn, sql, limit=limit, datasource=datasource,
                 )
-            except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
+            except Exception as e:  # 연결·인증·SQL 오류는 원인을 담아 502 로 돌려준다
                 raise HTTPException(status_code=502, detail=f"{datasource} 쿼리 실패: {e}")
             # coordinator 가 직접 실행했으므로 executor 는 없다(executed_by=null).
             body = {"datasource": datasource, "limit": limit, "executed_by": None, **result.to_dict()}
@@ -1601,7 +1601,7 @@ def create_app(
 
         @app.get("/", include_in_schema=False)
         def dashboard():
-            # 단일 페이지 모니터링 대시보드 HTML(정적 문자열) 제공.
+            # 단일 페이지 모니터링 대시보드 HTML 을 정적 문자열 그대로 내보낸다.
             return HTMLResponse(DASHBOARD_HTML)
 
         @app.get("/config", tags=["Monitoring"], summary="환경설정(비밀값 마스킹)")

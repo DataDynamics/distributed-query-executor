@@ -1,4 +1,4 @@
-"""Job 실행 계층: sub-query를 executor로 디스패치하고 상태를 추적한다.
+"""Job 실행 계층으로, sub-query 를 executor 에 디스패치하고 상태를 추적한다.
 
 Coordinator는 쿼리 결과 행을 직접 받지 않는다. executor가 Impala -> Greenplum 으로
 직접 스트리밍하고, 여기서는 sub-query를 POST한 뒤 상태를 polling 하며 row count만
@@ -8,10 +8,10 @@ Coordinator는 쿼리 결과 행을 직접 받지 않는다. executor가 Impala 
 
 - ``JobAdmission`` : 동시 실행 슬롯(세마포어)과 대기 큐 상한을 합친 admission control.
   과부하 시 새 요청을 거부할지(429), 받아서 줄 세울지(PENDING)를 판단하는 카운터.
-- ``_DispatcherBase`` : 모든 디스패처가 공유하는 실행 골격. PENDING→(슬롯대기)→RUNNING
-  →종료 전이, 이력 기록, in-flight 슬롯 반납, 취소 감지를 한곳에 모았다. 하위 클래스는
-  실제 task 실행부 ``_execute`` 만 구현한다.
-- ``HttpDispatcher`` : 원격 executor 와 HTTP로 통신하는 운영 디스패처.
+- ``_DispatcherBase`` 는 모든 디스패처가 공유하는 실행 골격이다. PENDING 에서 슬롯을 기다려
+  RUNNING 으로 갔다가 종료하는 전이와 이력 기록, in-flight 슬롯 반납, 취소 감지를 한곳에
+  모았다. 하위 클래스는 실제 task 실행부인 ``_execute`` 만 구현한다.
+- ``HttpDispatcher`` 는 원격 executor 와 HTTP 로 통신하는 운영 디스패처다.
 - ``LocalDispatcher`` : executor 프로세스 없이 coordinator 안에서 백엔드를 직접 실행하는
   개발/검증용 디스패처.
 
@@ -45,7 +45,7 @@ from .models import Job, JobStatus, Task, TaskStatus
 logger = logging.getLogger(__name__)
 
 
-from core.timeutil import now_iso as _now_iso  # KST(naive) ISO 시각 생성
+from core.timeutil import now_iso as _now_iso  # KST 기준 naive ISO 시각을 만든다
 
 
 # task가 더 이상 변하지 않는 종료 상태 집합. 폴링 종료 조건, 취소 전파 대상 선별,
@@ -75,10 +75,10 @@ def finalize_job(job: Job) -> None:
 
     우선순위가 있는 판정이다(위에서부터 먼저 매칭되는 규칙 적용):
 
-    1. 취소 요청이 있었으면 → CANCELLED (실패 task가 있어도 취소가 우선).
-    2. 실패 task가 하나도 없으면 → DONE.
-    3. 실패가 있고 정책이 ``best_effort`` 이면 → PARTIAL (일부 성공 허용).
-    4. 그 외(실패 + 엄격 정책) → FAILED 이며, 실패 task들의 사유를 모아 ``job.error``에
+    1. 취소 요청이 있었으면 CANCELLED 다. 실패한 task 가 있어도 취소가 우선한다.
+    2. 실패한 task 가 하나도 없으면 DONE 이다.
+    3. 실패가 있고 정책이 ``best_effort`` 면 일부 성공을 허용해 PARTIAL 로 둔다.
+    4. 실패가 있고 정책이 엄격하면 FAILED 이며, 실패한 task 들의 사유를 모아 ``job.error`` 에
        기록한다.
 
     Args:
@@ -99,7 +99,7 @@ def finalize_job(job: Job) -> None:
 
 
 class JobRunner(Protocol):
-    """디스패처가 만족해야 하는 구조적 인터페이스(덕 타이핑 계약).
+    """디스패처가 만족해야 하는 구조적 인터페이스다(덕 타이핑 계약).
 
     app 계층은 구체 디스패처 종류를 몰라도 이 프로토콜에 기대 ``run``/``cancel`` 만
     호출한다. 덕분에 테스트에서 가짜 runner를 자유롭게 주입할 수 있다.
@@ -111,7 +111,7 @@ class JobRunner(Protocol):
 
 
 class JobAdmission:
-    """동시 실행 job 수 제한 + 대기 큐 상한을 합친 admission control(큐잉 + 큐 상한).
+    """동시 실행 job 수 제한과 대기 큐 상한을 합쳐 admission control 을 수행한다(큐잉과 큐 상한을 함께 본다).
 
     두 개의 독립된 한도를 조합해 과부하를 두 단계로 막는다.
 
@@ -143,7 +143,7 @@ class JobAdmission:
 
     @property
     def capacity(self) -> Optional[int]:
-        """admit 가능한 최대 in-flight 수(실행 + 대기). None 이면 무제한.
+        """admit 할 수 있는 최대 in-flight 수(실행과 대기의 합)다. None 이면 무제한이다.
 
         무제한 모드(max_running<=0)에서는 상한이 없음을 None 으로 표현한다. 그 외에는
         실행 슬롯 수와 대기 큐 상한의 합이 한 번에 품을 수 있는 job 총량이다.
@@ -154,14 +154,14 @@ class JobAdmission:
 
     @property
     def inflight(self) -> int:
-        """현재 수용되어 처리 중(대기 + 실행)인 job 수(읽기 전용 노출)."""
+        """현재 수용되어 처리 중(대기와 실행)인 job 수를 읽기 전용으로 노출한다."""
         return self._inflight
 
     def try_admit(self) -> bool:
-        """비차단 수용 시도.
+        """비차단으로 수용을 시도한다.
 
         용량에 여유가 있으면 in-flight 를 1 늘리고 True 를 반환한다(수용). 이미 용량이
-        가득 찼으면 카운터를 건드리지 않고 False 를 반환한다 → 호출측은 이를 429로 변환한다.
+        가득 찼으면 카운터를 건드리지 않고 False 를 돌려주며, 호출측은 이를 429 로 변환한다.
         무제한 모드(capacity is None)에서는 항상 수용한다.
 
         주의: 수용에 성공하면 반드시 나중에 ``release`` 로 1을 되돌려야 한다(누수 방지).
@@ -184,7 +184,7 @@ class JobAdmission:
 
     @asynccontextmanager
     async def slot(self):
-        """실행 슬롯을 확보하는 async 컨텍스트(슬롯이 없으면 대기).
+        """실행 슬롯을 확보하는 async 컨텍스트다. 슬롯이 없으면 날 때까지 기다린다.
 
         세마포어가 있으면 빈 슬롯이 생길 때까지 대기했다가 진입하고, 블록을 빠져나오며
         자동 반납한다. 대기하는 동안 job 은 호출측에서 PENDING 상태로 노출된다.
@@ -198,10 +198,10 @@ class JobAdmission:
 
 
 class _DispatcherBase:
-    """모든 디스패처의 공통 실행 골격: admission + 상태 전이 + 이력 + 취소 감지.
+    """모든 디스패처의 공통 실행 골격이다. admission 과 상태 전이, 이력, 취소 감지를 맡는다.
 
     여기에 "흐름"을 모아두고, 하위 클래스는 task를 실제로 어떻게 실행하는지
-    (``_execute(job)``)만 책임진다. 덕분에 HTTP/Local 두 구현이 PENDING→RUNNING→종료
+    (``_execute(job)``)만 책임진다. 덕분에 HTTP 와 Local 두 구현이 PENDING 에서 RUNNING 을 거쳐 종료로 가는
     전이, 이력 기록, 슬롯 반납 같은 정책을 중복 없이 공유한다.
 
     보유 자원:
@@ -230,8 +230,8 @@ class _DispatcherBase:
         # local_stage Phase 2(GP file:// 적재)용 백엔드. coordinator 가 GP master 에 직접
         # 실행하므로 export 디스패치(HTTP/local)와 무관하게 공용이다. lazy 로 생성한다.
         self._stage_backend = None
-        # executor_url → GP 세그먼트 호스트명 캐시. gp_hostname 은 정적이라 URL 별로 한 번만
-        # 조회한다(local_stage file:// URI 조립용). HttpDispatcher 가 /metrics 로 채운다.
+        # executor_url 별 GP 세그먼트 호스트명 캐시다. gp_hostname 은 정적이라 URL 마다 한 번만
+        # 조회하며 local_stage 의 file:// URI 를 조립할 때 쓴다. HttpDispatcher 가 /metrics 로 채운다.
         self._gp_host_cache: dict = {}
 
     def _get_stage_backend(self):
@@ -241,7 +241,7 @@ class _DispatcherBase:
         LocalDispatcher 는 주입 백엔드를 재사용한다(생성자에서 미리 채워 둔다).
         """
         if self._stage_backend is None:
-            from executor.backend import build_backend  # 지연 임포트(순환 방지)
+            from executor.backend import build_backend  # 순환 임포트를 피하려고 지연 임포트한다
             self._stage_backend = build_backend(self.settings)
         return self._stage_backend
 
@@ -297,7 +297,7 @@ class _DispatcherBase:
         raise NotImplementedError
 
     async def _resolve_url_hosts(self, urls) -> dict:
-        """``executor_url`` 목록 → GP 세그먼트 호스트명 매핑(file:// URI·파일 예산 배분용).
+        """``executor_url`` 목록을 GP 세그먼트 호스트명으로 매핑한다. file:// URI 조립과 파일 예산 배분에 쓴다.
 
         기본 구현은 원격 조회 없이 URL 호스트(로컬 모드로 URL 이 None 이면 설정
         ``executor.gp_hostname``)를 쓴다. HttpDispatcher 는 executor 가 보고한 gp_hostname 을
@@ -313,11 +313,11 @@ class _DispatcherBase:
         return out
 
     async def _resolve_hosts(self, job: Job) -> dict:
-        """job 의 각 task ``executor_url`` → GP 세그먼트 호스트명 매핑(``_resolve_url_hosts`` 위임)."""
+        """job 의 각 task ``executor_url`` 을 GP 세그먼트 호스트명으로 매핑한다(``_resolve_url_hosts`` 에 위임한다)."""
         return await self._resolve_url_hosts([t.executor_url for t in job.tasks])
 
     async def _plan_local_stage(self, job: Job) -> bool:
-        """local_stage: 세그먼트 토폴로지(호스트별 S_h)에 맞춰 파일(=export task)을 호스트에 배분.
+        """local_stage 에서 세그먼트 토폴로지(호스트별 S_h)에 맞춰 파일, 즉 export task 를 호스트에 배분한다.
 
         Phase 1(export) 디스패치 **전에** 실행한다. ``segment_host_counts`` 로 호스트별 primary
         세그먼트 수를 얻고, 설정 executor 들을 gp_hostname 으로 호스트에 묶은 뒤,
@@ -326,8 +326,8 @@ class _DispatcherBase:
 
         반환값(진행 여부):
             - True  : local_stage 가 아니거나, 토폴로지/executor 정보를 얻지 못해(목·로컬)
-                      기존 배정을 그대로 유지하거나, 배분에 성공한 경우 → 실행 계속.
-            - False : 파일 수가 총 예산(Σ S_h)을 초과해 배치 불가 → 모든 task 를 FAILED 로
+                      기존 배정을 그대로 유지하거나 배분에 성공했다는 뜻이므로 실행을 계속한다.
+            - False 는 파일 수가 총 예산(Σ S_h)을 넘어 배치할 수 없다는 뜻이므로 모든 task 를 FAILED 로
                       표시하고 실행을 건너뛴다(finalize 가 FAILED 로 확정).
         """
         if job.exec_mode != "local_stage" or not job.tasks:
@@ -346,7 +346,7 @@ class _DispatcherBase:
             return True
         exec_urls = [u for u in self.settings.executors if u]
         if not host_segments or not exec_urls:
-            # 토폴로지 미상(목) 또는 executor 목록 없음(로컬) → 기존 배정을 그대로 쓴다.
+            # 토폴로지를 모르거나(목) executor 목록이 없으면(로컬) 기존 배정을 그대로 쓴다.
             return True
 
         url_hosts = await self._resolve_url_hosts(exec_urls)
@@ -391,13 +391,13 @@ class _DispatcherBase:
         return True
 
     async def _run_stage_load(self, job: Job) -> None:
-        """local_stage Phase 2: 모든 export 완료(배리어) 후 GP file:// 적재 → target INSERT.
+        """local_stage Phase 2 다. 모든 export 가 끝난 배리어 뒤에 GP file:// 로 적재하고 target 으로 INSERT 한다.
 
         ``_execute`` 가 반환하면 모든 export task 가 종료 상태다(자연 배리어). 이 시점에서
         export 가 하나라도 실패했거나 취소됐으면 건너뛴다(finalize 가 상태를 정한다). 정상이면
         executor 가 보고한 gp_hostname 으로 file:// URI 를 조립하고(호스트 검증 통과 시),
-        coordinator 의 GP 백엔드로 ``load_external_csv`` 를 호출해 외부테이블 생성→staging
-        적재→(멱등 선삭제)→target INSERT 를 한 트랜잭션으로 수행한 뒤 로컬 파일을 정리한다.
+        coordinator 의 GP 백엔드로 ``load_external_csv`` 를 호출해 외부테이블 생성과 staging
+        적재, 멱등 선삭제, target INSERT 를 한 트랜잭션으로 수행한 뒤 로컬 파일을 정리한다.
 
         local_stage 가 아니면 즉시 반환하므로 다른 exec_mode 에는 영향이 없다.
         """
@@ -449,7 +449,7 @@ class _DispatcherBase:
         # coordinator 가 GP master 에 실행할 SQL 을 조립한다(coordinator/stage.py — 순수 함수).
         csv_options = stage_sql.resolve_csv_options(job, self.settings)
         ext = stage_sql.external_table_name(job.job_id)
-        # 파일 목록: 각 task 의 (gp_hostname, out_path).
+        # 파일 목록은 각 task 의 (gp_hostname, out_path) 쌍으로 만든다.
         uris = [
             (host_map.get(t.executor_url, ""), t.out_path)
             for t in job.tasks if t.out_path
@@ -458,7 +458,7 @@ class _DispatcherBase:
             ext, job.external_columns, uris, csv_options
         )
         staging_load = stage_sql.build_staging_load(job.staging_table, ext)
-        # overwrite_partitions 멱등: job 전체 파티션 값을 모아 최종 INSERT 전에 선삭제.
+        # overwrite_partitions 의 멱등성을 위해 job 전체 파티션 값을 모아 최종 INSERT 전에 지운다.
         pre_delete = (
             stage_sql.build_pre_delete(
                 job.target_table, job.partition_column,
@@ -481,8 +481,8 @@ class _DispatcherBase:
             logger.info("job %s: local_stage Phase 2 적재 완료(target 반영 %s행)",
                         job.job_id, rows)
         except Exception as exc:
-            # export 는 됐지만 GP 적재가 실패 → job 을 실패로 확정한다. finalize_job 이
-            # local_stage 는 실패 task 가 있으면(정책 무관) FAILED 로 판정한다.
+            # export 는 됐지만 GP 적재가 실패했으므로 job 을 실패로 확정한다. local_stage 는 실패한
+            # task 가 하나라도 있으면 정책과 무관하게 finalize_job 이 FAILED 로 판정한다.
             logger.exception("job %s: local_stage Phase 2 실패", job.job_id)
             job.error = f"local_stage Phase 2 실패: {exc}"
             if job.tasks:
@@ -490,17 +490,17 @@ class _DispatcherBase:
                 job.tasks[0].error = job.tasks[0].error or f"Phase 2 적재 실패: {exc}"
             self._save(job)
             return
-        # Phase 3: 각 세그먼트 호스트의 로컬 CSV 정리(디스패처별 구현).
+        # Phase 3 에서 각 세그먼트 호스트의 로컬 CSV 를 정리한다(디스패처마다 따로 구현한다).
         await self._cleanup_stage(job)
         self._save(job)
 
     async def _run_s3_load(self, job: Job) -> None:
-        """s3_stage Phase 2: 모든 업로드 완료(배리어) 후 GP PXF 외부테이블 적재 → target INSERT.
+        """s3_stage Phase 2 다. 모든 업로드가 끝난 배리어 뒤에 GP PXF 외부테이블로 적재하고 target 으로 INSERT 한다.
 
         ``_execute`` 가 반환하면 모든 Phase 1(업로드) task 가 종료 상태다(자연 배리어). 업로드가
         하나라도 실패/취소됐으면 건너뛴다(finalize 가 상태를 정한다). 정상이면 coordinator 가
         GP master 에 **job 프리픽스(``<prefix>/<job_id>/``)를 가리키는 외부테이블 하나**를 만들어
-        (PXF 가 그 아래 모든 task CSV 를 세그먼트 병렬 read) → (멱등 선삭제) → target INSERT 를
+        PXF 가 그 아래 모든 task CSV 를 세그먼트 병렬로 읽고, 멱등 선삭제를 거쳐 target INSERT 를
         한 트랜잭션으로 수행하고, S3 스테이징 객체를 정리한다(Phase 3).
 
         local_stage 와 달리 세그먼트 co-locate/파일예산/호스트 검증이 없다(S3 는 위치 무관).
@@ -539,9 +539,9 @@ class _DispatcherBase:
         insert_sql = stage_sql.rewrite_staging_name(
             job.insert_sql, job.staging_table, ext, (job.target_table,)
         )
-        # 적재 전 파티션 선삭제(DELETE) 여부: 요청의 pre_delete 가 명시되면 그것을, 아니면
-        # write_mode 를 따른다(overwrite_partitions→삭제, append→미삭제). 켜져 있으면 job 전체
-        # 파티션 값을 모아 최종 INSERT 전에 선삭제한다(재실행 멱등).
+        # 적재 전에 파티션을 DELETE 할지 정한다. 요청에 pre_delete 가 있으면 그것을 따르고, 없으면
+        # write_mode 를 따라 overwrite_partitions 면 지우고 append 면 지우지 않는다. 켜져 있으면
+        # job 전체 파티션 값을 모아 최종 INSERT 전에 지우므로 다시 실행해도 멱등하다.
         do_delete = (
             job.pre_delete if job.pre_delete is not None
             else (job.write_mode == "overwrite_partitions")
@@ -566,7 +566,7 @@ class _DispatcherBase:
             logger.info("job %s: s3_stage Phase 2 적재 완료(target 반영 %s행)",
                         job.job_id, rows)
         except Exception as exc:
-            # 업로드는 됐지만 GP 적재가 실패 → job 을 실패로 확정한다.
+            # 업로드는 됐지만 GP 적재가 실패했으므로 job 을 실패로 확정한다.
             logger.exception("job %s: s3_stage Phase 2 실패", job.job_id)
             job.error = f"s3_stage Phase 2 실패: {exc}"
             if job.tasks:
@@ -574,12 +574,12 @@ class _DispatcherBase:
                 job.tasks[0].error = job.tasks[0].error or f"Phase 2 적재 실패: {exc}"
             self._save(job)
             return
-        # Phase 3: S3 스테이징 객체 정리(디스패처별 구현).
+        # Phase 3 에서 S3 스테이징 객체를 정리한다(디스패처마다 따로 구현한다).
         await self._cleanup_s3(job)
         self._save(job)
 
     async def _cleanup_stage(self, job: Job) -> None:
-        """local_stage Phase 3: 로컬 CSV 정리(디스패처별 구현). 기본은 no-op.
+        """local_stage Phase 3 로 로컬 CSV 를 정리한다. 디스패처마다 따로 구현하며 기본은 아무 일도 하지 않는다.
 
         HttpDispatcher 는 각 executor 의 ``/stage/{job_id}/cleanup`` 을 호출해 로컬 파일을
         지운다. LocalDispatcher(개발/목)는 정리할 원격 파일이 없어 그대로 둔다.
@@ -587,7 +587,7 @@ class _DispatcherBase:
         return
 
     async def _cleanup_s3(self, job: Job) -> None:
-        """s3_stage Phase 3: S3 스테이징 객체 정리(디스패처별 구현). 기본은 no-op.
+        """s3_stage Phase 3 로 S3 스테이징 객체를 정리한다. 디스패처마다 따로 구현하며 기본은 아무 일도 하지 않는다.
 
         HttpDispatcher 는 executor 하나에 ``/s3/{job_id}/cleanup`` 을 호출한다(S3 는 세그먼트
         로컬이 아니라 아무 executor 나 삭제 가능). LocalDispatcher 는 in-process 백엔드로 직접
@@ -625,7 +625,7 @@ class _DispatcherBase:
                         self.admission.max_pending,
                     )
                 async with self.admission.slot():
-                    # 대기 중 취소되었으면 실행하지 않고 즉시 종료 처리.
+                    # 대기하는 사이에 취소됐다면 실행하지 않고 곧바로 종료 처리한다.
                     if self._cancel_observed(job):
                         logger.info("대기 중 취소 감지 → 실행 건너뜀(CANCELLED)")
                         finalize_job(job)
@@ -636,7 +636,7 @@ class _DispatcherBase:
                     job.status = JobStatus.RUNNING
                     job.started_at = _now_iso()
                     self._save(job)
-                    await self.history.record(job)  # 시작 이력
+                    await self.history.record(job)  # 시작 이력을 남긴다
                     # 실행 시작을 INFO 로 남긴다(로그 파일만 봐도 언제 어떤 형태로 떴는지 파악).
                     t0 = time.monotonic()
                     logger.info(
@@ -644,8 +644,8 @@ class _DispatcherBase:
                         job.exec_mode, len(job.tasks), job.target_table, job.write_mode,
                     )
                     try:
-                        # local_stage: Phase 1 전에 파일을 호스트별 예산(S_h)에 맞춰 배분한다.
-                        # 예산 초과면 배치 불가 → 실행을 건너뛰고 FAILED 로 마감한다.
+                        # local_stage 는 Phase 1 전에 파일을 호스트별 예산(S_h)에 맞춰 배분한다. 예산을 넘겨
+                        # 배치할 수 없으면 실행을 건너뛰고 FAILED 로 마감한다.
                         if await self._plan_local_stage(job):
                             await self._execute(job)
                             # local_stage: 모든 export 완료(배리어) 후 GP file:// 적재(Phase 2+3).
@@ -658,7 +658,7 @@ class _DispatcherBase:
                         finalize_job(job)
                         job.finished_at = _now_iso()
                         self._save(job)
-                        await self.history.record(job)  # 종료 이력
+                        await self.history.record(job)  # 종료 이력을 남긴다
                         # 종료 요약(status·완료수·적재행수·소요시간)을 한 줄로. FAILED/PARTIAL 은
                         # 사유 파악이 급하므로 WARNING 으로, 정상 종료는 INFO 로 남긴다.
                         done = sum(1 for t in job.tasks if t.status == TaskStatus.DONE)
@@ -682,18 +682,18 @@ class _DispatcherBase:
 
 
 class HttpDispatcher(_DispatcherBase):
-    """원격 executor 서비스와 HTTP로 통신하는 운영 디스패처.
+    """원격 executor 서비스와 HTTP 로 통신하는 운영용 디스패처다.
 
     각 task의 sub-query를 executor에 POST 하여 시작시키고, 완료될 때까지 상태를
     폴링한다. 결과 데이터는 받지 않으며 상태와 rows_written 만 수집한다.
     """
 
     async def _execute(self, job: Job) -> None:
-        # job의 모든 task를 동시에 시작한다. 하나의 HTTP 클라이언트를 공유해
-        # 연결을 재사용하고, 실제 동시 실행 수는 _run_task 내부의 _sem 으로 제한한다.
-        # 타임아웃은 connect(접속)와 read(전체)를 분리한다: read 는 task 가 오래 걸려도
-        # 기다리되, connect 는 짧게 잡아 죽은 executor 에서 1시간씩 매달리지 않고 빠르게
-        # 실패→재시도/failover 하도록 한다.
+        # job 의 모든 task 를 동시에 시작한다. HTTP 클라이언트 하나를 공유해 연결을 재사용하고,
+        # 실제 동시 실행 수는 _run_task 안의 _sem 으로 제한한다. 타임아웃은 접속(connect)과
+        # 전체(read)를 분리하는데, read 는 task 가 오래 걸려도 기다리되 connect 는 짧게 잡아 죽은
+        # executor 에 한 시간씩 매달리지 않고 빠르게 실패한 뒤 재시도나 failover 로 넘어가게
+        # 하기 위해서다.
         timeout = httpx.Timeout(
             self.settings.task_timeout_s,
             connect=self.settings.task_connect_timeout_s,
@@ -732,7 +732,7 @@ class HttpDispatcher(_DispatcherBase):
     async def _run_task(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         # 디스패치 동시성 세마포어로 한 번에 떠 있는 task 수를 제한한다.
         async with self._sem:
-            # 슬롯을 잡기까지 기다리는 사이 취소됐을 수 있으므로 실행 직전에 재확인.
+            # 슬롯을 잡기까지 기다리는 사이에 취소됐을 수 있으므로 실행 직전에 다시 확인한다.
             if self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
                 self._save(job)
@@ -776,7 +776,7 @@ class HttpDispatcher(_DispatcherBase):
         last_err: Exception | None = None
 
         for idx, url in enumerate(order):
-            # 1) 시작 단계: 같은 executor 에 (1 + task_max_retries)회까지 시도.
+            # 1) 시작 단계에서는 같은 executor 에 1 + task_max_retries 회까지 시도한다.
             started = False
             for attempt in range(self.settings.task_max_retries + 1):
                 if self._cancel_observed(job):
@@ -784,7 +784,7 @@ class HttpDispatcher(_DispatcherBase):
                     self._save(job)
                     return
                 task.attempt += 1
-                task.executor_url = url  # 현재 시도 중인 executor 를 task 에 반영
+                task.executor_url = url  # 지금 시도 중인 executor 를 task 에 반영한다
                 try:
                     logger.debug(
                         "task %s 디스패치 시도 executor=%s attempt=%s",
@@ -804,7 +804,7 @@ class HttpDispatcher(_DispatcherBase):
                         self.settings.task_max_retries + 1, exc,
                     )
                     if attempt < self.settings.task_max_retries:
-                        # 지수 백오프: backoff * 2**시도횟수
+                        # 지수 백오프로 backoff * 2**시도횟수 만큼 기다린다.
                         await asyncio.sleep(
                             self.settings.task_retry_backoff_s * (2 ** attempt)
                         )
@@ -813,7 +813,7 @@ class HttpDispatcher(_DispatcherBase):
                     logger.warning(
                         "task %s → 다른 executor 로 failover (%s)", task.task_id, url,
                     )
-                continue  # 다음 후보 executor 로 failover
+                continue  # 다음 후보 executor 로 failover 한다
 
             # 2) 폴링 단계: 시작 성공. 종료 상태까지 추적한다.
             try:
@@ -833,13 +833,13 @@ class HttpDispatcher(_DispatcherBase):
                     " → 다른 executor 로 재실행(멱등)" if can_redo else "",
                 )
                 if can_redo:
-                    continue  # 멱등이므로 다른 executor 에 재실행 안전
+                    continue  # 멱등이라 다른 executor 에서 다시 실행해도 안전하다
                 task.status = TaskStatus.FAILED
                 task.error = f"폴링 실패: {exc}"
                 self._save(job)
                 return
 
-        # 모든 후보/재시도 소진 → 최종 실패
+        # 후보와 재시도를 모두 소진했으므로 최종 실패로 처리한다.
         task.status = TaskStatus.FAILED
         task.error = str(last_err) if last_err else (task.error or "executor 연결 실패")
         logger.warning(
@@ -879,14 +879,14 @@ class HttpDispatcher(_DispatcherBase):
                 # (둘 다 coordinator 가 확정한 "이 task 가 쓸 위치"). 외부테이블 생성/INSERT 는
                 # 두 모드 모두 coordinator 가 배리어 후 Phase 2 에서 하므로 여기선 보내지 않는다.
                 "out_path": task.out_path,
-                # csv_options 는 local_stage/s3_stage 가 공유(CSV 방언 = 외부테이블 FORMAT).
+                # csv_options 는 local_stage 와 s3_stage 가 공유한다. 이 CSV 방언이 곧 외부테이블의 FORMAT 이다.
                 "csv_options": (
                     stage_sql.resolve_csv_options(job, self.settings)
                     if job.exec_mode in ("local_stage", "s3_stage") else None
                 ),
             },
         )
-        resp.raise_for_status()  # 5xx/4xx → HTTPStatusError(=_RETRYABLE) 로 재시도/failover
+        resp.raise_for_status()  # 4xx·5xx 는 HTTPStatusError(=_RETRYABLE)가 되어 재시도나 failover 로 간다
 
     async def _poll(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         # executor가 task를 종료 상태로 보고할 때까지 주기적으로 상태를 조회한다.
@@ -898,16 +898,16 @@ class HttpDispatcher(_DispatcherBase):
             if self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
                 return
-            # 폴링 간격만큼 쉬고 다음 상태를 조회(executor에 과도한 부하를 주지 않도록).
+            # 폴링 간격만큼 쉬었다가 다음 상태를 조회한다. executor 에 과도한 부하를 주지 않기 위해서다.
             await asyncio.sleep(self.settings.poll_interval_s)
             try:
                 resp = await client.get(f"{task.executor_url}/tasks/{task.task_id}")
                 resp.raise_for_status()
-                transient = 0  # 성공하면 일시 오류 카운터 초기화
+                transient = 0  # 성공했으니 일시 오류 카운터를 초기화한다
             except _RETRYABLE:
                 transient += 1
                 if transient > self.settings.task_max_retries:
-                    raise  # 한도 초과 → 상위에서 failover/실패 처리
+                    raise  # 한도를 넘겼으니 상위에서 failover 하거나 실패 처리하게 한다
                 continue
             data = resp.json()
             # executor가 보고한 상태/진척으로 로컬 task를 갱신한다. rows_written 은
@@ -947,7 +947,7 @@ class HttpDispatcher(_DispatcherBase):
             ]
             logger.info("job 취소 요청 — 진행 중 task %d개에 전파", len(targets))
             if targets:
-                # 취소 전파는 짧은 타임아웃의 별도 클라이언트로(메인 실행 클라이언트와 분리).
+                # 취소 전파는 타임아웃이 짧은 별도 클라이언트로 보낸다. 메인 실행 클라이언트와 분리하기 위해서다.
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     await asyncio.gather(
                         *(self._cancel_task(client, t) for t in targets)
@@ -1003,7 +1003,7 @@ class HttpDispatcher(_DispatcherBase):
         쓴다. 조회 실패/미보고면 URL 호스트로 폴백한다. gp_hostname 은 정적이라 URL 별로 한 번만
         조회한다(캐시). URL 이 None(로컬 배정 없음)이면 설정 gp_hostname 으로 채운다.
         """
-        real = [u for u in dict.fromkeys(urls) if u]  # 중복 제거 + None 제외
+        real = [u for u in dict.fromkeys(urls) if u]  # 중복을 없애고 None 을 걸러낸다
         missing = [u for u in real if u not in self._gp_host_cache]
         if missing:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1015,7 +1015,7 @@ class HttpDispatcher(_DispatcherBase):
                         host = (resp.json().get("gp_hostname") or "").strip()
                     except Exception as exc:
                         logger.warning("executor %s gp_hostname 조회 실패: %s", u, exc)
-                    # 미보고/조회 실패 → URL 호스트로 폴백(최소한의 동작 보장).
+                    # 보고가 없거나 조회에 실패하면 URL 의 호스트로 폴백해 최소한의 동작을 보장한다.
                     self._gp_host_cache[u] = host or stage_sql.host_of(u)
 
                 await asyncio.gather(*(_fetch(u) for u in missing))
@@ -1050,13 +1050,13 @@ class LocalDispatcher(_DispatcherBase):
     def _get_backend(self):
         # 백엔드를 최초 사용 시점에 한 번만 생성해 캐싱(lazy init)한다.
         if self._backend is None:
-            from executor.backend import build_backend  # 지연 임포트(순환 방지)
+            from executor.backend import build_backend  # 순환 임포트를 피하려고 지연 임포트한다
             self._backend = build_backend(self.settings)
         return self._backend
 
     def _get_stage_backend(self):
-        # local 모드는 export 와 Phase 2(GP 적재)가 같은 프로세스의 동일 백엔드를 공유한다
-        # (주입된 MockBackend 포함) → export 용 백엔드를 그대로 재사용한다.
+        # local 모드에서는 export 와 Phase 2 의 GP 적재가 같은 프로세스의 같은 백엔드를 공유하므로
+        # (주입된 MockBackend 도 마찬가지다) export 용 백엔드를 그대로 재사용한다.
         return self._get_backend()
 
     async def _cleanup_s3(self, job: Job) -> None:
@@ -1078,22 +1078,22 @@ class LocalDispatcher(_DispatcherBase):
 
     async def _run_task(self, job: Job, task: Task) -> None:
         async with self._sem:
-            # 실행 직전 취소 확인(슬롯 대기 중 취소되었을 수 있음).
+            # 슬롯을 기다리는 사이에 취소됐을 수 있으므로 실행 직전에 확인한다.
             if self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
                 return
             backend = self._get_backend()
             loop = asyncio.get_running_loop()
             try:
-                # backend 호출은 동기(blocking) I/O이므로 run_in_executor 로 스레드에
-                # 넘겨 이벤트 루프를 막지 않는다. 상태는 READING→WRITING 으로 표시한다.
+                # backend 호출은 블로킹 I/O 이므로 run_in_executor 로 스레드에 넘겨 이벤트 루프를 막지
+                # 않는다. 상태는 READING 에서 WRITING 으로 옮긴다.
                 task.status = TaskStatus.READING
                 task.status = TaskStatus.WRITING
                 # local 모드도 세부 단계를 채우도록 진행률/단계 콜백을 백엔드에 넘긴다.
                 def _progress(n: int) -> None:
                     task.rows_written = n
-                # 블로킹 백엔드를 스레드로 넘길 때 로그 컨텍스트(job_id/task_id)를 복사해 함께
-                # 넘긴다 → 백엔드 스레드의 상세 로그(단계 전이 등)에도 [job][task] 가 붙는다.
+                # 블로킹 백엔드를 스레드로 넘길 때 로그 컨텍스트(job_id·task_id)를 복사해 함께 넘긴다.
+                # 그래야 백엔드 스레드의 상세 로그(단계 전이 등)에도 [job][task] 가 붙는다.
                 ctx = contextvars.copy_context()
                 logger.debug(
                     "적재 시작 exec_mode=%s target=%s", job.exec_mode, job.target_table
@@ -1119,7 +1119,7 @@ class LocalDispatcher(_DispatcherBase):
                         ),
                     )
                 elif job.exec_mode == "local_stage":
-                    # local_stage Phase 1: Impala 결과를 로컬 CSV 로 export(Phase 2 는 run() 이 배리어 후 수행).
+                    # local_stage Phase 1 로 소스 결과를 로컬 CSV 로 export 한다(Phase 2 는 run() 이 배리어 뒤에 수행한다).
                     csv_options = stage_sql.resolve_csv_options(job, self.settings)
                     rows = await loop.run_in_executor(
                         None,
@@ -1133,8 +1133,8 @@ class LocalDispatcher(_DispatcherBase):
                         ),
                     )
                 elif job.exec_mode == "s3_stage":
-                    # s3_stage Phase 1: Impala 결과를 로컬 CSV 로 export → S3 업로드(Phase 2 는
-                    # run() 이 배리어 후 수행). out_path 는 coordinator 가 확정한 S3 객체 키.
+                    # s3_stage Phase 1 로 소스 결과를 로컬 CSV 로 내린 뒤 S3 에 올린다(Phase 2 는 run() 이
+                    # 배리어 뒤에 수행한다). out_path 는 coordinator 가 확정한 S3 객체 키다.
                     csv_options = stage_sql.resolve_csv_options(job, self.settings)
                     rows = await loop.run_in_executor(
                         None,
@@ -1166,7 +1166,7 @@ class LocalDispatcher(_DispatcherBase):
                     TaskStatus.CANCELLED if job.cancel_requested else TaskStatus.DONE
                 )
                 if task.status == TaskStatus.CANCELLED:
-                    close_open_phases(task.phases)  # 취소 — 열린 단계 마감
+                    close_open_phases(task.phases)  # 취소됐으니 열린 단계를 마감한다
             except Exception as exc:
                 # local 백엔드 실행 실패 — 스택트레이스와 함께 남긴다(조용한 실패 방지).
                 logger.exception(
@@ -1175,7 +1175,7 @@ class LocalDispatcher(_DispatcherBase):
                 )
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
-                # 실패한 단계를 지금으로 마감 → 대시보드 소요시간이 계속 증가하지 않게.
+                # 실패한 단계를 지금 시각으로 마감한다. 그래야 대시보드의 소요시간이 계속 늘지 않는다.
                 close_open_phases(task.phases)
             finally:
                 self._save(job)

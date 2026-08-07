@@ -1,4 +1,4 @@
-"""Executor FastAPI 애플리케이션: task를 받아 실행하고 상태를 노출한다.
+"""Executor FastAPI 애플리케이션으로, task 를 받아 실행하고 상태를 노출한다.
 
 coordinator 가 분할한 sub-query(task)를 ``POST /tasks`` 로 접수해 백그라운드에서 실행하고,
 실행 상태/시스템 메트릭/이력을 REST 및 대시보드로 노출하는 executor 프로세스의 본체다.
@@ -6,7 +6,7 @@ coordinator 가 분할한 sub-query(task)를 ``POST /tasks`` 로 접수해 백�
 핵심 흐름:
     1. 접수: ``create_task`` 가 요청을 ``Task`` 로 만들어 인메모리 ``tasks`` dict 에 넣고
        QUEUED 이력을 남긴 뒤, ``asyncio.create_task`` 로 실행을 비동기 시작하고 202 를 반환.
-    2. 실행: ``_run`` 이 상태를 READING → WRITING → DONE(또는 FAILED/CANCELLED)으로 전이시키며,
+    2. 실행 단계에서는 ``_run`` 이 상태를 READING, WRITING 을 거쳐 DONE(또는 FAILED·CANCELLED)으로 옮기며,
        블로킹 DB 드라이버(impyla/psycopg)는 스레드 풀에서 돌려 이벤트 루프를 막지 않는다.
        각 전이마다 ``history.record`` 로 한 행씩 이력을 append 한다.
     3. 동시성 제어: ``_run_with_ctx`` 가 admission 세마포어로 동시에 실행되는 task 수를
@@ -47,8 +47,8 @@ from .status import ExecutorStatusReporter
 
 logger = logging.getLogger(__name__)
 
-# query-execute 위임용 커스텀 실행 함수 캐시(dotted path → callable). executor 는 단일 워커라
-# 프로세스 내 캐시가 안전하다. 첫 호출에서 import 후 재사용한다.
+# query-execute 위임용 커스텀 실행 함수를 dotted path 별로 캐시한다. executor 는 단일 워커라
+# 프로세스 안 캐시가 안전하며, 첫 호출에서 import 한 뒤 계속 재사용한다.
 _query_func_cache: dict = {}
 
 
@@ -90,12 +90,12 @@ def _src_kw(task) -> dict:
 
 
 def _now_iso() -> str:
-    """현재 시각을 KST(타임존 없는) ISO 문자열로 반환. started_at/finished_at 기록용."""
+    """현재 시각을 타임존 없는 KST ISO 문자열로 돌려준다. started_at 과 finished_at 을 기록하는 데 쓴다."""
     return now_iso()
 
 
 def _gp_hostname() -> str:
-    """이 executor 가 보고할 GP 세그먼트 호스트명. 설정값 우선, 없으면 OS hostname.
+    """이 executor 가 보고할 GP 세그먼트 호스트명을 정한다. 설정값을 우선하고 없으면 OS hostname 을 쓴다.
 
     local_stage 의 file:// URI(``file://<hostname>/...``)에서 hostname 은
     ``gp_segment_configuration.hostname`` 과 정확히 일치해야 한다. co-locate 배포에서 OS
@@ -106,7 +106,7 @@ def _gp_hostname() -> str:
 
 
 def _snip(text: Optional[str], limit: int = 300) -> str:
-    """긴 SQL 을 로그용으로 한 줄·상한 길이로 줄인다(개행→공백, 초과분은 …).
+    """긴 SQL 을 로그용으로 한 줄이자 상한 길이로 줄인다. 개행은 공백으로 바꾸고 넘치는 부분은 … 로 잘라 낸다.
 
     상세 로그(DEBUG)에 sub_query/INSERT 전문을 통째로 남기면 로그가 비대해지므로,
     흐름 추적에 충분한 앞부분만 남긴다.
@@ -117,16 +117,16 @@ def _snip(text: Optional[str], limit: int = 300) -> str:
     return flat if len(flat) <= limit else flat[:limit] + "…"
 
 
-# 진행률 DEBUG 로그를 남기는 행수 간격(이 값마다 한 번씩만 찍어 로그 IO 를 억제).
+# 진행률 DEBUG 로그를 남기는 행수 간격이다. 이 값마다 한 번씩만 찍어 로그 IO 를 억제한다.
 _PROGRESS_LOG_EVERY = 100_000
 
 
-# "활성"(처리중)으로 간주하는 task 상태: 처리중 Task 탭 집계 기준.
+# "활성"(처리 중)으로 볼 task 상태다. 처리중 Task 탭 집계의 기준이 된다.
 _ACTIVE_STATUSES = {TaskStatus.QUEUED, TaskStatus.READING, TaskStatus.WRITING}
 
 
 def _build_backend() -> Backend:
-    """설정 기반 백엔드 선택(공용 build_backend 위임)."""
+    """설정을 보고 백엔드를 고른다(공용 build_backend 에 위임한다)."""
     return build_backend(settings)
 
 
@@ -134,7 +134,7 @@ def create_app(
     backend: Optional[Backend] = None,
     task_history: Optional[TaskHistoryRepository] = None,
 ) -> FastAPI:
-    """Executor FastAPI 앱을 구성해 반환하는 팩토리.
+    """Executor FastAPI 앱을 구성해 돌려주는 팩토리다.
 
     의존성(backend, task_history)을 인자로 주입할 수 있어 테스트에서 MockBackend/
     가짜 이력 저장소를 끼워 넣기 쉽다. 미지정 시 설정 기반 기본 구현을 생성한다.
@@ -142,7 +142,7 @@ def create_app(
     이 클로저 안에서 만들어진다(앱 인스턴스마다 독립적인 상태).
 
     인자:
-        backend: Impala→Greenplum 적재 백엔드. None 이면 설정으로 자동 선택.
+        backend: 소스에서 Greenplum 으로 적재하는 백엔드다. None 이면 설정을 보고 자동으로 고른다.
         task_history: task 상태 전이 이력 저장소. None 이면 설정으로 생성.
 
     반환:
@@ -151,13 +151,13 @@ def create_app(
     backend = backend or _build_backend()
     history = task_history or TaskHistoryRepository(settings)
     tasks: dict[str, Task] = {}
-    # 동시 task 상한(admission control). 0 이면 무제한.
+    # 동시 task 상한이다(admission control). 0 이면 무제한으로 본다.
     _max = settings.executor_max_concurrent_tasks
     sem = asyncio.Semaphore(_max) if _max and _max > 0 else None
     reporter = ExecutorStatusReporter(settings, tasks_provider=lambda: _task_counts())
-    # 진행 중인 백그라운드 task(코루틴) 집합 — graceful drain 의 대기 대상.
+    # 진행 중인 백그라운드 task(코루틴) 집합이며, graceful drain 이 이들을 기다린다.
     inflight: set = set()
-    # 종료(SIGTERM) 시 신규 접수를 막는 드레이닝 플래그(dict 로 클로저에서 가변 공유).
+    # SIGTERM 을 받았을 때 신규 접수를 막는 드레이닝 플래그다. 클로저에서 함께 바꾸려고 dict 로 뒀다.
     drain = {"on": False}
 
     @asynccontextmanager
@@ -171,7 +171,7 @@ def create_app(
         finally:
             # 1) 드레이닝 시작: 이후 신규 task 는 503 으로 거부한다.
             drain["on"] = True
-            # 2) 진행 중 task 를 타임아웃 내에서 완료 대기(강제 취소하지 않음).
+            # 2) 진행 중인 task 를 타임아웃 안에서 기다린다. 강제로 취소하지는 않는다.
             pending = [t for t in inflight if not t.done()]
             if pending:
                 timeout = settings.executor_shutdown_drain_timeout_s
@@ -184,7 +184,7 @@ def create_app(
                         "드레이닝 타임아웃(%ss): 미완료 task %d개 — 종료 진행",
                         timeout, len(still),
                     )
-            # 3) self-report 루프 정리.
+            # 3) self-report 루프를 정리한다.
             await reporter.stop()
 
     app = FastAPI(
@@ -208,17 +208,17 @@ def create_app(
     # 에어갭: 내장 정적 에셋(/assets)과 오프라인 docs(/docs·/redoc)를 등록한다.
     mount_static(app)
     register_offline_docs(app)
-    # HTTP 요청/응답 DEBUG 로깅(로그 레벨이 DEBUG 일 때만 자동 기록). 잡음 경로는 기본 제외.
+    # HTTP 요청/응답을 DEBUG 로 남긴다. 로그 레벨이 DEBUG 일 때만 자동으로 기록하고 잡음 경로는 기본 제외한다.
     install_http_logging(app, settings)
     app.state.backend = backend
     app.state.tasks = tasks
     app.state.task_history = history
-    # 종료 드레이닝 상태(테스트/디버깅에서 참조). {"on": bool}
+    # 종료 드레이닝 상태를 {"on": bool} 형태로 노출한다. 테스트와 디버깅에서 참조한다.
     app.state.drain = drain
     app.state.inflight = inflight
 
     async def _run_with_ctx(task: Task) -> None:
-        """admission 세마포어와 로그 컨텍스트로 감싼 task 실행 래퍼.
+        """admission 세마포어와 로그 컨텍스트로 task 실행을 감싸는 래퍼다.
 
         백그라운드 실행 로그에도 [job_id][task_id] 가 붙도록 컨텍스트를 바인딩하고,
         동시 실행 task 수를 상한으로 제한한다. 세마포어가 있으면(상한 설정) 슬롯을 얻을
@@ -233,7 +233,7 @@ def create_app(
                 await _run(task)
 
     async def _run(task: Task) -> None:
-        """task 본 실행: 상태 전이(READING→WRITING→DONE)와 이력 기록을 수행한다.
+        """task 를 실제로 실행하면서 상태를 READING, WRITING, DONE 으로 옮기고 이력을 기록한다.
 
         exec_mode 에 따라 백엔드 호출이 갈린다(statement / stage_insert / copy). 블로킹
         DB 드라이버는 ``run_in_executor`` 로 스레드 풀에서 실행해 이벤트 루프를 막지 않는다.
@@ -242,11 +242,11 @@ def create_app(
         ``history.record`` 로 이력 한 행을 남기고, 종료 시각은 ``finished_at`` 에 기록한다.
         예외를 밖으로 던지지 않는다(백그라운드 task 이므로 자체적으로 마무리).
         """
-        # 진행률 DEBUG 로그 스로틀 상태(마지막으로 로그를 남긴 누적 행수).
+        # 진행률 DEBUG 로그의 스로틀 상태다. 마지막으로 로그를 남긴 누적 행수를 들고 있다.
         _last_logged = {"n": 0}
 
         def progress(n: int) -> None:
-            # 백엔드가 배치 적재마다 호출하는 진행률 콜백 — 누적 적재 행수를 task 에 반영.
+            # 백엔드가 배치를 적재할 때마다 부르는 진행률 콜백이다. 누적 적재 행수를 task 에 반영한다.
             task.rows_written = n
             # 상세 추적(DEBUG): 매 배치마다 찍으면 IO 가 커지므로 일정 행수 간격으로만 남긴다.
             if logger.isEnabledFor(logging.DEBUG) and n - _last_logged["n"] >= _PROGRESS_LOG_EVERY:
@@ -257,27 +257,27 @@ def create_app(
             if task.cancel_requested:
                 task.status = TaskStatus.CANCELLED
                 task.finished_at = _now_iso()
-                close_open_phases(task.phases)  # 열린 단계(QUEUE_WAIT 등) 마감
-                await history.record(task)  # CANCELLED 이력
+                close_open_phases(task.phases)  # QUEUE_WAIT 처럼 열려 있는 단계를 마감한다
+                await history.record(task)  # CANCELLED 이력을 남긴다
                 return
             # 슬롯 대기(QUEUE_WAIT) 단계 종료: 접수(create_task)에서 시작해 여기서 닫는다.
             task.on_stage("QUEUE_WAIT", "end")
             task.status = TaskStatus.READING
             task.started_at = _now_iso()
-            await history.record(task)  # READING 이력
+            await history.record(task)  # READING 이력을 남긴다
             loop = asyncio.get_running_loop()
             # impyla/psycopg는 블로킹이므로 스레드에서 실행해 이벤트 루프를 막지 않는다.
             # 스레드로 넘길 때 현재 로그 컨텍스트(job_id/task_id)를 복사해 함께 넘긴다. 그래야
             # 백엔드 스레드에서 찍히는 상세 로그(단계 전이·진행률)에도 [job][task] 가 붙는다.
             ctx = contextvars.copy_context()
             task.status = TaskStatus.WRITING
-            await history.record(task)  # WRITING 이력
+            await history.record(task)  # WRITING 이력을 남긴다
             logger.debug(
                 "적재 시작 exec_mode=%s target=%s sub_query=%s",
                 task.exec_mode, task.target_table, _snip(task.sub_query),
             )
             if task.exec_mode == "statement":
-                # wrapper 로 감싼 INSERT 등을 대상 DB에서 그대로 실행(COPY 미사용)
+                # wrapper 로 감싼 INSERT 등을 대상 DB 에서 그대로 실행한다. COPY 는 쓰지 않는다.
                 rows = await loop.run_in_executor(
                     None, lambda: ctx.run(
                         app.state.backend.execute,
@@ -285,7 +285,7 @@ def create_app(
                     )
                 )
             elif task.exec_mode == "stage_insert":
-                # Impala 결과를 Greenplum staging(TEMP)에 COPY → staging→target INSERT
+                # 소스 결과를 Greenplum staging(TEMP)에 COPY 한 뒤 staging 에서 target 으로 INSERT 한다.
                 rows = await loop.run_in_executor(
                     None,
                     lambda: ctx.run(
@@ -316,14 +316,14 @@ def create_app(
                     ),
                 )
             elif task.exec_mode == "s3_stage":
-                # s3_stage Phase 1: Impala 결과를 로컬 CSV 로 export → S3 업로드(로컬 삭제).
-                # 외부테이블 생성/target INSERT(Phase 2)는 coordinator 가 배리어 후 수행한다.
+                # s3_stage Phase 1 로 소스 결과를 로컬 CSV 로 내려 S3 에 올린 뒤 로컬 파일을 지운다.
+                # 외부테이블 생성과 target INSERT 인 Phase 2 는 coordinator 가 배리어 뒤에 수행한다.
                 rows = await loop.run_in_executor(
                     None,
                     lambda: ctx.run(
                         app.state.backend.export_to_s3,
                         task.sub_query,
-                        task.out_path,   # coordinator 가 확정한 S3 객체 키
+                        task.out_path,   # coordinator 가 확정해 준 S3 객체 키다
                         task.job_id,
                         task.task_id,
                         task.csv_options,
@@ -334,7 +334,7 @@ def create_app(
                     ),
                 )
             else:
-                # copy 모드: Impala read → Greenplum COPY
+                # copy 모드에서는 소스에서 읽어 Greenplum 으로 COPY 한다.
                 rows = await loop.run_in_executor(
                     None,
                     lambda: ctx.run(
@@ -350,26 +350,26 @@ def create_app(
                     ),
                 )
             task.rows_written = rows
-            # 실행 중 취소 요청이 들어왔으면 DONE 대신 CANCELLED 처리
+            # 실행 중에 취소 요청이 들어왔으면 DONE 대신 CANCELLED 로 처리한다.
             if task.cancel_requested:
                 task.status = TaskStatus.CANCELLED
                 task.finished_at = _now_iso()
-                close_open_phases(task.phases)  # 실행 중 취소 — 열린 단계 마감
+                close_open_phases(task.phases)  # 실행 중에 취소됐으니 열린 단계를 마감한다
                 logger.info("task %s 취소됨", task.task_id)
                 await history.record(task)
                 return
             task.status = TaskStatus.DONE
             task.finished_at = _now_iso()
             logger.info("task %s 완료: %s행 적재", task.task_id, rows)
-            await history.record(task)  # DONE 이력
+            await history.record(task)  # DONE 이력을 남긴다
         except Exception as exc:
             task.status = TaskStatus.FAILED
             task.error = str(exc)
             task.finished_at = _now_iso()
-            # 실패한 단계(start 만 있고 end 없는)를 지금으로 마감 → 소요시간이 계속 증가하지 않게.
+            # start 만 있고 end 가 없는 실패 단계를 지금 시각으로 마감한다. 그래야 소요시간이 계속 늘지 않는다.
             close_open_phases(task.phases)
             logger.exception("task %s 실패", task.task_id)
-            await history.record(task)  # FAILED 이력
+            await history.record(task)  # FAILED 이력을 남긴다
 
     @app.post(
         "/tasks",
@@ -386,8 +386,8 @@ def create_app(
         task_id 와 현재 상태(QUEUED)를 반환하므로, 호출자(coordinator)는 폴링으로 진행을
         추적한다. 동일 task_id 재요청 시 기존 항목을 덮어쓴다.
         """
-        # 종료(드레이닝) 중에는 신규 task 를 받지 않는다 → coordinator 가 다른 executor 로
-        # failover 하거나 재시도하도록 503 으로 거부한다.
+        # 드레이닝 중에는 신규 task 를 받지 않는다. coordinator 가 다른 executor 로 failover 하거나
+        # 재시도하도록 503 으로 거부한다.
         if drain["on"]:
             # coordinator 쪽 failover 의 원인이 되므로, 거부 사실을 남긴다(job 추적용).
             logger.info("드레이닝 중 신규 task 거부 job=%s task=%s", req.job_id, req.task_id)
@@ -417,7 +417,7 @@ def create_app(
         task.on_stage("QUEUE_WAIT", "start")
         tasks[task.task_id] = task
         with job_log_context(task.job_id, task.task_id):
-            await history.record(task)  # QUEUED 이력
+            await history.record(task)  # QUEUED 이력을 남긴다
             # 백그라운드 실행 task 를 추적해 종료 시 드레이닝(완료 대기)할 수 있게 한다.
             bg = asyncio.create_task(_run_with_ctx(task))
             inflight.add(bg)
@@ -444,7 +444,7 @@ def create_app(
             1 for t in all_tasks
             if t.status in (TaskStatus.READING, TaskStatus.WRITING)
         )
-        # 최근 시작분이 위로 오도록 정렬(시작 전 task 는 started_at 이 없어 "" 로 뒤로).
+        # 최근에 시작한 것이 위로 오도록 정렬한다. 아직 시작 전인 task 는 started_at 이 없어 "" 로 뒤에 놓인다.
         rows = sorted(all_tasks, key=lambda t: t.started_at or "", reverse=True)
         if status:
             s = status.lower()
@@ -463,7 +463,7 @@ def create_app(
 
     @app.get("/tasks/{task_id}", tags=["Tasks"], summary="태스크 상태 조회")
     def get_task(task_id: str):
-        """단일 task 의 현재 상태를 조회한다. 없으면 404."""
+        """단일 task 의 현재 상태를 조회한다. 없으면 404 를 낸다."""
         task = tasks.get(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
@@ -477,7 +477,7 @@ def create_app(
         "포함해 반환한다. coordinator 의 GET /jobs/{job_id}/tasks/{task_id} 와 대칭.",
     )
     def get_task_detail(task_id: str):
-        """단일 task 의 상세(실행 SQL 전문 포함)를 조회한다. 없으면 404."""
+        """실행 SQL 전문까지 포함한 단일 task 의 상세를 조회한다. 없으면 404 를 낸다."""
         task = tasks.get(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
@@ -485,7 +485,7 @@ def create_app(
 
     @app.get("/tasks/{task_id}/result", tags=["Tasks"], summary="태스크 결과(적재 행수) 조회")
     def get_task_result(task_id: str):
-        """task 의 결과(누적 적재 행수)를 조회한다. 없으면 404.
+        """task 의 결과인 누적 적재 행수를 조회한다. 없으면 404 를 낸다.
 
         진행 중에는 중간 누적값, 완료 후에는 최종 적재 행수를 반환한다.
         """
@@ -511,7 +511,7 @@ def create_app(
             return format_at_fields(task.view())  # 이미 종료 — 변경 없음
         logger.info("task %s 취소 요청 수신 (현재 status=%s)", task_id, task.status.value)
         task.cancel_requested = True
-        # 아직 시작 전이면 즉시 취소 확정, 실행 중이면 _run 이 완료 후 CANCELLED 처리
+        # 아직 시작 전이면 곧바로 취소를 확정하고, 실행 중이면 _run 이 끝난 뒤 CANCELLED 로 처리한다.
         if task.status == TaskStatus.QUEUED:
             task.status = TaskStatus.CANCELLED
             task.finished_at = _now_iso()
@@ -533,7 +533,7 @@ def create_app(
         import os
         import shutil
 
-        safe = os.path.basename(job_id)  # 경로 조작 방지: 하위 디렉터리명만 사용
+        safe = os.path.basename(job_id)  # 경로 조작을 막으려고 하위 디렉터리명만 쓴다
         target = os.path.join(settings.stage_local_dir, safe)
         removed = False
         with job_log_context(job_id):
@@ -542,7 +542,7 @@ def create_app(
                 removed = True
                 logger.info("local_stage 로컬 CSV 정리: %s 삭제", target)
             else:
-                # coordinator 가 이미 정리했거나 이 호스트엔 파일이 없던 경우(멱등).
+                # coordinator 가 이미 정리했거나 이 호스트에는 파일이 없던 경우다. 멱등하게 넘어간다.
                 logger.debug("local_stage 로컬 CSV 정리: 대상 없음(%s)", target)
         return {"job_id": job_id, "removed": removed}
 
@@ -561,7 +561,7 @@ def create_app(
 
         from core import s3_stage as s3sql
 
-        safe = os.path.basename(job_id)  # 경로 조작 방지: job 하위 프리픽스만
+        safe = os.path.basename(job_id)  # 경로 조작을 막으려고 job 하위 프리픽스만 쓴다
         prefix = s3sql.s3_job_prefix(settings.s3_prefix, safe)
         deleted = 0
         with job_log_context(job_id):
@@ -569,18 +569,18 @@ def create_app(
                 deleted = app.state.backend.cleanup_s3_prefix(prefix)
                 logger.info("s3_stage S3 정리: %s (%d개 삭제)", prefix, deleted)
             except Exception:
-                # 정리는 best-effort — 실패해도 적재는 이미 커밋됨.
+                # 정리는 best-effort 다. 실패해도 적재는 이미 커밋된 상태다.
                 logger.warning("s3_stage S3 정리 실패 — 무시: %s", prefix, exc_info=True)
         return {"job_id": job_id, "deleted": deleted}
 
     @app.get("/health", tags=["Monitoring"], summary="헬스 체크(liveness)")
     def health():
-        """liveness 체크: 프로세스가 떠 있으면 서비스명/버전과 함께 ok 반환."""
+        """liveness 를 확인한다. 프로세스가 떠 있으면 서비스명과 버전을 붙여 ok 를 돌려준다."""
         return {"status": "ok", "service": "executor", "version": __version__}
 
     @app.get("/healthz", tags=["Monitoring"], summary="헬스 체크 별칭(하위 호환)")
     def healthz():
-        """k8s 등 관례적 ``/healthz`` 경로용 헬스 체크 별칭."""
+        """k8s 등에서 관례로 쓰는 ``/healthz`` 경로를 위한 헬스 체크 별칭이다."""
         return {"status": "ok"}
 
     def _task_counts() -> tuple[int, int, int]:
@@ -605,7 +605,7 @@ def create_app(
         m = collect_system_metrics(settings.monitor_disk_path)
         active, queued, mx = _task_counts()
         m["tasks"] = {"active": active, "queued": queued, "max": mx}
-        # local_stage: coordinator 가 file:// URI 조립에 쓸 GP 세그먼트 호스트명(항상 노출).
+        # local_stage 에서 coordinator 가 file:// URI 를 조립할 때 쓸 GP 세그먼트 호스트명이며 항상 노출한다.
         m["gp_hostname"] = _gp_hostname()
         return m
 
@@ -618,7 +618,7 @@ def create_app(
                 {"name": "greenplum", "configured": bool(settings.greenplum_dsn)},
                 {"name": "history", "configured": bool(settings.history_db_dsn)},
             ],
-            # 이 executor 가 task 실행(copy/stage_insert/local_stage 읽기)에 쓰는 소스 종류(impala).
+            # 이 executor 가 task 실행(copy·stage_insert·local_stage 읽기)에 쓰는 소스 종류다(impala).
             "source_type": settings.source_type,
         }
 
@@ -628,7 +628,7 @@ def create_app(
         summary="데이터소스에 임의 SELECT 실행(연결 확인 + 결과 미리보기)",
     )
     async def query_datasource(name: str, req: DatasourceQueryRequest):
-        """``name`` 데이터소스(impala/greenplum/history)에 임의 SQL 을 실행해 상위 N행을 반환.
+        """``name`` 데이터소스(impala·greenplum·history)에 임의 SQL 을 실행해 상위 N행을 돌려준다.
 
         블로킹 드라이버 호출이므로 ``asyncio.to_thread`` 로 스레드에서 돌려 이벤트 루프를
         막지 않는다. 미구성 데이터소스는 400, 알 수 없는 이름은 404, 연결/인증/SQL 오류는
@@ -663,7 +663,7 @@ def create_app(
                 raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {name}")
         except HTTPException:
             raise
-        except Exception as e:  # 연결/인증/SQL 오류 → 502 + 원인
+        except Exception as e:  # 연결·인증·SQL 오류는 원인을 담아 502 로 돌려준다
             logger.warning("데이터소스 %s 쿼리 실패: %s", name, e)
             raise HTTPException(status_code=502, detail=f"{name} 쿼리 실패: {e}")
         return {"datasource": name, "limit": limit, **result.to_dict()}
@@ -698,9 +698,9 @@ def create_app(
             result = await asyncio.to_thread(
                 fn, req.sql, config=dict(settings.query_func_config), limit=limit
             )
-        except Exception as e:  # 커스텀 함수 내부 오류(연결/인증/SQL 등) → 502 + 원인
-            # 커스텀 함수가 자체 로깅을 하지 않아도 원인을 추적할 수 있도록
-            # 스택 트레이스까지 남긴다(WARNING 이상 → *-warn.log 에도 기록).
+        except Exception as e:  # 커스텀 함수 안에서 난 오류는 원인을 담아 502 로 돌려준다
+            # 커스텀 함수가 자체 로깅을 하지 않아도 원인을 추적할 수 있도록 스택 트레이스까지 남긴다.
+            # WARNING 이상이라 *-warn.log 에도 기록된다.
             logger.warning(
                 "커스텀 실행 함수(%s) 실패: %s", settings.query_func_module, e, exc_info=True,
             )
@@ -709,8 +709,8 @@ def create_app(
         body = result.to_dict() if isinstance(result, QueryResult) else dict(result)
         return {"limit": limit, **body}
 
-    # 대시보드 활성화 시에만 UI 및 보조 조회 엔드포인트(/, /history, /config, /info)를 등록.
-    # started_at/start_monotonic 은 /info 의 uptime 계산 기준점(monotonic 은 시계 변경에 둔감).
+    # 대시보드가 켜져 있을 때만 UI 와 보조 조회 엔드포인트(/, /history, /config, /info)를 등록한다.
+    # started_at 과 start_monotonic 은 /info 의 uptime 계산 기준점이며, monotonic 은 시계 변경에 둔감하다.
     if settings.dashboard_enabled:
         started_at = now_dt()
         start_monotonic = time.monotonic()
@@ -773,5 +773,5 @@ def create_app(
     return app
 
 
-# uvicorn 이 "executor.app:app" 으로 임포트하는 모듈 레벨 ASGI 앱 인스턴스.
+# uvicorn 이 "executor.app:app" 으로 임포트하는 모듈 레벨 ASGI 앱 인스턴스다.
 app = create_app()

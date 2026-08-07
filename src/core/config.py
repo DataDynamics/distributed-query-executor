@@ -42,8 +42,8 @@ _properties_path: Path = _CONFIG_DIR / "config.properties"
 # _raw 는 properties 치환까지 끝난 "원시 설정 dict"(YAML 계층 구조 그대로).
 # Settings 가 이 dict 를 _get/_get_nested 로 읽어 타입이 정해진 속성으로 변환한다.
 _raw: dict = load_config(config_dir=_CONFIG_DIR)
-# _props 는 치환 전 raw properties(key=value flat). YAML 구조에 없는 **자유 정의 설정**을
-# 프리픽스로 수집하는 데 쓴다(예: query.func.config.* → 커스텀 실행 함수에 넘길 dict).
+# _props 는 치환 전의 raw properties(key=value flat)다. YAML 구조에 없는 **자유 정의 설정**을
+# 프리픽스로 수집할 때 쓴다. 예를 들어 query.func.config.* 를 모아 커스텀 실행 함수에 넘긴다.
 _props: dict = load_properties(_properties_path)
 
 
@@ -173,7 +173,7 @@ class Settings:
         self.app_name: str = _get("app", "name", "distributed-query-executor")
         self.debug: bool = _to_bool(_get("app", "debug", False))
 
-        # 쿼리 파싱 기본 방언(요청에서 sql_dialect 로 재정의 가능)
+        # 쿼리 파싱에 쓸 기본 방언이다. 요청의 sql_dialect 로 재정의할 수 있다.
         self.query_default_dialect: str = _get("query", "sql_dialect", "hive")
 
         # ───────── 쿼리 템플릿 엔진 ─────────
@@ -186,13 +186,13 @@ class Settings:
         self.template_dir: str = _get(
             "template", "dir", str(_CONFIG_DIR.parent / "templates")
         )
-        # 파일 변경 자동 리로드(개발 편의). 운영에선 false 로 stat 비용 제거.
+        # 템플릿 파일이 바뀌면 자동으로 다시 읽는다(개발 편의). 운영에서는 false 로 두어 stat 비용을 없앤다.
         self.template_auto_reload: bool = _to_bool(_get("template", "auto_reload", False))
-        # 커스텀 함수 모듈(쉼표 구분 import 경로). 엔진 기동 시 import 되어 필터/글로벌 등록.
+        # 커스텀 함수 모듈을 쉼표로 구분해 적는다. 엔진이 기동할 때 import 되면서 필터와 글로벌을 등록한다.
         self.template_func_modules: list[str] = _csv_list(
             _get("template", "func_modules", "")
         )
-        # 렌더된 DDL/INSERT 조각을 단일 SQL 문으로 강제(다중 문 인젝션 방지).
+        # 렌더된 DDL/INSERT 조각이 단일 SQL 문인지 강제한다. 다중 문 인젝션을 막기 위해서다.
         self.template_validate_ddl_single_stmt: bool = _to_bool(
             _get("template", "validate_ddl_single_stmt", True)
         )
@@ -210,16 +210,16 @@ class Settings:
         self.executor_log_filename: str = _get_nested(
             "logging", "filename", "executor", "query-executor-server.log"
         )
-        # WARNING 이상만 따로 모으는 별도 로그(운영 시 문제만 빠르게 추적). INFO 로그와 분리.
+        # WARNING 이상만 따로 모으는 별도 로그를 둔다. INFO 로그와 분리해 문제만 빠르게 추적하기 위해서다.
         self.log_warn_enabled: bool = _to_bool(
             _get_nested("logging", "warn", "enabled", True)
         )
         self.log_warn_level: str = _get_nested("logging", "warn", "level", "WARNING")
-        # 메인 로그 파일명 stem 뒤에 붙는 접미사: foo.log → foo-warn.log
+        # 메인 로그 파일명의 stem 뒤에 붙일 접미사다(foo.log 라면 foo-warn.log 가 된다).
         self.log_warn_suffix: str = _get_nested("logging", "warn", "suffix", "-warn")
 
-        # HTTP 요청/응답 DEBUG 로깅(core.http). 로그 레벨이 DEBUG 일 때만 자동 기록되며,
-        # enabled=false 면 DEBUG 여도 끈다. 본문·헤더는 마스킹·절단, 잡음 경로는 제외.
+        # HTTP 요청/응답을 DEBUG 로 남긴다(core.http). 로그 레벨이 DEBUG 일 때만 자동으로 기록하며,
+        # enabled=false 면 DEBUG 여도 끈다. 본문과 헤더는 마스킹·절단하고 잡음 경로는 제외한다.
         self.log_http_enabled: bool = _to_bool(_get_nested("logging", "http", "enabled", True))
         self.log_http_bodies: bool = _to_bool(_get_nested("logging", "http", "bodies", True))
         self.log_http_max_body: int = int(_get_nested("logging", "http", "max_body", 2048))
@@ -236,9 +236,9 @@ class Settings:
         # 정작 필요한 순간(운영 기본 레벨 INFO)에 기록이 없다. 감사 용도라 끄는 것은
         # 명시적 설정으로만 가능하게 했다.
         self.log_sql_enabled: bool = _to_bool(_get_nested("logging", "sql", "enabled", True))
-        # 로그에 남길 SQL 최대 길이(초과분은 절단하고 총 길이를 함께 표기).
+        # 로그에 남길 SQL 의 최대 길이다. 넘으면 잘라 내고 원문 길이를 함께 표기한다.
         self.log_sql_max_length: int = int(_get_nested("logging", "sql", "max_length", 4000))
-        # 바인드 파라미터(예: overwrite_partitions 선삭제의 파티션 값) 동반 기록 여부.
+        # 바인드 파라미터를 함께 남길지 정한다(예: overwrite_partitions 선삭제의 파티션 값).
         self.log_sql_params: bool = _to_bool(_get_nested("logging", "sql", "params", True))
 
         self.config_dir: Path = _CONFIG_DIR
@@ -248,8 +248,8 @@ class Settings:
         # ───────── Coordinator ─────────
         self.coordinator_host: str = _get("coordinator", "host", "0.0.0.0")
         self.coordinator_port: int = int(_get("coordinator", "port", 8088))
-        # executor 실행 방식: remote(HTTP 디스패치) | local(in-process 직접 실행)
-        # 환경변수 COORDINATOR_EXECUTOR_MODE 로 즉시 토글 가능(로컬 검증용)
+        # executor 를 remote(HTTP 디스패치)로 쓸지 local(in-process 직접 실행)로 쓸지 고른다.
+        # 로컬 검증용으로 환경변수 COORDINATOR_EXECUTOR_MODE 로 즉시 바꿀 수 있다.
         self.executor_mode: str = (
             os.getenv("COORDINATOR_EXECUTOR_MODE")
             or _get("coordinator", "executor_mode", "remote")
@@ -277,22 +277,22 @@ class Settings:
         # warehousepg.sql)이 같은 스키마를 가리킨다. search_path 가 비표준이어도 안전하다.
         self.db_schema: str = _get("db", "schema", "public")
         self.store_table: str = _qualify_table(self.db_schema, _get("store", "table", "jobs"))
-        # coordinator HA 보조 테이블(설정 키는 없고 스키마만 한정). app.py 에서 repo 에 주입.
+        # coordinator HA 보조 테이블이다. 설정 키 없이 스키마만 한정하며 app.py 가 repo 에 주입한다.
         self.coordinator_status_table: str = _qualify_table(self.db_schema, "coordinator_status")
         self.reservation_table: str = _qualify_table(self.db_schema, "executor_reservation")
-        # store.backend=file 일 때 스냅샷 파일 경로(비우면 로그 디렉터리 옆 jobs-state.json).
+        # store.backend=file 일 때 쓸 스냅샷 파일 경로다. 비우면 로그 디렉터리 옆의 jobs-state.json 을 쓴다.
         self.store_path: str = _get("store", "path", "")
         # 모니터링 대시보드(읽기 전용 웹 UI) 노출 여부.
         # 비밀값은 마스킹되어 표시되지만, 운영 정보가 외부에 드러날 수 있으므로
         # 외부 노출 환경에서는 비활성화를 고려한다.
         self.dashboard_enabled: bool = _to_bool(_get("dashboard", "enabled", True))
-        # dispatcher/app 에서 사용하는 속성명과 호환되도록 별칭 유지
+        # dispatcher 와 app 이 쓰는 속성명과 호환되도록 별칭을 유지한다.
         self.executors: list[str] = _csv_list(_get("coordinator", "executors", ""))
         self.max_concurrent_jobs: int = int(
             _get("coordinator", "max_concurrent_jobs", 16)
         )
-        # 실행 슬롯(max_concurrent_jobs)이 다 찼을 때 PENDING 으로 대기 가능한 job 수.
-        # 실행+대기 합을 넘는 요청은 429 로 거부. 0 이하이면 무제한.
+        # 실행 슬롯(max_concurrent_jobs)이 다 찼을 때 PENDING 으로 대기시킬 job 수다.
+        # 실행과 대기의 합을 넘는 요청은 429 로 거절하며, 0 이하면 무제한으로 본다.
         self.max_pending_jobs: int = int(
             _get("coordinator", "max_pending_jobs", 100)
         )
@@ -321,28 +321,30 @@ class Settings:
         self.task_max_retries: int = int(
             _get("coordinator", "task_max_retries", 2)
         )
-        # 재시도 지수 백오프의 기준 시간(초): 대기 = backoff * 2**시도횟수.
+        # 재시도 지수 백오프의 기준 시간(초)이다. 실제 대기는 backoff * 2**시도횟수 로 계산한다.
         self.task_retry_backoff_s: float = float(
             _get("coordinator", "task_retry_backoff_s", 0.5)
         )
-        # 재시도를 모두 소진해도 연결 실패면, 다른 살아있는 executor 로 재배정(failover)할지 여부.
+        # 재시도를 모두 소진하고도 연결에 실패했을 때 다른 살아 있는 executor 로 재배정할지 정한다.
         self.task_failover: bool = _to_bool(
             _get("coordinator", "task_failover", True)
         )
-        # executor 선택 정책(failover 순서): round_robin(기본, 현행) | least_loaded | p2c.
-        # least_loaded/p2c 면 HealthMonitor 스냅샷(헬스+active_tasks)을 보고 살아있는·한가한
-        # 노드를 먼저 시도한다. HA(다중 coordinator)에서는 분산 스탬피드를 피하는 p2c 권장.
+        # executor 선택 정책이자 failover 순서를 정한다. round_robin(기본)·least_loaded·p2c 중 고른다.
+        # least_loaded 나 p2c 면 HealthMonitor 스냅샷(헬스와 active_tasks)을 보고 살아 있으면서
+        # 한가한 노드를 먼저 시도한다. 다중 coordinator 에서는 분산 스탬피드를 피하는 p2c 를 권한다.
         self.executor_select: str = (
             os.getenv("COORDINATOR_EXECUTOR_SELECT")
             or _get("coordinator", "executor_select", "round_robin")
         ).lower()
         # ── Phase 3: HA(다중 coordinator) 헬스 기반 선택 고도화 ──
-        # 부하 뷰 소스: auto(멀티=self_report 공유테이블, 단일=monitor) | monitor | self_report.
+        # 부하 뷰를 어디서 얻을지 정한다. auto 면 멀티 coordinator 는 self_report 공유테이블을, 단일이면
+        # monitor 를 쓰며, monitor·self_report 로 못박을 수도 있다.
         self.executor_health_source: str = _get(
             "coordinator", "executor_health_source", "auto"
         ).lower()
-        # 공유 예약(엄격 균형): true 면 executor_reservation 으로 dispatch 중 task 를 예약해
-        # 여러 coordinator 가 실시간 전역 부하를 공유한다(active_tasks + 예약). 누수는 TTL 로 방지.
+        # 공유 예약으로 엄격한 균형을 맞출지 정한다. true 면 dispatch 중인 task 를 executor_reservation 에
+        # 예약해 여러 coordinator 가 실시간 전역 부하(active_tasks + 예약)를 공유한다. 예약이 새는
+        # 것은 TTL 로 막는다.
         self.executor_reservation: bool = _to_bool(
             _get("coordinator", "executor_reservation", False)
         )
@@ -350,37 +352,37 @@ class Settings:
         # coordinator 자기 heartbeat 주기/만료. 죽은 coordinator 소유 job 정합(orphan)에 쓰인다.
         self.heartbeat_interval_s: float = float(_get("coordinator", "heartbeat_interval_s", 10))
         self.coordinator_stale_s: float = float(_get("coordinator", "coordinator_stale_s", 30))
-        # 죽은 coordinator 소유의 비종료 job 을 FAILED 로 정합하는 주기(초). 0 이면 비활성.
+        # 죽은 coordinator 가 소유한 비종료 job 을 FAILED 로 정합하는 주기(초)다. 0 이면 끈다.
         self.orphan_reconcile_interval_s: float = float(
             _get("coordinator", "orphan_reconcile_interval_s", 30)
         )
 
         # ───────── Coordinator - executor 헬스 모니터링 & 메트릭 기록 ─────────
         self.monitor_enabled: bool = _to_bool(_get("monitor", "enabled", True))
-        # executor /health·/metrics 폴링 간격(초)
+        # executor 의 /health 와 /metrics 를 폴링하는 간격(초)이다.
         self.monitor_health_interval_s: float = float(
             _get("monitor", "health_interval_s", 10)
         )
-        # PostgreSQL 기록 간격(초)
+        # 수집한 값을 PostgreSQL 에 기록하는 간격(초)이다.
         self.monitor_record_interval_s: float = float(
             _get("monitor", "record_interval_s", 60)
         )
-        # 기록 대상 PostgreSQL DSN(비어 있으면 DB 기록 비활성, 폴링만 수행)
+        # 기록 대상 PostgreSQL DSN 이다. 비우면 DB 기록을 끄고 폴링만 수행한다.
         self.monitor_db_dsn: str = _get("monitor", "db_dsn", "")
         self.monitor_table: str = _qualify_table(self.db_schema, _get("monitor", "table", "executor_health_metrics"))
-        # /metrics 에서 사용량을 측정할 디스크 경로
+        # /metrics 에서 사용량을 측정할 디스크 경로다.
         self.monitor_disk_path: str = _get("monitor", "disk_path", "/")
 
         # ───────── Coordinator - Job 실행 이력(PostgreSQL) ─────────
         # 비어 있으면 monitor.db_dsn 을 재사용. 둘 다 없으면 이력 기록 비활성.
         self.history_db_dsn: str = _get("history", "db_dsn", "") or self.monitor_db_dsn
         self.history_table: str = _qualify_table(self.db_schema, _get("history", "table", "job_history"))
-        # executor 가 기록하는 task 단위 이력 테이블(history_db_dsn 공유)
+        # executor 가 task 단위 이력을 남길 테이블이다(history_db_dsn 을 공유한다).
         self.task_history_table: str = _qualify_table(self.db_schema, _get("history", "task_table", "task_history"))
 
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")
-        # executor self-report(멀티 coordinator): executor가 자기 상태를 공유 DB에 기록
+        # 멀티 coordinator 용 self-report 스위치다. 켜면 executor 가 자기 상태를 공유 DB 에 직접 기록한다.
         self.executor_self_report: bool = _to_bool(
             os.getenv("EXECUTOR_SELF_REPORT") or _get("executor", "self_report", False)
         )
@@ -398,20 +400,20 @@ class Settings:
         self.executor_gp_hostname: str = (
             os.getenv("EXECUTOR_GP_HOSTNAME") or _get("executor", "gp_hostname", "")
         )
-        # executor self-report 시 자기 상태를 기록할 테이블과 기록 주기(초).
+        # self-report 할 때 자기 상태를 남길 테이블과 그 주기(초)다.
         self.executor_status_table: str = _qualify_table(self.db_schema, _get("executor", "status_table", "executor_status"))
         self.executor_status_interval_s: float = float(
             _get("executor", "status_interval_s", 10)
         )
-        # executor 자체 동시 task 상한(admission control). 0 이면 무제한.
+        # executor 자체의 동시 task 상한이다(admission control). 0 이면 무제한으로 본다.
         self.executor_max_concurrent_tasks: int = int(
             _get("executor", "max_concurrent_tasks", 8)
         )
-        # 종료(SIGTERM) 시 진행 중 task 를 강제 중단하지 않고 완료를 기다리는 최대 시간(초).
+        # SIGTERM 을 받았을 때 진행 중인 task 를 강제로 끊지 않고 완료를 기다리는 최대 시간(초)이다.
         self.executor_shutdown_drain_timeout_s: float = float(
             _get("executor", "shutdown_drain_timeout_s", 25)
         )
-        # Impala (source) — 데이터를 읽어오는 원본. TLS + LDAP 인증 기준 기본값.
+        # 데이터를 읽어 올 원본인 Impala 설정이다. 기본값은 TLS 와 LDAP 인증을 전제한다.
         self.impala_host: str = _get_nested("executor", "impala", "host", "")
         self.impala_port: int = int(_get_nested("executor", "impala", "port", 21050))
         self.impala_database: str = _get_nested("executor", "impala", "database", "default")
@@ -422,11 +424,11 @@ class Settings:
             _get_nested("executor", "impala", "use_ssl", True)
         )
         self.impala_ca_cert: str = _get_nested("executor", "impala", "ca_cert", "")
-        # LDAP/PLAIN 인증일 때 사용하는 사용자/비밀번호
+        # LDAP 이나 PLAIN 인증에서 쓸 사용자와 비밀번호다.
         self.impala_user: str = _get_nested("executor", "impala", "user", "")
         self.impala_password: str = _get_nested("executor", "impala", "password", "")
-        # Impala 쿼리 옵션(전역 기본값). "MEM_LIMIT=2g,REQUEST_POOL=etl" 형태 → dict.
-        # 비어 있으면 {} 이고, 이 경우 impyla 에 configuration 을 넘기지 않고 그대로 실행한다.
+        # Impala 쿼리 옵션의 전역 기본값이다. "MEM_LIMIT=2g,REQUEST_POOL=etl" 형태를 dict 로 바꾼다.
+        # 비어 있으면 {} 이며, 이때는 impyla 에 configuration 을 넘기지 않고 그대로 실행한다.
         # 요청별 impala_query_options 가 있으면 이 전역값 위에 덮어쓴다.
         self.impala_query_options: dict[str, str] = _kv_dict(
             _get_nested("executor", "impala", "query_options", "")
@@ -450,13 +452,13 @@ class Settings:
         self.query_func_fetch_module: str = str(
             _props.get("query.func.fetch_module", "")
         ).strip()
-        # Greenplum (target) — 읽어온 데이터를 적재할 대상 DB 접속 DSN.
+        # 읽어 온 데이터를 적재할 대상 DB(Greenplum)의 접속 DSN 이다.
         self.greenplum_dsn: str = _get_nested("executor", "greenplum", "dsn", "")
-        # source→target 복사 시 한 번에 처리할 행 수. 메모리 사용량과 처리량의 균형값.
+        # 소스에서 대상으로 복사할 때 한 번에 처리할 행 수다. 메모리 사용량과 처리량 사이의 균형점이다.
         self.copy_batch_size: int = int(
             _get_nested("executor", "copy", "batch_size", 10000)
         )
-        # copy 모드 사전검증: COPY 전에 SELECT 컬럼이 대상 테이블에 있는지 확인(불일치 조기 실패).
+        # copy 모드의 사전검증 스위치다. COPY 전에 SELECT 컬럼이 대상 테이블에 있는지 확인해 조기에 실패시킨다.
         self.copy_preflight: bool = _to_bool(
             _get_nested("executor", "copy", "preflight", True)
         )
@@ -471,9 +473,10 @@ class Settings:
         self.copy_queue_size: int = int(
             _get_nested("executor", "copy", "queue_size", 8)
         )
-        # COPY 포맷: text(기본) | binary. binary 는 값을 문자열로 인코딩하지 않아 클라이언트
-        # CPU(write_wait)를 줄일 수 있으나, 컬럼 타입을 정확히 알아야 한다(대상 테이블 카탈로그에서
-        # 해석; 실패하면 자동으로 text 로 폴백). write_wait 이 병목일 때만 켜는 실험적 옵션.
+        # COPY 포맷을 text(기본)와 binary 중에 고른다. binary 는 값을 문자열로 인코딩하지 않아
+        # 클라이언트 CPU(write_wait)를 줄이지만, 컬럼 타입을 정확히 알아야 한다(대상 테이블
+        # 카탈로그에서 해석하고, 실패하면 자동으로 text 로 폴백한다). write_wait 이 병목일 때만
+        # 켜는 실험적 옵션이다.
         _fmt = str(_get_nested("executor", "copy", "format", "text")).strip().lower()
         self.copy_format: str = _fmt if _fmt in ("text", "binary") else "text"
         # Greenplum 커넥션 풀 최대 크기(executor 1대가 동시에 여는 GP 연결 상한).
@@ -505,12 +508,12 @@ class Settings:
         self.stage_csv_quote: str = str(
             _get_nested("executor", "stage", "csv_quote", '"')
         ) or '"'
-        # Phase 3 정리: 적재 성공 후 로컬 CSV 디렉터리와 외부테이블을 제거할지 여부.
+        # Phase 3 정리 스위치다. 적재에 성공한 뒤 로컬 CSV 디렉터리와 외부테이블을 지울지 정한다.
         self.stage_cleanup: bool = _to_bool(
             _get_nested("executor", "stage", "cleanup", True)
         )
-        # file:// 호스트 검증: Phase 2 전에 매핑된 세그먼트 호스트가 실제로
-        # gp_segment_configuration 에 있는지 확인해 오타/불일치를 조기 실패시킬지 여부.
+        # file:// 호스트 검증 스위치다. Phase 2 전에 매핑된 세그먼트 호스트가 실제로
+        # gp_segment_configuration 에 있는지 확인해 오타나 불일치를 조기에 실패시킨다.
         self.stage_validate_hosts: bool = _to_bool(
             _get_nested("executor", "stage", "validate_hosts", True)
         )
@@ -540,17 +543,18 @@ class Settings:
         self.s3_access_key: str = _get_nested("executor", "s3", "access_key", "")
         self.s3_secret_key: str = _get_nested("executor", "s3", "secret_key", "")
         self.s3_use_ssl: bool = _to_bool(_get_nested("executor", "s3", "use_ssl", True))
-        # GP 읽기(PXF): 자격증명은 세그먼트의 PXF SERVER 설정에서 읽으므로 여기엔 서버 이름만.
+        # GP 가 PXF 로 읽을 때 쓸 서버 이름이다. 자격증명은 세그먼트의 PXF SERVER 설정에서 읽으므로
+        # 여기에는 이름만 둔다.
         self.s3_pxf_server: str = _get_nested("executor", "s3", "pxf_server", "")
         self.s3_pxf_profile: str = _get_nested("executor", "s3", "pxf_profile", "s3:csv")
         # Phase 2 외부테이블(s3ext_<job_id>)을 만들 스키마. 비우면 비한정 이름(search_path 따름),
         # 지정하면 <schema>.s3ext_<job_id> 로 만들고 DROP/INSERT 치환도 같은 한정 이름을 쓴다.
         self.s3_external_schema: str = _get_nested("executor", "s3", "external_schema", "")
-        # 고급: LOCATION 문자열 raw override({bucket}/{key}/{profile}/{server} 치환).
+        # 고급 설정으로 LOCATION 문자열을 통째로 덮어쓴다({bucket}·{key}·{profile}·{server} 를 치환한다).
         self.s3_gp_location_template: str = _get_nested(
             "executor", "s3", "gp_location_template", ""
         )
-        # 적재 성공/실패 후 S3 객체를 지울지 여부(정리).
+        # 적재가 성공하든 실패하든 그 뒤에 S3 객체를 지울지 정한다.
         self.s3_delete_on_cleanup: bool = _to_bool(
             _get_nested("executor", "s3", "delete_on_cleanup", True)
         )
