@@ -78,21 +78,6 @@ def _load_query_func(dotted: str):
     return fn
 
 
-def _resolve_query_func(datasource: str | None) -> tuple[str, dict]:
-    """datasource 이름으로 실행할 커스텀 함수와 그 설정을 고른다.
-
-    ``query.func.<name>.module`` 항목이 있으면 그걸 쓰고(설정은 ``query.func.<name>.config.*``),
-    없으면 단일 ``query.func.module`` + ``query.func.config.*`` 로 폴백한다. 폴백이 있어야
-    소스별 설정을 안 쓰는 기존 배포와, datasource 를 안 보내는 구버전 coordinator 가
-    그대로 동작한다. 둘 다 없으면 ``("", {})`` 를 돌려 호출부가 400 으로 안내한다.
-    """
-    name = str(datasource or "").strip().lower()
-    entry = settings.query_func_by_source.get(name) if name else None
-    if entry and entry.get("module"):
-        return str(entry["module"]), dict(entry.get("config") or {})
-    return settings.query_func_module, dict(settings.query_func_config)
-
-
 def _now_iso() -> str:
     """현재 시각을 KST(타임존 없는) ISO 문자열로 반환. started_at/finished_at 기록용."""
     return now_iso()
@@ -674,35 +659,27 @@ def create_app(
         함수에 SQL·설정(``query.func.config.*``)·limit 을 넘겨 호출하고, 반환된 결과
         (QueryResult 또는 동일 키 dict)를 그대로 응답한다. 블로킹일 수 있으므로 to_thread 로 감싼다.
         미설정 시 400, 함수 로드/실행 실패 시 502.
-
-        ``datasource`` 가 오면 그 이름의 함수(``query.func.<name>.module``)를 골라 impala/trino
-        를 **서로 다른 함수로** 실행한다. 이름별 항목이 없으면 단일 ``query.func.module`` 로
-        폴백하므로 기존 배포와 구버전 coordinator 모두 그대로 동작한다.
         """
-        module, func_config = _resolve_query_func(req.datasource)
-        if not module:
-            configured = sorted(settings.query_func_by_source)
+        if not settings.query_func_module:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"query-execute 실행 함수가 구성되지 않았습니다(datasource={req.datasource or '(미지정)'}). "
-                    f"query.func.<datasource>.module 또는 query.func.module 을 설정하세요. "
-                    f"현재 소스별 설정={configured or '(없음)'}"
-                ),
+                detail="query.func.module 미설정 — query-execute 실행 함수가 구성되지 않았습니다",
             )
         limit = clamp_limit(req.limit)
         try:
-            fn = _load_query_func(module)
+            fn = _load_query_func(settings.query_func_module)
         except ValueError as e:
             raise HTTPException(status_code=502, detail=str(e))
         try:
             result = await asyncio.to_thread(
-                fn, req.sql, config=dict(func_config), limit=limit
+                fn, req.sql, config=dict(settings.query_func_config), limit=limit
             )
         except Exception as e:  # 커스텀 함수 내부 오류(연결/인증/SQL 등) → 502 + 원인
             # 커스텀 함수가 자체 로깅을 하지 않아도 원인을 추적할 수 있도록
             # 스택 트레이스까지 남긴다(WARNING 이상 → *-warn.log 에도 기록).
-            logger.warning("커스텀 실행 함수(%s) 실패: %s", module, e, exc_info=True)
+            logger.warning(
+                "커스텀 실행 함수(%s) 실패: %s", settings.query_func_module, e, exc_info=True,
+            )
             raise HTTPException(status_code=502, detail=f"커스텀 실행 함수 실패: {e}")
         # 반환은 QueryResult 또는 {columns, rows, row_count, truncated, elapsed_ms} dict 를 허용한다.
         body = result.to_dict() if isinstance(result, QueryResult) else dict(result)

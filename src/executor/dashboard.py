@@ -57,16 +57,6 @@ def masked_config(settings) -> list[dict]:
         ("monitor", "disk_path", settings.monitor_disk_path, "디스크 사용량 측정 경로"),
         ("source", "type", settings.source_type,
          "소스 엔진: impala 전용. task 읽기(SELECT)가 이 소스를 사용"),
-        # query-execute 위임(/query-run)이 호출할 커스텀 함수. 소스별 항목이 우선이고
-        # 없으면 단일 module 로 폴백하므로 두 줄을 함께 보여 어느 쪽이 뜰지 판단하게 한다.
-        ("query", "func.module", getattr(settings, "query_func_module", "") or "(없음)",
-         "query-execute 위임 함수(단일). 소스별 항목이 없을 때의 폴백"),
-        ("query", "func.by_source",
-         ", ".join(
-             f"{name}→{entry.get('module', '')}"
-             for name, entry in sorted(getattr(settings, "query_func_by_source", {}).items())
-         ) or "(없음)",
-         "데이터소스별 실행 함수(query.func.<name>.module). datasource 로 골라 실행"),
         ("impala", "host", settings.impala_host or "(미설정→Mock)",
          "Impala(소스) 호스트. 미설정 시 MockBackend"),
         ("impala", "port", settings.impala_port, "Impala 포트(HiveServer2)"),

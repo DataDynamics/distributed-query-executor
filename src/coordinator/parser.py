@@ -33,38 +33,6 @@ from sqlglot import exp
 # sqlglot 파싱 시 사용하는 기본 방언. Impala 전용 방언이 없어 가장 가까운 hive를 쓴다.
 DIALECT = "hive"
 
-# 데이터소스(실행 엔진) → sqlglot 방언(파서). **명시적 sql_dialect 가 없을 때만** 쓰인다.
-#
-# 둘은 축이 다르다: datasource 는 "누가 SQL 을 실행하나", sql_dialect 는 "coordinator 가
-# SQL 을 어떤 문법으로 읽나(그리고 splitter 가 어떤 문법으로 재직렬화하나)"다. 실행 엔진과
-# sqlglot 방언 목록이 1:1 이 아니라서 한 축으로 합칠 수 없다 — 특히 **sqlglot 에는 impala
-# 방언이 없다**(30.x 기준). Impala 문법은 어느 한 방언으로도 다 덮이지 않는다:
-#   - 백틱 식별자(``SELECT `dt` ...``)      : hive 는 읽고 trino 는 실패
-#   - ``trunc(current_date() - interval 7 day)`` : trino 는 읽고 hive 는 실패
-# 그래서 impala 는 **일부러 매핑하지 않는다** — 전역 ``query.sql_dialect``(기본 hive)를 따르고,
-# hive 가 못 읽는 문법을 쓰는 템플릿만 manifest 에서 ``sql_dialect`` 를 직접 지정한다
-# (예: ``templates/daily_sales_interval`` 은 실행이 Impala 인데 파싱은 trino).
-DIALECT_BY_DATASOURCE: dict[str, str] = {
-    "trino": "trino",
-    "greenplum": "postgres",
-    "history": "postgres",
-}
-
-
-def resolve_dialect(
-    explicit: str | None, datasource: str | None, default: str = DIALECT
-) -> str:
-    """파싱에 쓸 sqlglot 방언을 우선순위대로 정한다.
-
-    순서: **명시값**(요청 ``sql_dialect`` > manifest ``sql_dialect``) → **datasource 유도**
-    (:data:`DIALECT_BY_DATASOURCE`) → **전역 기본**(``query.sql_dialect``). 유도 표에 없는
-    datasource(impala 등)는 전역 기본으로 떨어지므로 기존 동작이 그대로 유지된다.
-    """
-    if explicit:
-        return str(explicit).strip()
-    derived = DIALECT_BY_DATASOURCE.get(str(datasource or "").strip().lower())
-    return derived or default
-
 
 class QueryValidationError(Exception):
     """들어온 쿼리가 지원되지 않거나 분할 불가일 때 발생하는 예외.

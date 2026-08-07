@@ -88,16 +88,6 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   프리픽스로 모은 자유 설정 dict(`src/core/config.py` 의 `_collect_prefix`, raw properties 기반 — YAML 무관).
   참조 구현·설정은 docs/GUIDE.md / `customs/query_funcs/trino_runner.py`. 임의 SQL 미리보기(`/datasources/
   {name}/query`)는 별개 운영 점검용으로 built-in 유지.
-  **엔진 선택**: manifest 최상위 `datasource`(impala|trino|greenplum|history)로 템플릿이 자기 실행 엔진을
-  선언한다(순서: 요청 > manifest > `source.type`). coordinator 가 `/query-run` 본문에 datasource 를 실어
-  보내고 executor 가 `query.func.<name>.module`(+`.config.*`)로 함수를 고른다 — 그 이름이 없으면 단일
-  `query.func.module` 폴백(기존 배포·구버전 coordinator 호환. 수집은 `_collect_query_funcs`, 선택은
-  executor `_resolve_query_func`). **`datasource`(실행 엔진)와 `sql_dialect`(sqlglot 파서)는 다른 축**이다:
-  sqlglot 에 impala 방언이 없고 Impala 문법이 한 방언으로 안 덮이므로(백틱=hive 만, `trunc(date)`+interval=
-  trino 만), `parser.resolve_dialect` 는 trino/greenplum/history 만 유도하고 **impala 는 일부러 유도하지
-  않는다**(전역 `query.sql_dialect` 기본 hive → 필요한 템플릿만 manifest 에 `sql_dialect` 명시 —
-  `templates/daily_sales_interval` 이 그 예). 이관(`/jobs`)의 소스는 Impala 전용이라 impala 아닌 datasource
-  를 선언한 템플릿은 `422 TEMPLATE_DATASOURCE_UNSUPPORTED` 로 거부한다(조용한 오실행 방지).
 - `src/coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
   **날짜 fan-out**(DESIGN §18.8): `/jobs` 에 `task_params`(구간의 두 끝을 담은 params 이름 2개)를
   주면 IN 분할 대신 **하루=1 task** 로 펼친다(`app.py` `_build_fanout`/`_compute_task_offsets`,

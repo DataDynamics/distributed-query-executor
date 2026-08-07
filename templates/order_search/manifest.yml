@@ -18,15 +18,6 @@ description: 주문 조회(query-execute 예제) — region IN 목록 + 주문�
 exec_mode: copy
 strict_validation: false            # 렌더 SELECT 에 ORDER BY 등이 있어 lenient 로 둔다
 
-# 이 SELECT 를 어느 엔진에서 실행할지(impala | trino | greenplum | history).
-# 요청의 datasource 가 이기고, 둘 다 없으면 서버 source.type 을 따른다. executor 는
-# query.func.<datasource>.module 로 지정된 함수로 실행한다(없으면 query.func.module 폴백).
-#
-# sql_dialect 를 생략하면 이 값에서 유도된다(trino→trino, greenplum/history→postgres).
-# impala 는 sqlglot 에 방언이 없어 유도하지 않고 전역 query.sql_dialect(기본 hive)를 따르므로,
-# hive 가 못 읽는 Impala 문법(trunc(date), interval 등)을 쓰면 sql_dialect 를 직접 지정한다.
-datasource: trino
-
 # 파라미터 스키마 — 필수/타입/기본값을 선언한다. 렌더 전 검증에 쓰인다.
 params:
   - {name: regions,    type: list,   required: true}            # IN 목록(N개 지역 코드)
