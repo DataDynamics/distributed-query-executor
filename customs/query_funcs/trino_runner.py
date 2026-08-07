@@ -1,4 +1,4 @@
-"""query-execute 커스텀 실행 함수 **예제** — Trino 로 SELECT 를 실행해 상위 N행을 반환.
+"""query-execute 커스텀 실행 함수의 **예제**다. Trino 로 SELECT 를 실행해 상위 N행을 돌려준다.
 
 이 파일은 "외부에서 제공하는 커스텀 함수" 의 참조 구현이다. executor 의 설정에서
 ``query.func.module`` 로 이 함수를 가리키고, ``query.func.config.*`` 로 접속 정보를 넘기면
@@ -36,7 +36,7 @@ query-execute 의 trino 경로가 이 함수에 실행을 위임한다(프레임
 를 판정한다. 조직 표준(게이트웨이/래퍼/커넥션 풀 등)이 있으면 이 함수 본문만 바꾸면 된다.
 
 **커스텀 API 가 pandas DataFrame 을 돌려주는 경우**(사내 표준이 trino 드라이버가 아니라
-"SQL → DataFrame" API 인 경우)는 설정 한 줄로 그 경로를 쓴다::
+SQL 을 받아 DataFrame 을 돌려주는 API 인 경우)는 설정 한 줄로 그 경로를 쓴다::
 
     query.func.config.dataframe_module=mycorp.trino_api:query
 
@@ -84,8 +84,9 @@ _login_session = None
 def _login_noninteractive(config: dict):
     """config["login_module"] 이 가리키는 대화형 login() 을 비대화형으로 1회 호출한다.
 
-    프롬프트에는 입력을 다음 순서로 공급한다: input() 1회차 → user, 2회차 → password,
-    getpass() → 항상 password. 사내 login() 의 질문 순서가 다르면 answers 목록만 고친다.
+    프롬프트에는 입력을 순서대로 공급한다. input() 은 첫 번째 호출에 user 를, 두 번째 호출에
+    password 를 주고 getpass() 는 언제나 password 를 준다. 사내 login() 의 질문 순서가 다르면
+    answers 목록만 고치면 된다.
     login_module 미설정이면 아무것도 하지 않는다(기존 BasicAuth 경로 그대로).
     """
     global _login_session
@@ -217,13 +218,13 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
 
     실행 경로는 설정으로 갈린다:
 
-    - ``query.func.config.dataframe_module`` 이 있으면 → **커스텀 API**(DataFrame 반환)
-    - 없으면(기본) → 아래의 ``trino.dbapi`` 커서 경로
+    - ``query.func.config.dataframe_module`` 이 있으면 DataFrame 을 돌려주는 **커스텀 API** 로,
+    - 없으면 기본값인 아래 ``trino.dbapi`` 커서 경로로 실행한다
     """
     if (config.get("dataframe_module") or "").strip():
         return _run_dataframe_api(sql, config=config, limit=limit)
 
-    import trino  # 지연 임포트(이 예제 함수를 쓰는 배포에만 trino 패키지가 필요)
+    import trino  # 이 예제 함수를 쓰는 배포에만 trino 패키지가 필요하므로 지연 임포트한다
 
     # 사내 대화형 login() 이 설정돼 있으면 먼저 비대화형으로 인증한다(1회 캐시).
     # 반환된 세션/토큰을 접속에 써야 하는 조직 표준이면 아래 kwargs 조립에 반영한다.
@@ -245,8 +246,8 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
         # BasicAuthentication 은 trino 클라이언트 제약상 https 에서만 허용된다.
         kwargs["auth"] = trino.auth.BasicAuthentication(kwargs["user"], password)
 
-    # TLS 인증서 검증. 자체서명 인증서를 쓰는 사내 배포에서는 "false" 로 끄거나 CA 번들
-    # 경로를 준다(값 문자열: false/true/no/0/1 또는 파일 경로). 기본은 검증 켜짐.
+    # TLS 인증서를 검증한다. 자체서명 인증서를 쓰는 사내 배포에서는 "false" 로 끄거나 CA 번들
+    # 경로를 준다. 값은 false·true·no·0·1 이거나 파일 경로이며, 기본은 검증을 켜 둔다.
     verify = config.get("verify")
     if verify is not None:
         low = verify.strip().lower()
@@ -255,7 +256,7 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
         elif low in ("true", "1", "yes", "on"):
             kwargs["verify"] = True
         elif low:
-            kwargs["verify"] = verify  # CA 번들 파일 경로로 해석
+            kwargs["verify"] = verify  # CA 번들 파일 경로로 해석한다
 
     # 접속 대상을 로그로 남긴다 — 실패 시 어느 서버/카탈로그였는지 바로 확인할 수 있다.
     # 비밀값(password)은 절대 로그에 넣지 않는다.
@@ -281,7 +282,7 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
         if cur.description is None:
             return _shape([], [], limit, started)
         columns = [d[0] for d in cur.description]
-        raw = cur.fetchmany(limit + 1)          # limit+1 로 잘림(truncated) 판정
+        raw = cur.fetchmany(limit + 1)          # limit 보다 하나 더 읽어 잘림 여부를 판정한다
         result = _shape(columns, raw, limit, started)
         logger.info("trino 쿼리 완료: %d행(truncated=%s) %.0fms",
                     result.row_count, result.truncated, result.elapsed_ms)

@@ -1,4 +1,4 @@
-"""properties 변수 치환을 지원하는 설정 로더.
+"""properties 변수 치환을 지원하는 설정 로더다.
 
 config.properties(Java 스타일 key=value)와 config.yml 을 읽어,
 YAML 값 안의 ``${variable}`` / ``${variable:default}`` 자리표시자를 properties
@@ -23,17 +23,17 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# ${변수명} 또는 ${변수명:기본값} 형태를 잡는 정규식.
-#   group(1) = 변수명([^}:]+ : '}' 와 ':' 를 제외한 문자들)
-#   group(2) = 기본값(선택적, ':' 뒤의 '}' 직전까지). 콜론이 없으면 None.
+# ${변수명} 또는 ${변수명:기본값} 형태를 잡는 정규식이다. group(1) 은 변수명이고
+# ('}' 와 ':' 를 제외한 문자들), group(2) 는 선택적인 기본값이다(':' 뒤부터 '}' 직전까지).
+# 콜론이 없으면 group(2) 는 None 이다.
 _VAR_PATTERN = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
 
-# config_dir 인자가 주어지지 않았을 때 사용할 운영 기본 설정 디렉터리.
+# config_dir 인자가 없을 때 쓸 운영 기본 설정 디렉터리다.
 DEFAULT_CONFIG_DIR = Path("/data1/distributed-query-executor/config")
 
 
 def load_properties(path: Path) -> dict[str, str]:
-    """Java 스타일 .properties 파일을 읽어 key→value dict 로 반환한다.
+    """Java 스타일 .properties 파일을 읽어 키와 값의 dict 로 돌려준다.
 
     인자:
         path: 읽을 .properties 파일 경로.
@@ -58,12 +58,12 @@ def load_properties(path: Path) -> dict[str, str]:
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            # 빈 줄과 주석(# 또는 !)은 스킵.
+            # 빈 줄과 주석(# 또는 ! 로 시작하는 줄)은 건너뛴다.
             if not line or line.startswith("#") or line.startswith("!"):
                 continue
 
-            # '=' 와 ':' 중 줄에서 더 앞에 오는 구분자로 분리한다.
-            # find 가 -1(없음)을 반환하면 다음 구분자를 시도하고, 둘 다 없으면 무시.
+            # '=' 와 ':' 중 줄에서 더 앞에 오는 구분자로 나눈다. find 가 -1 을 돌려주면 다음
+            # 구분자를 시도하고, 둘 다 없으면 그 줄을 무시한다.
             for sep in ("=", ":"):
                 idx = line.find(sep)
                 if idx >= 0:
@@ -95,7 +95,7 @@ def _resolve_value(value: str, props: dict[str, str]) -> str:
 
     def replacer(match: re.Match) -> str:
         var_name = match.group(1)
-        default_value = match.group(2)  # 콜론 표기가 없으면 None
+        default_value = match.group(2)  # 콜론 표기가 없으면 None 이 된다
 
         if var_name in props:
             return props[var_name]
@@ -103,7 +103,7 @@ def _resolve_value(value: str, props: dict[str, str]) -> str:
         if default_value is not None:
             return default_value
 
-        # 값도 기본값도 없는 경우: 치환 실패를 알리되 원문(match.group(0))을 보존.
+        # 값도 기본값도 없으면 치환에 실패했음을 알리되 원문(match.group(0))은 그대로 남긴다.
         logger.warning("치환되지 않은 변수: ${%s}", var_name)
         return match.group(0)
 
@@ -134,7 +134,7 @@ def _resolve_dict(data: dict[str, Any], props: dict[str, str]) -> dict[str, Any]
         elif isinstance(value, dict):
             resolved[key] = _resolve_dict(value, props)
         elif isinstance(value, list):
-            # 리스트는 문자열 원소만 치환하고 비문자열 원소는 원본 유지.
+            # 리스트는 문자열 원소만 치환하고 문자열이 아닌 원소는 원본을 유지한다.
             resolved[key] = [
                 _resolve_value(item, props) if isinstance(item, str) else item for item in value
             ]
@@ -194,14 +194,14 @@ def load_config(
     """
     base_dir = config_dir or DEFAULT_CONFIG_DIR
 
-    # 명시 경로가 있으면 우선, 없으면 디렉터리+파일명으로 조합.
+    # 명시한 경로가 있으면 그것을 쓰고, 없으면 디렉터리와 파일명을 합쳐 만든다.
     props_file = Path(properties_path) if properties_path else base_dir / properties_file
     yaml_config_file = Path(yaml_path) if yaml_path else base_dir / yaml_file
 
     props = load_properties(props_file)
     raw_config = load_yaml(yaml_config_file)
 
-    # YAML 자체가 없으면 치환할 것도 없으므로 조기 반환.
+    # YAML 자체가 없으면 치환할 것도 없으므로 곧바로 돌려준다.
     if not raw_config:
         return {}
 

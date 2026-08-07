@@ -1,4 +1,4 @@
-"""들어온 Impala SELECT 쿼리의 검증 및 파싱 모듈.
+"""들어온 SELECT 쿼리를 검증하고 파싱하는 모듈이다.
 
 이 모듈은 사용자가 제출한 SQL이 '파티션 IN 목록 기준 분할'에 적합한지 검사하고,
 분할에 필요한 정보(파티션 컬럼의 IN 값 목록, 파싱된 AST)를 추출한다. 실제 분할은
@@ -35,7 +35,7 @@ DIALECT = "hive"
 
 
 class QueryValidationError(Exception):
-    """들어온 쿼리가 지원되지 않거나 분할 불가일 때 발생하는 예외.
+    """들어온 쿼리가 지원되지 않거나 분할할 수 없을 때 던지는 예외다.
 
     ``code`` 는 호출자(API 계층 등)가 안정적으로 분기·매핑할 수 있도록 한 식별자이며
     (예: ``NO_PARTITION_IN_CLAUSE``, ``UNSUPPORTED_JOIN``), ``message`` 는 사람이 읽는
@@ -68,7 +68,7 @@ class ParsedQuery:
 
 
 def _column_name(node: exp.Expression | None) -> str | None:
-    """테이블 한정자를 제외한 순수 컬럼명을 반환(없으면 None)."""
+    """테이블 한정자를 뺀 순수 컬럼명을 돌려준다. 없으면 None 이다."""
     if isinstance(node, exp.Column):
         return node.name
     return None
@@ -91,7 +91,7 @@ def find_partition_in(select: exp.Expression, partition_column: str) -> exp.In |
 
 
 def is_row_returning(sql: str, dialect: str = DIALECT) -> bool:
-    """sql 의 최상위 문이 행을 반환하는지(SELECT/UNION/서브쿼리) 여부.
+    """sql 의 최상위 문이 행을 돌려주는지(SELECT·UNION·서브쿼리) 판단한다.
 
     copy(STDIN) 모드는 결과셋이 필요하므로, 래퍼가 행을 반환하는지 검사하는 데 쓴다.
     파싱 실패 시 False.
@@ -121,7 +121,7 @@ def validate_select_query(sql: str, dialect: str = DIALECT) -> None:
         raise QueryValidationError("PARSE_ERROR", "빈 쿼리입니다.")
     try:
         statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
-    except Exception as exc:  # sqlglot 은 ParseError / TokenError 를 발생시킴
+    except Exception as exc:  # sqlglot 은 ParseError 나 TokenError 를 던진다
         raise QueryValidationError("PARSE_ERROR", f"SQL 파싱 실패: {exc}") from exc
     if not statements:
         raise QueryValidationError("PARSE_ERROR", "유효한 SQL 문이 없습니다.")
@@ -159,7 +159,7 @@ def validate_and_parse(
 
     try:
         statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
-    except Exception as exc:  # sqlglot은 ParseError / TokenError 를 발생시킴
+    except Exception as exc:  # sqlglot 은 ParseError 나 TokenError 를 던진다
         raise QueryValidationError("PARSE_ERROR", f"SQL 파싱 실패: {exc}") from exc
 
     if not statements:
@@ -222,7 +222,7 @@ def validate_and_parse(
     if not values:
         raise QueryValidationError("EMPTY_IN_LIST", "IN 값 목록이 비어 있습니다.")
 
-    # 각 값 노드를 방언 기준 SQL 문자열로 직렬화해 보관(splitter가 다시 조합에 사용).
+    # 각 값 노드를 방언 기준 SQL 문자열로 직렬화해 보관한다. splitter 가 이 값을 다시 조합에 쓴다.
     partition_values = [v.sql(dialect=dialect) for v in values]
     return ParsedQuery(
         sql=sql,

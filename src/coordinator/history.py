@@ -1,4 +1,4 @@
-"""Job 실행 이력을 PostgreSQL 에 기록하는 저장소(append-only audit log).
+"""Job 실행 이력을 PostgreSQL 에 기록하는 저장소이며 덧붙이기만 하는 감사 로그다.
 
 이 모듈은 coordinator 가 처리하는 각 Job 의 생애주기 상태 전이(생성/시작/완료/실패 등)를
 PostgreSQL 테이블에 "한 상태당 한 행"으로 누적 기록하기 위한 저장소를 제공한다.
@@ -37,7 +37,7 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 
 
 class JobHistoryRepository:
-    """Job 상태 이력의 기록(record)과 조회(read)를 담당하는 저장소.
+    """Job 상태 이력을 기록하고 조회하는 저장소다.
 
     설정에서 DSN/테이블명을 읽어 보관한다. DSN 이 비어 있으면 enabled=False 가 되어
     기록은 생략되고 조회는 빈 결과를 돌려준다. 테이블 스키마는 앱이 만들지 않으며,
@@ -108,7 +108,7 @@ class JobHistoryRepository:
         """
         if not self.enabled:
             return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
-        import psycopg  # 지연 임포트(이력 미사용 환경에서 psycopg 의존을 강제하지 않기 위함)
+        import psycopg  # 이력을 쓰지 않는 환경에 psycopg 의존을 강제하지 않으려고 지연 임포트한다
 
         # 검색 필터(WHERE) 조립. 값은 전부 바인드 파라미터로 넘겨 SQL 주입을 차단한다.
         conds: list[str] = []
@@ -120,8 +120,8 @@ class JobHistoryRepository:
             conds.append("username = %s")
             params.append(username)
         if job_id:
-            # 전방일치. LIKE 와일드카드(%/_)가 값에 있어도 이스케이프하지 않는 단순 구현
-            # (job_id 는 서버가 만든 uuid 계열이라 실사용에서 문제되지 않음).
+            # 전방일치로 찾는다. 값에 LIKE 와일드카드(% 나 _)가 있어도 이스케이프하지 않는 단순한
+            # 구현인데, job_id 가 서버에서 만든 uuid 계열이라 실사용에서 문제되지 않기 때문이다.
             conds.append("job_id LIKE %s")
             params.append(f"{job_id}%")
         where = (" WHERE " + " AND ".join(conds)) if conds else ""
@@ -170,7 +170,7 @@ class JobHistoryRepository:
         사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         row 튜플의 값 순서는 _INSERT 문의 컬럼 순서와 정확히 일치해야 한다.
         """
-        import psycopg  # 지연 임포트
+        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         row = (
             job.job_id,

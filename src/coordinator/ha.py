@@ -1,4 +1,4 @@
-"""HA(다중 coordinator) 정합: 죽은 coordinator 소유의 비종료 job 복구(Phase 3-C).
+"""다중 coordinator HA 에서 죽은 coordinator 가 소유한 비종료 job 을 정합한다(Phase 3-C).
 
 HA 에서 어떤 coordinator 가 죽으면, 그가 실행 중이던 job 은 더 진행되지 않는다(실행 루프
 소멸). 공유 Job 저장소(SqlJobStore)에는 그 job 이 RUNNING 등으로 남아 있어 상태가 부정확하다.
@@ -9,7 +9,7 @@ HA 에서 어떤 coordinator 가 죽으면, 그가 실행 중이던 job 은 더 
 자신으로 재스탬프해 소유를 이전한다.
 
 구성:
-- ``select_orphans`` : (job_id, status, owner) + 살아있는 id 집합 → 고아 job_id 목록(순수 함수).
+- ``select_orphans`` 는 (job_id, status, owner) 목록과 살아 있는 id 집합을 받아 고아 job_id 목록을 돌려주는 순수 함수다.
 - ``CoordinatorHeartbeat`` : coordinator_status 에 beat()/fresh_ids().
 - ``reconcile_orphaned_jobs`` : store.list_owned() + heartbeat.fresh_ids() 로 고아를 FAILED 정합.
 """
@@ -25,7 +25,7 @@ from .models import JobStatus, TaskStatus
 
 logger = logging.getLogger(__name__)
 
-# 비종료(=소유자 사망 시 중단으로 간주) job/task 상태.
+# 종료되지 않은 job 과 task 의 상태이며, 소유자가 죽으면 중단된 것으로 본다.
 _NON_TERMINAL = {JobStatus.PENDING, JobStatus.SPLITTING, JobStatus.RUNNING}
 _TERMINAL_TASK = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
 
@@ -57,7 +57,7 @@ class CoordinatorHeartbeat:
         self.table = table
 
     def _conn(self):
-        import psycopg  # 지연 임포트
+        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
         return psycopg.connect(self.dsn)
 
     def beat(self) -> None:
@@ -90,7 +90,7 @@ class CoordinatorHeartbeat:
 
 
 def reconcile_orphaned_jobs(store, heartbeat: "CoordinatorHeartbeat", stale_s: float) -> int:
-    """죽은 coordinator 소유의 비종료 job 을 FAILED 로 정합한다(retry 로 재개 가능). 정합 수 반환.
+    """죽은 coordinator 가 소유한 비종료 job 을 FAILED 로 정합하고 그 수를 돌려준다. 이후 retry 로 재개할 수 있다.
 
     ``store`` 가 ``list_owned()``(=(job_id, status, coordinator_id) 목록)를 제공할 때만
     동작한다(SqlJobStore). 자기 자신은 항상 살아있는 것으로 본다(자기 job 은 건드리지 않음).
@@ -115,7 +115,7 @@ def reconcile_orphaned_jobs(store, heartbeat: "CoordinatorHeartbeat", stale_s: f
     for jid in orphan_ids:
         job = store.get(jid)
         if job is None or job.status not in _NON_TERMINAL:
-            continue  # 그 사이 종료/변경됐으면 건너뜀
+            continue  # 그 사이에 종료되거나 바뀌었으면 건너뛴다
         for t in job.tasks:
             if t.status not in _TERMINAL_TASK:
                 t.status = TaskStatus.FAILED
@@ -123,7 +123,7 @@ def reconcile_orphaned_jobs(store, heartbeat: "CoordinatorHeartbeat", stale_s: f
         job.status = JobStatus.FAILED
         job.error = job.error or "소유 coordinator 장애로 중단됨"
         job.finished_at = job.finished_at or now
-        store.save(job)  # 소유 이전(coordinator_id 재스탬프) + 상태 영속
+        store.save(job)  # coordinator_id 를 다시 찍어 소유를 옮기고 상태를 영속화한다
         reconciled += 1
     if reconciled:
         logger.warning("orphan 정합: 죽은 coordinator 소유 job %d개를 FAILED 로 표시", reconciled)

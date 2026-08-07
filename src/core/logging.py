@@ -1,4 +1,4 @@
-"""일 단위 롤링 파일 핸들러를 사용하는 로깅 설정 모듈.
+"""일 단위 롤링 파일 핸들러로 로깅을 구성하는 모듈이다.
 
 이 모듈은 coordinator/executor 공통의 파일 로깅을 구성한다. 핵심 기능은 세 가지다:
 
@@ -34,7 +34,7 @@ task_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("task_id", def
 
 @contextmanager
 def job_log_context(job_id: str, task_id: str | None = None):
-    """``with`` 블록(및 그 안의 await 체인) 동안 로그에 job_id/task_id 를 붙이는 컨텍스트 매니저.
+    """``with`` 블록과 그 안의 await 체인 동안 로그에 job_id 와 task_id 를 붙이는 컨텍스트 매니저다.
 
     인자:
         job_id: 이 블록 동안 로그에 표기할 job 식별자.
@@ -96,14 +96,14 @@ WARN_LOG_FORMAT = (
     " %(name)s %(filename)s:%(funcName)s:%(lineno)d"
     " [%(job_id)s][%(task_id)s] - %(message)s"
 )
-# asctime 의 날짜/시간 표기 형식(밀리초는 포맷 문자열에서 .%(msecs)03d 로 따로 붙임).
+# asctime 의 날짜와 시간 표기 형식이다. 밀리초는 포맷 문자열에서 .%(msecs)03d 로 따로 붙인다.
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def _warn_filename(filename: str, suffix: str) -> str:
     """메인 로그 파일명에서 stem 과 확장자 사이에 suffix 를 끼운 WARNING 로그 파일명을 만든다.
 
-    예: ``foo.log`` + suffix ``-warn`` → ``foo-warn.log``.
+    예를 들어 ``foo.log`` 에 suffix ``-warn`` 을 주면 ``foo-warn.log`` 가 된다.
     확장자가 없는 파일명이 들어와도 일관되게 ``.log`` 를 보장한다.
     """
     p = Path(filename)
@@ -111,7 +111,7 @@ def _warn_filename(filename: str, suffix: str) -> str:
 
 
 class _ProgramNameFilter(logging.Filter):
-    """모든 LogRecord 에 ``programname`` 속성을 채워 넣는 로깅 필터.
+    """모든 LogRecord 에 ``programname`` 속성을 채워 넣는 로깅 필터다.
 
     로그 포맷의 ``%(programname)s`` 자리에 서비스 식별자(coordinator/executor 등)를
     찍기 위한 것이다. 표준 LogRecord 에는 이 속성이 없으므로 필터 단계에서 주입한다.
@@ -129,7 +129,7 @@ class _ProgramNameFilter(logging.Filter):
 
 
 class _DailyFileHandler(TimedRotatingFileHandler):
-    """자정 기준 일 단위 롤링 + 사용자 지정 보관 파일명 규칙을 적용한 파일 핸들러.
+    """자정을 기준으로 일 단위 롤링하며 보관 파일명 규칙을 직접 지정한 파일 핸들러다.
 
     TimedRotatingFileHandler 기본 동작은 롤링 시 ``파일.log.YYYYMMDD`` 처럼
     확장자 뒤에 날짜를 붙인다. 여기서는 namer 를 교체해 ``파일_YYYYMMDD.log`` 형태
@@ -141,9 +141,9 @@ class _DailyFileHandler(TimedRotatingFileHandler):
         log_file = log_dir / filename
         super().__init__(
             filename=str(log_file),
-            when="midnight",      # 자정마다 롤링
+            when="midnight",      # 자정마다 롤링한다
             interval=1,
-            backupCount=backup_count,  # 보관할 과거 파일 개수(초과분 자동 삭제)
+            backupCount=backup_count,  # 보관할 과거 파일 개수이며 넘치면 자동으로 지운다
             encoding="utf-8",
         )
         # 부모가 롤링 시 붙이는 날짜 접미사 형식. namer 에서 이 값을 다시 파싱해 쓴다.
@@ -152,7 +152,7 @@ class _DailyFileHandler(TimedRotatingFileHandler):
         # 보관 파일명을 재조립할 때 쓸 원본 파일명의 stem/확장자.
         self._base_stem = Path(filename).stem
         self._base_ext = Path(filename).suffix or ".log"
-        # 롤링된 파일의 최종 경로/이름을 결정하는 콜백을 우리 구현으로 교체.
+        # 롤링된 파일의 최종 경로와 이름을 정하는 콜백을 우리 구현으로 바꾼다.
         self.namer = self._namer
 
     def _namer(self, default_name: str) -> str:
@@ -186,12 +186,12 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
         5) 시끄러운 서드파티 로거(uvicorn.access, httpx) 레벨을 조정한다.
     """
     log_dir = settings.log_dir
-    # 로그 디렉터리가 없으면 만든다(이미 있으면 무시). 상위 경로까지 생성.
+    # 로그 디렉터리가 없으면 상위 경로까지 만든다. 이미 있으면 그냥 넘어간다.
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # 모든 LogRecord 에 job_id/task_id 속성을 주입한다.
-    # 기존 팩토리를 감싸(_base_factory) 표준 레코드 생성 동작은 유지하면서,
-    # 현재 컨텍스트의 식별자만 덧붙인다. 컨텍스트가 없으면 ContextVar 기본값 "-".
+    # 모든 LogRecord 에 job_id 와 task_id 속성을 주입한다. 기존 팩토리를 _base_factory 로
+    # 감싸 표준 레코드 생성 동작은 유지하면서 현재 컨텍스트의 식별자만 덧붙인다. 컨텍스트가
+    # 없으면 ContextVar 기본값인 "-" 가 들어간다.
     _base_factory = logging.getLogRecordFactory()
 
     def _record_factory(*args, **kwargs):
@@ -233,7 +233,7 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
     root_logger.handlers.clear()
     root_logger.addHandler(file_handler)
 
-    # WARNING 이상만 모으는 별도 롤링 파일(문제만 빠르게 추적). INFO 로그와 분리·강화 포맷.
+    # WARNING 이상만 모으는 별도 롤링 파일을 둔다. INFO 로그와 분리하고 포맷을 강화해 문제만 빠르게 추적한다.
     if settings.log_warn_enabled:
         warn_handler = _DailyFileHandler(
             log_dir=log_dir,

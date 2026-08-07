@@ -1,7 +1,7 @@
-"""task 실행의 세부 단계(phase) 타임라인 공용 로직 — coordinator·executor 공유.
+"""task 실행의 세부 단계(phase) 타임라인을 다루는 공용 로직이며 coordinator 와 executor 가 공유한다.
 
 하나의 task 는 status(QUEUED/READING/WRITING/DONE...) 아래에서 여러 **세부 단계**를
-거친다(예: Impala 조회 제출 → 스트리밍 COPY → INSERT → 커밋). 이 모듈은 그 단계의
+거친다. 예를 들어 소스 조회 제출, 스트리밍 COPY, INSERT, 커밋 순이다. 이 모듈은 그 단계의
 시작/종료 시각과 처리량을 리스트로 누적하는 순수 로직을 제공한다. 백엔드(backend.py)는
 ``on_stage(name, event, meta)`` 콜백으로 단계 경계를 알리고, 그 콜백이 여기 함수를 호출해
 각 Task(coordinator·executor 양쪽 dataclass)의 ``phases`` 리스트를 채운다.
@@ -25,26 +25,26 @@ from datetime import datetime
 
 from core.timeutil import now_iso
 
-# 단계 이름 → 사람이 읽을 한글 라벨. 대시보드와 이력에서 공통으로 쓴다.
-# (백엔드는 name 만 넘기고, 라벨 매핑은 여기 한 곳에서 관리해 표기를 일관시킨다.)
+# 단계 이름을 사람이 읽을 한글 라벨로 옮긴다. 대시보드와 이력이 공통으로 쓴다.
+# 백엔드는 name 만 넘기고 라벨 매핑은 여기 한 곳에서 관리해 표기를 일관되게 유지한다.
 PHASE_LABELS: dict[str, str] = {
-    "QUEUE_WAIT": "대기(슬롯)",       # 접수~실행 슬롯 확보 대기
-    "IMPALA_SUBMIT": "Impala 조회 제출",  # execute() 제출~커서(description) 준비
+    "QUEUE_WAIT": "대기(슬롯)",       # 접수부터 실행 슬롯을 확보할 때까지 기다리는 구간이다
+    "IMPALA_SUBMIT": "Impala 조회 제출",  # execute() 를 제출하고 커서의 description 이 준비될 때까지다
     "STAGING_DDL": "staging 생성",     # CREATE TEMP TABLE (stage_insert)
-    "PREFLIGHT": "컬럼 검증",          # COPY 전 대상 컬럼 사전검증 (copy)
-    "DELETE": "파티션 선삭제",         # overwrite_partitions 선삭제 (copy)
-    "STREAM_COPY": "스트리밍 COPY",    # Impala fetch + Greenplum COPY(교차 스트리밍)
-    "EXPORT_WRITE": "CSV export",      # Impala fetch → 로컬 CSV write (local_stage/s3_stage)
-    "S3_UPLOAD": "S3 업로드",          # 로컬 CSV → S3 업로드 (s3_stage)
+    "PREFLIGHT": "컬럼 검증",          # copy 모드에서 COPY 전에 대상 컬럼을 사전검증한다
+    "DELETE": "파티션 선삭제",         # copy 모드의 overwrite_partitions 가 파티션을 먼저 지운다
+    "STREAM_COPY": "스트리밍 COPY",    # 소스 fetch 와 Greenplum COPY 를 교차로 스트리밍한다
+    "EXPORT_WRITE": "CSV export",      # local_stage·s3_stage 에서 소스 fetch 결과를 로컬 CSV 로 쓴다
+    "S3_UPLOAD": "S3 업로드",          # s3_stage 에서 로컬 CSV 를 S3 로 올린다
     "S3_EXTERNAL_DDL": "S3 외부테이블", # CREATE EXTERNAL TABLE (PXF, s3_stage)
-    "INSERT": "INSERT",               # staging→target INSERT / statement 직접 실행
-    "COMMIT": "커밋",                  # 트랜잭션 commit
-    "CLEANUP": "정리",                 # 외부테이블/스테이지 정리 (local_stage/s3_stage)
+    "INSERT": "INSERT",               # staging 을 target 으로 넣거나 statement 를 직접 실행한다
+    "COMMIT": "커밋",                  # 트랜잭션을 커밋한다
+    "CLEANUP": "정리",                 # local_stage·s3_stage 의 외부테이블과 스테이지를 정리한다
 }
 
 
 def _dur_ms(start_iso: str, end_iso: str) -> int | None:
-    """두 ISO(naive) 시각 문자열의 간격을 밀리초 정수로 반환(파싱 실패 시 None)."""
+    """두 naive ISO 시각 문자열의 간격을 밀리초 정수로 돌려준다. 파싱에 실패하면 None 이다."""
     try:
         delta = datetime.fromisoformat(end_iso) - datetime.fromisoformat(start_iso)
         return int(delta.total_seconds() * 1000)

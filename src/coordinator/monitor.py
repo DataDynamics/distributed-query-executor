@@ -1,4 +1,4 @@
-"""executor 헬스/메트릭 모니터.
+"""executor 의 헬스와 메트릭을 감시하는 모니터다.
 
 coordinator 가 자신이 알고 있는 executor 목록(settings.executors)을 대상으로 다음 두 가지
 백그라운드 루프를 돌린다.
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ExecutorHealth:
-    """단일 executor 의 최신 헬스/메트릭 상태를 담는 메모리 레코드.
+    """단일 executor 의 최신 헬스와 메트릭 상태를 담는 메모리 레코드다.
 
     헬스 폴링이 성공하면 healthy=True 와 함께 CPU/메모리/디스크/태스크 사용량이 채워지고,
     실패하면 healthy=False 와 error(예외 메시지)가 설정된다. as_view() 로 dict 화하여
@@ -70,7 +70,7 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 
 
 class HealthMonitor:
-    """executor 헬스 폴링과 메트릭 DB 기록을 관리하는 모니터.
+    """executor 헬스 폴링과 메트릭 DB 기록을 관리하는 모니터다.
 
     생성 시 settings.executors 의 각 URL 에 대해 빈 ExecutorHealth 레코드를 미리 만들어 둔다.
     start() 가 백그라운드 asyncio 태스크(폴링 루프, 선택적으로 기록 루프)를 띄우고,
@@ -79,11 +79,11 @@ class HealthMonitor:
 
     def __init__(self, settings):
         self.settings = settings
-        # executor URL → 최신 헬스 레코드. 폴링 결과를 이 dict 의 값에 in-place 로 덮어쓴다.
+        # executor URL 별 최신 헬스 레코드다. 폴링 결과를 이 dict 의 값에 그대로 덮어쓴다.
         self.executors: dict[str, ExecutorHealth] = {
             url: ExecutorHealth(executor_url=url) for url in settings.executors
         }
-        # start() 가 생성한 백그라운드 태스크 핸들(stop() 에서 취소용).
+        # start() 가 만든 백그라운드 태스크 핸들이며 stop() 이 이것으로 취소한다.
         self._tasks: list[asyncio.Task] = []
 
     # ───────── 생명주기 ─────────
@@ -165,8 +165,9 @@ class HealthMonitor:
         다른 executor 폴링에 영향을 주지 않는다.
         """
         rec = self.executors[url]
-        # 상태 전이(up↔down)에만 로그를 남기기 위해 직전 상태를 캡처한다. 매 주기 실패를
-        # 반복 WARNING 으로 남기면 잡음이 커지므로, "다운 감지"·"복구됨" 순간만 눈에 띄게 한다.
+        # up 과 down 사이를 오갈 때만 로그를 남기려고 직전 상태를 캡처한다. 매 주기의 실패를
+        # 반복해서 WARNING 으로 남기면 잡음이 커지므로, 다운을 감지한 순간과 복구된 순간만
+        # 눈에 띄게 한다.
         was_healthy = rec.healthy
         first_check = rec.last_checked is None
         # 시도 시각을 먼저 기록해 둔다(성공/실패와 무관하게 "마지막으로 본 시각"을 남김).
@@ -192,13 +193,13 @@ class HealthMonitor:
             rec.active_tasks = tasks.get("active")
             rec.max_concurrent_tasks = tasks.get("max")
             rec.error = None
-            # down → up 복구만 알린다(첫 성공은 정상이라 조용히 둔다).
+            # down 에서 up 으로 복구된 경우만 알린다. 첫 성공은 정상이므로 조용히 넘어간다.
             if not was_healthy and not first_check:
                 logger.info("executor %s 복구됨(healthy)", url)
         except Exception as exc:
             rec.healthy = False
             rec.error = str(exc)
-            # up → down 전이(또는 첫 관측)만 WARNING. 이미 down 이면 DEBUG 로 잡음을 줄인다.
+            # up 에서 down 으로 바뀌었거나 처음 관측했을 때만 WARNING 을 낸다. 이미 down 이면 DEBUG 로 낮춰 잡음을 줄인다.
             if was_healthy or first_check:
                 logger.warning("executor %s 다운 감지: %s", url, exc)
             else:
@@ -225,7 +226,7 @@ class HealthMonitor:
         snapshot dict 의 일부 필드만 골라(테이블 컬럼에 맞춰) 튜플로 변환한 뒤 한 번에 기록한다.
         테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         """
-        import psycopg  # 지연 임포트(모니터 미사용 시 psycopg 불필요)
+        import psycopg  # 모니터를 쓰지 않으면 psycopg 가 필요 없으므로 지연 임포트한다
 
         table = self.settings.monitor_table
         rows = [

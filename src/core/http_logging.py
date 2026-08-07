@@ -1,4 +1,4 @@
-"""HTTP 요청/응답 DEBUG 로깅 미들웨어 (coordinator·executor 공용).
+"""HTTP 요청과 응답을 DEBUG 로 남기는 미들웨어이며 coordinator 와 executor 가 함께 쓴다.
 
 로그 레벨이 **DEBUG 일 때만** 각 HTTP 요청/응답을 ``core.http`` 로거로 남긴다. 별도의
 켜기 스위치 없이, 애플리케이션 로그 레벨을 DEBUG 로 내리면(``app.debug=true`` 또는
@@ -39,7 +39,7 @@ from core.masking import mask_header_value, mask_text
 # WARNING 전용 로그(*-warn.log)에는 남지 않는다.
 logger = logging.getLogger("core.http")
 
-# 본문을 텍스트로 디코드해 로깅할 content-type 접두/부분 일치 목록. 그 외는 바이너리 취급.
+# 본문을 텍스트로 디코드해 남길 content-type 목록이며 접두 또는 부분 일치로 본다. 그 밖은 바이너리로 취급한다.
 _TEXTUAL_CONTENT_TYPES = (
     "application/json",
     "application/x-www-form-urlencoded",
@@ -49,7 +49,7 @@ _TEXTUAL_CONTENT_TYPES = (
     "+xml",
 )
 
-# 잡음 경로 기본 제외 목록(설정으로 덮어쓸 수 있음).
+# 잡음이 되는 경로의 기본 제외 목록이며 설정으로 덮어쓸 수 있다.
 DEFAULT_EXCLUDE_PATHS = (
     "/health",
     "/metrics",
@@ -103,7 +103,7 @@ def format_body(raw: bytes, content_type: str, *, over_limit: bool, max_body: in
         return f"<{len(raw)}{more} bytes {content_type or 'binary'}>"
     text = raw.decode("utf-8", errors="replace")
     text = mask_text(text)
-    # 여러 줄 본문을 한 줄로 압축(로그 가독성). 연속 공백도 한 칸으로.
+    # 여러 줄 본문을 한 줄로 압축해 로그를 읽기 쉽게 한다. 연속 공백도 한 칸으로 접는다.
     text = " ".join(text.split())
     suffix = f" …(잘림, {max_body}B 초과)" if over_limit else ""
     return text + suffix
@@ -124,9 +124,9 @@ def format_headers(
 
 
 class HttpLoggingMiddleware:
-    """DEBUG 레벨일 때만 HTTP 요청/응답을 ``core.http`` 로거로 남기는 ASGI 미들웨어.
+    """DEBUG 레벨일 때만 HTTP 요청과 응답을 ``core.http`` 로거로 남기는 ASGI 미들웨어다.
 
-    요청 도착 즉시 ``→`` 한 줄(메서드·경로·쿼리·client)을 남겨 요청 유입/행(hang)을
+    요청이 도착하자마자 메서드·경로·쿼리·client 를 담은 ``→`` 한 줄을 남겨, 요청 유입과 행(hang)을
     바로 볼 수 있게 하고, 처리가 끝나면 ``←`` 한 줄(상태·소요시간)을 남긴다. 두 줄은
     짧은 요청 id(``rid``)로 상관된다. 본문 로깅이 켜져 있으면 요청/응답 본문을 별도 줄로
     남긴다(마스킹·절단).
@@ -150,11 +150,11 @@ class HttpLoggingMiddleware:
         self.exclude_paths = tuple(exclude_paths)
 
     def _active(self) -> bool:
-        """이번 요청을 로깅할지: 설정 on + 로그 레벨이 DEBUG 일 때만."""
+        """이번 요청을 로깅할지 판단한다. 설정이 켜져 있고 로그 레벨이 DEBUG 일 때만 True 다."""
         return self.enabled and logger.isEnabledFor(logging.DEBUG)
 
     async def __call__(self, scope, receive, send):
-        # HTTP 가 아니거나(웹소켓·lifespan), 비활성/비-DEBUG, 제외 경로면 그대로 통과.
+        # 웹소켓이나 lifespan 처럼 HTTP 가 아니거나, 로깅이 꺼져 있거나 DEBUG 가 아니거나, 제외 경로면 그대로 통과시킨다.
         if scope.get("type") != "http" or not self._active():
             await self.app(scope, receive, send)
             return
@@ -171,13 +171,13 @@ class HttpLoggingMiddleware:
         headers_in = scope.get("headers")
         req_ct = _find_header(headers_in, b"content-type")
 
-        # 요청 라인(도착 즉시). 본문은 아직 읽히지 않았으므로 여기선 메타데이터만.
+        # 요청이 도착하자마자 요청 라인을 남긴다. 본문은 아직 읽히지 않았으므로 여기서는 메타데이터만 남긴다.
         qs = f"?{query}" if query else ""
         logger.debug("→ [%s] %s %s%s client=%s", rid, method, path, qs, client_str)
         if self.log_headers:
             logger.debug("  [%s] req-headers %s", rid, format_headers(headers_in))
 
-        # ── receive 래핑: 요청 본문 청크를 max_body 까지만 복사(원본은 그대로 전달) ──
+        # ── receive 를 감싸 요청 본문 청크를 max_body 까지만 복사한다. 원본은 그대로 전달한다 ──
         req_body = bytearray()
         req_over = False
 
@@ -194,7 +194,7 @@ class HttpLoggingMiddleware:
                         req_over = True
             return message
 
-        # ── send 래핑: 응답 status/headers 와 본문 청크(최대 max_body)를 복사 ──
+        # ── send 를 감싸 응답의 status·headers 와 본문 청크를 max_body 까지 복사한다 ──
         resp = {"status": None, "headers": None}
         resp_body = bytearray()
         resp_over = False
@@ -219,19 +219,19 @@ class HttpLoggingMiddleware:
         try:
             await self.app(scope, recv, snd)
         except Exception:
-            # 핸들러 예외 시에도 종료 라인을 남기고(디버깅) 예외는 그대로 전파.
+            # 핸들러에서 예외가 나도 디버깅을 위해 종료 라인을 남기고, 예외 자체는 그대로 전파한다.
             dur = (time.monotonic() - start) * 1000
             logger.debug("← [%s] %s %s EXC %.1fms", rid, method, path, dur)
             raise
 
         dur = (time.monotonic() - start) * 1000
-        # 요청 본문(있으면).
+        # 요청 본문이 있으면 남긴다.
         if self.bodies and req_body:
             logger.debug(
                 "  [%s] req-body %s", rid,
                 format_body(bytes(req_body), req_ct, over_limit=req_over, max_body=self.max_body),
             )
-        # 응답 라인.
+        # 응답 라인을 남긴다.
         logger.debug("← [%s] %s %s %s %.1fms", rid, method, path, resp["status"], dur)
         if self.log_headers and resp["headers"]:
             logger.debug("  [%s] resp-headers %s", rid, format_headers(resp["headers"]))
@@ -244,7 +244,7 @@ class HttpLoggingMiddleware:
 
 
 def install_http_logging(app, settings) -> None:
-    """앱에 HTTP 로깅 미들웨어를 등록한다(설정값으로 구성). ``create_app`` 에서 호출.
+    """설정값으로 구성한 HTTP 로깅 미들웨어를 앱에 등록한다. ``create_app`` 이 호출한다.
 
     설정(``logging.http.*``)을 읽어 미들웨어를 붙인다. DEBUG 게이팅은 미들웨어가
     요청마다 스스로 판단하므로, 여기서는 항상 등록하되 값만 넘긴다.

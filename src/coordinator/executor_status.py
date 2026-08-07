@@ -1,4 +1,4 @@
-"""coordinator 가 executor self-report(공유 DB)를 읽는 저장소.
+"""coordinator 가 공유 DB 에 쌓인 executor self-report 를 읽는 저장소다.
 
 이 모듈은 executor self-report 모드에서 동작한다. 각 executor 가 주기적으로 자신의 상태
 (CPU/메모리/디스크/태스크 수 등)를 공유 PostgreSQL 테이블(executor_status)에 직접
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class ExecutorStatusRepository:
-    """공유 executor_status 테이블을 읽어 executor 상태 목록을 돌려주는 읽기 전용 저장소.
+    """공유 executor_status 테이블을 읽어 executor 상태 목록을 돌려주는 읽기 전용 저장소다.
 
     Args:
         dsn: 공유 상태 테이블이 있는 PostgreSQL 접속 문자열.
@@ -40,7 +40,7 @@ class ExecutorStatusRepository:
         없음) healthy=False 로 본다. 조회 자체가 실패하면 예외를 잡아 로그를 남기고 빈 리스트를
         반환해 호출 측(대시보드)이 깨지지 않게 한다.
         """
-        import psycopg  # 지연 임포트
+        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         sql = (
             "SELECT executor_id, cpu_percent, memory_percent, memory_used_mb, "
@@ -61,14 +61,14 @@ class ExecutorStatusRepository:
 
         result = []
         for r in rows:
-            # r[10] = age_s(마지막 갱신 이후 경과 초). NULL 이면 신선도 판정 불가 → 비정상 취급.
+            # r[10] 은 마지막 갱신 이후 경과 초(age_s)다. NULL 이면 신선도를 판정할 수 없으므로 비정상으로 본다.
             age = float(r[10]) if r[10] is not None else None
             healthy = age is not None and age <= self.stale_seconds
             result.append({
                 "executor_id": r[0],
-                # executor_url(advertise_url). HA 에서 coordinator 가 URL 키로 부하 뷰를
-                # 구성한다(미보고 시 None → URL 매칭 불가로 폴백). 키 일관성을 위해
-                # executor_url 이 없으면 executor_id 를 대체 키로 노출한다.
+                # executor_url(advertise_url)이다. HA 에서 coordinator 가 이 URL 을 키로 부하 뷰를 구성하는데,
+                # 보고가 없으면 None 이라 URL 로 매칭할 수 없어 폴백한다. 키를 일관되게 유지하려고
+                # executor_url 이 없으면 executor_id 를 대체 키로 쓴다.
                 "executor_url": r[12] or r[0],
                 "healthy": healthy,
                 "cpu_percent": r[1],

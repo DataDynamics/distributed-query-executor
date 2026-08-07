@@ -1,4 +1,4 @@
-"""템플릿에서 호출 가능한 커스텀 함수(필터/글로벌) 레지스트리와 내장 구현.
+"""템플릿에서 부를 수 있는 커스텀 함수(필터와 글로벌)의 레지스트리와 내장 구현이다.
 
 쿼리 템플릿(:mod:`coordinator.template`)은 클라이언트가 보낸 **파라미터**를 SQL 문자열로
 렌더링한다. 이때 파라미터는 비신뢰 입력이므로, 그대로 SQL 에 이어붙이면 SQL 인젝션 위험이
@@ -31,7 +31,7 @@ GLOBALS: dict[str, Callable] = {}
 
 
 def template_filter(name: str) -> Callable[[Callable], Callable]:
-    """함수를 이름 있는 Jinja2 **필터**로 등록하는 데코레이터.
+    """함수를 이름 있는 Jinja2 **필터**로 등록하는 데코레이터다.
 
     ``@template_filter("sql_in")`` 로 감싸면 ``FILTERS["sql_in"]`` 에 등록되어
     템플릿에서 ``{{ values | sql_in }}`` 처럼 쓸 수 있다.
@@ -45,7 +45,7 @@ def template_filter(name: str) -> Callable[[Callable], Callable]:
 
 
 def template_global(name: str) -> Callable[[Callable], Callable]:
-    """함수를 이름 있는 Jinja2 **글로벌 함수**로 등록하는 데코레이터.
+    """함수를 이름 있는 Jinja2 **글로벌 함수**로 등록하는 데코레이터다.
 
     ``@template_global("date_range")`` 로 감싸면 템플릿에서 ``{{ date_range(a, b) }}``
     처럼 직접 호출할 수 있다.
@@ -66,7 +66,7 @@ def template_global(name: str) -> Callable[[Callable], Callable]:
 def sql_str(value) -> str:
     """값을 작은따옴표로 감싼 **SQL 문자열 리터럴**로 만든다(작은따옴표 이스케이프).
 
-    ``O'Brien`` → ``'O''Brien'`` 처럼 내부 ``'`` 를 ``''`` 로 이중화해 인젝션을 막는다.
+    ``O'Brien`` 이 ``'O''Brien'`` 이 되는 식으로 내부 ``'`` 를 ``''`` 로 이중화해 인젝션을 막는다.
     None 은 SQL ``NULL`` 로 렌더한다(빈 문자열 리터럴과 구분).
     """
     if value is None:
@@ -81,11 +81,11 @@ def sql_num(value) -> str:
     숫자 컬럼용. 문자열로 들어와도 int/float 로 변환 가능하면 허용하고, 불가하면
     ``ValueError`` 를 던져 인젝션(예: ``1 OR 1=1``)이 SQL 로 새어 나가지 않게 한다.
     """
-    if isinstance(value, bool):  # bool 은 int 의 하위형이라 먼저 걸러 명시적으로 처리
+    if isinstance(value, bool):  # bool 은 int 의 하위형이라 먼저 걸러 명시적으로 처리한다
         return "1" if value else "0"
     if isinstance(value, (int, float)):
         return repr(value)
-    # 문자열이면 숫자 파싱을 강제해 검증한다(실패 시 예외 → 렌더 실패 → 4xx).
+    # 문자열이면 숫자 파싱을 강제해 검증한다. 실패하면 예외가 나고 렌더가 실패해 4xx 로 이어진다.
     text = str(value).strip()
     try:
         int(text)
@@ -100,7 +100,7 @@ def sql_ident(value) -> str:
     """값을 큰따옴표로 감싼 **SQL 식별자**(컬럼/테이블명)로 만든다.
 
     내부 ``"`` 는 ``""`` 로 이중화한다. 점(``.``)이 있으면 스키마 한정으로 보고 각 조각을
-    따로 인용한다(예: ``public.sales`` → ``"public"."sales"``).
+    따로 인용한다. 예를 들어 ``public.sales`` 는 ``"public"."sales"`` 가 된다.
     """
     parts = str(value).split(".")
     return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
@@ -127,9 +127,9 @@ def sql_in(values: Iterable) -> str:
     """리스트를 ``IN (...)`` 안에 넣을 **콤마 구분 리터럴 목록**으로 만든다.
 
     문자열은 :func:`sql_str` 로 인용하고, 숫자/불리언은 숫자 리터럴로, None 은 NULL 로
-    렌더한다. 예: ``['KR', 'US']`` → ``'KR', 'US'`` / ``[1, 2]`` → ``1, 2``.
+    렌더한다. ``['KR', 'US']`` 는 ``'KR', 'US'`` 가 되고 ``[1, 2]`` 는 ``1, 2`` 가 된다.
     빈 목록이면 ``IN ()`` 이 문법 오류이자 "아무것도 매칭 안 됨" 을 뜻하므로 ``NULL`` 을
-    돌려준다(``col IN (NULL)`` → 항상 거짓, 안전한 빈 집합 의미).
+    돌려준다. ``col IN (NULL)`` 은 언제나 거짓이라 안전한 빈 집합을 뜻한다.
     """
     rendered = []
     for v in values:

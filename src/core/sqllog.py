@@ -22,7 +22,7 @@ SQL 은 공백을 접어 **한 줄**로 만든다. 로그 파일이 한 줄=한 
 SQL 을 그대로 쓰면 grep·수집기가 레코드 경계를 잃기 때문이다.
 """
 
-# Python 3.9 호환: PEP 604 (``X | None``) 유니언을 시그니처에 쓰므로 어노테이션 평가를 지연.
+# Python 3.9 호환을 위해 어노테이션 평가를 지연한다. PEP 604 (``X | None``) 유니언을 시그니처에 쓰기 때문이다.
 from __future__ import annotations
 
 import logging
@@ -35,7 +35,7 @@ from core.masking import mask_text
 # 별도 핸들러로 뽑아낼 수 있다(core.http 와 같은 관례).
 logger = logging.getLogger("core.sql")
 
-# 연속 공백·개행·탭을 공백 하나로 접기 위한 패턴.
+# 연속된 공백과 개행, 탭을 공백 하나로 접을 때 쓰는 패턴이다.
 _WS_RE = re.compile(r"\s+")
 
 
@@ -47,7 +47,7 @@ def collapse_sql(sql: str | None) -> str:
 
 
 def format_sql(sql: str | None, max_length: int) -> str:
-    """로그에 실을 SQL 문자열을 만든다(마스킹 → 한 줄 접기 → 길이 절단).
+    """로그에 실을 SQL 문자열을 만든다. 마스킹한 뒤 한 줄로 접고 길이를 자르는 순서다.
 
     인자:
         sql: 원본 SQL.

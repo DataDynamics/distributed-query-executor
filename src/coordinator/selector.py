@@ -1,9 +1,9 @@
-"""헬스/부하 기반 executor 선택(Phase 1: P2C + failover order).
+"""헬스와 부하를 보고 executor 를 고른다(Phase 1 의 P2C 와 failover 순서).
 
 HA(다중 coordinator)에서는 여러 coordinator 가 **독립적으로**, 공유되지만 약간 stale 한
 부하 뷰를 보고 동시에 결정한다. 이런 분산 환경에서 단순 "least-loaded" 는 모두 같은
 '가장 한가한' 노드로 몰리는 **스탬피드**를 일으키므로, 기본 정책은
-**Power-of-Two-Choices(P2C)** 다(무작위 2개 중 덜 바쁜 쪽 선택 → 결정이 탈상관되어 herding
+**Power-of-Two-Choices(P2C)** 다. 무작위로 뽑은 둘 중 덜 바쁜 쪽을 고르면 결정이 탈상관되어 herding
 억제). 무상태·무락이라 HA 친화적이다.
 
 구성:
@@ -20,7 +20,7 @@ from typing import Callable, Optional
 
 
 class SharedLoadView:
-    """executor 부하/헬스 스냅샷을 ``executor_url`` 키 dict 로 제공하는 어댑터.
+    """executor 의 부하와 헬스 스냅샷을 ``executor_url`` 을 키로 하는 dict 로 제공하는 어댑터다.
 
     ``provider()`` 는 각 executor 의 헬스 dict(최소 ``executor_url``·``healthy``·
     ``active_tasks``·``max_concurrent_tasks``)를 담은 리스트를 돌려준다. 보통
@@ -45,7 +45,7 @@ class SharedLoadView:
 
 
 def _remaining(load: dict) -> float:
-    """잔여 용량(클수록 한가). ``max_concurrent_tasks`` 가 0/None(무제한)이면
+    """잔여 용량을 구한다. 값이 클수록 한가하다. ``max_concurrent_tasks`` 가 0 이나 None 이면 무제한이라
     ``-active_tasks`` 로 두어 active 가 적을수록 우선되게 한다."""
     active = load.get("active_tasks") or 0
     mx = load.get("max_concurrent_tasks") or 0
@@ -79,9 +79,9 @@ class ExecutorSelector:
             return self._round_robin(cand)
 
         alive = [c for c in cand if view.get(c, {}).get("healthy")]
-        rest = [c for c in cand if c not in alive]  # unknown/unhealthy → failover 꼬리
+        rest = [c for c in cand if c not in alive]  # 상태를 모르거나 비정상인 후보는 failover 꼬리로 보낸다
         if not alive:
-            return self._round_robin(cand)  # 헬스 정보상 살아있는 후보가 없으면 폴백
+            return self._round_robin(cand)  # 헬스 정보상 살아 있는 후보가 없으면 폴백한다
 
         if self.policy == "p2c":
             first = self._p2c_first(alive, view)

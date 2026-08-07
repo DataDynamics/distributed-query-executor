@@ -1,4 +1,4 @@
-"""데이터소스 SELECT 미리보기 / 연결 테스트 공용 로직.
+"""데이터소스 SELECT 미리보기와 연결 테스트에 쓰는 공용 로직이다.
 
 coordinator·executor 의 ``/datasources`` 테스트 엔드포인트가 공유한다. 임의 SQL 을
 대상 데이터소스(Impala / Greenplum / history DB)에서 실행해 상위 N행을 JSON 안전
@@ -34,7 +34,7 @@ class QueryResult:
     columns: list
     rows: list
     row_count: int
-    truncated: bool   # limit 을 넘겨 결과가 잘렸는지
+    truncated: bool   # limit 을 넘겨 결과가 잘렸는지를 나타낸다
     elapsed_ms: float
 
     def to_dict(self) -> dict:
@@ -91,8 +91,8 @@ def _json_safe(value):
     """
     if _is_missing(value):
         return None
-    # numpy 스칼라/배열(np.int64, np.bool_, np.ndarray …) → 파이썬 기본형으로 낮춘 뒤 재귀.
-    # 아래 스칼라 분기보다 먼저 둬야 np.float64 도 파이썬 float 로 정규화된다.
+    # np.int64·np.bool_·np.ndarray 같은 numpy 값은 파이썬 기본형으로 낮춘 뒤 재귀한다.
+    # 아래 스칼라 분기보다 먼저 두어야 np.float64 도 파이썬 float 로 정규화된다.
     if hasattr(value, "dtype") and hasattr(value, "tolist"):
         try:
             return _json_safe(value.tolist())
@@ -109,7 +109,7 @@ def _json_safe(value):
         return {str(k): _json_safe(v) for k, v in value.items()}
     if isinstance(value, (bytes, bytearray, memoryview)):
         return "\\x" + bytes(value).hex()
-    # Decimal, datetime/date/time, pandas.Timestamp, UUID, 기타 → 문자열
+    # Decimal 과 datetime·date·time, pandas.Timestamp, UUID 등 나머지는 문자열로 바꾼다.
     return str(value)
 
 
@@ -185,7 +185,7 @@ def run_postgres_select(
     ``datasource`` 는 실행 SQL 로그의 엔진 표기용이다(``greenplum``/``history``).
     같은 psycopg 경로라도 어느 DB 에 던진 쿼리인지 로그에서 구분하기 위해 받는다.
     """
-    import psycopg  # 지연 임포트
+    import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
     started = time.perf_counter()
     conn = psycopg.connect(dsn)
@@ -199,7 +199,7 @@ def run_postgres_select(
             raw = cur.fetchmany(limit + 1)
             return _shape(columns, raw, limit, started)
     finally:
-        conn.close()  # commit 없이 닫음 → 변경분 롤백
+        conn.close()  # commit 없이 닫아 변경분을 롤백한다
 
 
 def run_impala_select(
@@ -211,7 +211,7 @@ def run_impala_select(
     ``query_options`` 가 있으면 ``configuration`` 으로 넘긴다(executor 의 백엔드와 동일).
     ``datasource`` 는 실행 SQL 로그의 엔진 표기용이다(기본 ``impala``).
     """
-    from impala.dbapi import connect as impala_connect  # 지연 임포트(executor 전용 드라이버)
+    from impala.dbapi import connect as impala_connect  # executor 전용 드라이버라 지연 임포트한다
 
     started = time.perf_counter()
     conn = impala_connect(**impala_dsn)

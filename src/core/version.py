@@ -1,4 +1,4 @@
-"""애플리케이션 버전의 **유일 소스(single source of truth)**.
+"""애플리케이션 버전의 **유일한 출처(single source of truth)**다.
 
 이 프로젝트는 pip 로 설치(distribution)되지 않고 소스 트리를 그대로(`PYTHONPATH=src`)
 구동하므로, ``importlib.metadata.version()`` 대신 이 모듈의 :data:`__version__` 을
@@ -17,7 +17,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-# 버전을 올릴 때 고치는 유일한 줄. (SemVer 권장: MAJOR.MINOR.PATCH)
+# 버전을 올릴 때 고치는 유일한 줄이다. SemVer 의 MAJOR.MINOR.PATCH 형식을 권장한다.
 __version__ = "0.4.0"
 
 
@@ -36,7 +36,7 @@ def git_revision() -> str | None:
     if stamped:
         return stamped.strip() or None
 
-    # 이 파일 기준 저장소 루트 후보(src/core/version.py → 상위 3단계).
+    # 이 파일을 기준으로 한 저장소 루트 후보다. src/core/version.py 에서 세 단계 위다.
     repo_root = Path(__file__).resolve().parents[2]
     if not (repo_root / ".git").exists():
         return None
@@ -51,11 +51,11 @@ def git_revision() -> str | None:
         )
         return out.stdout.strip() or None
     except Exception:
-        # git 없음/실패/타임아웃 — 조용히 무시(부가 정보이므로).
+        # git 이 없거나 실패하거나 타임아웃이면 조용히 무시한다. 부가 정보일 뿐이기 때문이다.
         return None
 
 
 def version_string() -> str:
-    """표시용 버전 문자열: ``0.1.0`` 또는 리비전이 있으면 ``0.1.0+g860f3cd``."""
+    """표시용 버전 문자열을 만든다. ``0.1.0`` 이거나, 리비전이 있으면 ``0.1.0+g860f3cd`` 가 된다."""
     rev = git_revision()
     return f"{__version__}+g{rev}" if rev else __version__

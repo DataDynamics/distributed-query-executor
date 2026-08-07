@@ -1,4 +1,4 @@
-"""검증된 쿼리를 파티션 IN 목록 기준으로 N개의 sub-query로 분할하는 모듈.
+"""검증된 쿼리를 파티션 IN 목록 기준으로 N개의 sub-query 로 나누는 모듈이다.
 
 :mod:`parser` 가 만든 :class:`~coordinator.parser.ParsedQuery` 를 입력받아, IN 목록의
 값들을 ``parallelism`` 개의 버킷으로 나눈 뒤 각 버킷만 스캔하는 완전한 sub-query SQL을
@@ -10,9 +10,9 @@
 정규식으로 구간을 찾지 못하면 AST를 복제·수정 후 재직렬화하는 방식으로 폴백한다.
 
 분배 전략(strategy):
-  - contiguous(기본) : 값을 연속된 덩어리로 나눈다(예: [a,b,c,d] → [a,b],[c,d]).
+  - contiguous(기본)는 값을 연속된 덩어리로 나눈다. [a,b,c,d] 는 [a,b] 와 [c,d] 가 된다.
                        정렬된 파티션에서 범위 지역성이 좋다.
-  - round_robin      : 값을 버킷에 번갈아 배분한다(예: [a,b,c,d] → [a,c],[b,d]).
+  - round_robin 은 값을 버킷에 번갈아 배분한다. [a,b,c,d] 는 [a,c] 와 [b,d] 가 된다.
                        크기가 들쭉날쭉한 파티션의 부하를 고르게 섞을 때 유리하다.
 """
 
@@ -34,7 +34,7 @@ DEFAULT_WRAPPER_PLACEHOLDER = "{{SUBQUERY}}"
 
 @dataclass
 class SubQuery:
-    """분할로 생성된 sub-query 한 건.
+    """분할해서 만든 sub-query 한 건이다.
 
     필드:
         sql              : 해당 버킷의 값만 스캔하는 완전한 SQL 문자열.
@@ -106,7 +106,7 @@ def _value_span(sql: str, partition_column: str) -> tuple[int, int] | None:
            있어도 올바른 끝을 찾기 위함이다.
     """
     bare = re.escape(partition_column.split(".")[-1])
-    # (선택적 한정자)<컬럼> IN ( ...   ※ 식별자 중간 매칭 방지 lookbehind
+    # 선택적 한정자와 <컬럼> IN ( ... 을 잡는다. 식별자 중간에 매칭되지 않도록 lookbehind 를 쓴다.
     pat = re.compile(
         r"(?<![\w.])(?:[A-Za-z_]\w*\.)?" + bare + r"\s+IN\s*\(",
         re.IGNORECASE,
@@ -115,15 +115,15 @@ def _value_span(sql: str, partition_column: str) -> tuple[int, int] | None:
     if not m:
         return None
 
-    start = m.end()  # 여는 괄호 다음 위치
-    depth = 1  # 매치가 여는 괄호까지 포함하므로 깊이 1에서 시작
+    start = m.end()  # 여는 괄호 바로 다음 위치다
+    depth = 1  # 매치가 여는 괄호까지 포함하므로 깊이 1 에서 시작한다
     for i in range(start, len(sql)):
         c = sql[i]
         if c == "(":
             depth += 1
         elif c == ")":
             depth -= 1
-            if depth == 0:  # 처음 여는 괄호와 짝이 맞는 닫는 괄호 도달
+            if depth == 0:  # 처음 여는 괄호와 짝이 맞는 닫는 괄호에 도달했다
                 return (start, i)
     return None
 
@@ -164,7 +164,7 @@ def split(
         parallelism, len(buckets), len(value_exprs), strategy, parsed.partition_column,
     )
     if span is None:
-        # 원문 포맷이 바뀔 수 있는 결정 — 정규식으로 값 구간을 못 찾아 AST 재직렬화로 폴백.
+        # 정규식으로 값 구간을 찾지 못해 AST 재직렬화로 폴백한다. 이 경우 원문 포맷이 바뀔 수 있다.
         logger.debug(
             "포맷 보존 실패(값 span 미발견) → AST 재직렬화 폴백 (컬럼=%s)",
             parsed.partition_column,

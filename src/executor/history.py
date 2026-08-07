@@ -1,4 +1,4 @@
-"""executor task(=executor job) 실행 이력을 PostgreSQL 에 기록하는 저장소.
+"""executor task(= executor job) 실행 이력을 PostgreSQL 에 기록하는 저장소다.
 
 각 executor 가 자신이 처리하는 task 의 상태 전이(QUEUED/READING/WRITING/DONE/FAILED)
 마다 한 행씩 append 한다. 하나의 job_id 아래 N개 task 가 executor 별로 기록된다.
@@ -47,7 +47,7 @@ def _executor_id() -> str:
 
 
 class TaskHistoryRepository:
-    """task 상태 전이 이력을 PostgreSQL 에 append/조회하는 저장소.
+    """task 상태 전이 이력을 PostgreSQL 에 덧붙이고 조회하는 저장소다.
 
     각 상태 전이(QUEUED/READING/WRITING/DONE/FAILED/CANCELLED)마다 한 행씩 INSERT 하는
     append-only 로그라, 한 task 는 여러 행으로 남는다. 조회 시에는 task_id 별 최신 행만
@@ -71,7 +71,7 @@ class TaskHistoryRepository:
         username: str | None = None,
         job_id: str | None = None,
     ) -> dict:
-        """이 executor 의 task 이력 조회(task_id별 최신 1건, 필터링/페이징).
+        """이 executor 의 task 이력을 조회한다. task_id 별 최신 한 건을 필터링과 페이징으로 돌려준다.
 
         append-only 로그에서 task 당 마지막 상태만 보여주기 위해 PostgreSQL 의
         ``DISTINCT ON (task_id) ... ORDER BY task_id, recorded_at DESC`` 를 사용한다.
@@ -94,7 +94,7 @@ class TaskHistoryRepository:
         """
         if not self.enabled:
             return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
-        import psycopg  # 지연 임포트
+        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         # 검색 필터(WHERE) 조립. 값은 전부 바인드 파라미터로 넘겨 SQL 주입을 차단한다.
         conds: list[str] = []
@@ -106,11 +106,11 @@ class TaskHistoryRepository:
             conds.append("username = %s")
             params.append(username)
         if job_id:
-            # 전방일치. job_id 는 서버가 만든 uuid 계열이라 LIKE 와일드카드 이스케이프는 생략.
+            # 전방일치로 찾는다. job_id 는 서버가 만든 uuid 계열이라 LIKE 와일드카드 이스케이프는 생략한다.
             conds.append("job_id LIKE %s")
             params.append(f"{job_id}%")
         where = (" WHERE " + " AND ".join(conds)) if conds else ""
-        # 이 executor 소유분에서 task_id 별 최신 한 행만 남기는 파생 테이블(위 docstring 참고).
+        # 이 executor 소유분에서 task_id 별로 최신 한 행만 남기는 파생 테이블이다(위 docstring 참고).
         latest = (
             "SELECT DISTINCT ON (task_id) recorded_at, job_id, task_id, "
             "  username, status, rows_written, error, started_at, finished_at, "
@@ -148,7 +148,7 @@ class TaskHistoryRepository:
                 "rows_read": r[13], "read_wait_ms": r[14], "write_wait_ms": r[15],
                 "read_starve_ms": r[16], "finalize_wait_ms": r[17],
                 "impala_done_at": r[18].isoformat() if r[18] is not None else None,
-                # phases 는 JSONB → psycopg 가 파이썬 list/dict 로 역직렬화해 돌려준다.
+                # phases 는 JSONB 라서 psycopg 가 파이썬 list 나 dict 로 역직렬화해 돌려준다.
                 "phases": r[19] or [],
             }
             for r in rows
@@ -156,7 +156,7 @@ class TaskHistoryRepository:
         return {"enabled": True, "rows": out, "total": total, "limit": limit, "offset": offset}
 
     async def record(self, task) -> None:
-        """task 의 현재 상태를 이력 테이블에 한 행 기록한다(동기 psycopg → 스레드).
+        """task 의 현재 상태를 이력 테이블에 한 행으로 기록한다. psycopg 가 동기라 스레드에서 돌린다.
 
         블로킹 DB 쓰기를 ``to_thread`` 로 넘겨 이벤트 루프를 막지 않는다. 이력 기록은
         부가 기능이므로, 비활성(DSN 미설정)이면 경고만 남기고 넘어가고, 기록 실패도
@@ -176,7 +176,7 @@ class TaskHistoryRepository:
 
     def _write(self, task) -> None:
         """이력 테이블에 한 행 INSERT(동기). 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다."""
-        import psycopg  # 지연 임포트
+        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         phases = getattr(task, "phases", None) or []
         read_wait_ms, write_wait_ms, read_starve_ms, finalize_wait_ms = _stream_copy_metrics(task)
@@ -201,7 +201,7 @@ class TaskHistoryRepository:
             read_starve_ms,
             finalize_wait_ms,
             impala_done_at,
-            # phases 는 JSONB 컬럼. 표준 라이브러리 json 으로 직렬화해 텍스트로 넣고 ::jsonb 캐스트.
+            # phases 는 JSONB 컬럼이다. 표준 라이브러리 json 으로 직렬화해 텍스트로 넣고 ::jsonb 로 캐스트한다.
             json.dumps(phases, ensure_ascii=False),
         )
         with psycopg.connect(self.dsn) as conn:

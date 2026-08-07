@@ -882,8 +882,8 @@ class ImpalaToGreenplumBackend:
         겹치므로 라이터 관점의 read_starve(=Impala 대기)+write_wait+finalize 가 벽시계에 가깝다.
         rows_per_sec 는 실제 벽시계 근사값(파이프라인이면 겹침 반영)으로 계산한다.
         """
-        wall = max(read_starve + write_wait + finalize_wait,  # 파이프라인 벽시계에 가까운 값
-                   read_wait + write_wait + finalize_wait)     # 직렬 벽시계
+        wall = max(read_starve + write_wait + finalize_wait,  # 파이프라인 벽시계에 가까운 값이다
+                   read_wait + write_wait + finalize_wait)     # 직렬 벽시계에 가까운 값이다
         return {
             "rows": loaded,
             "read_wait_ms": int(read_wait * 1000),
@@ -917,19 +917,17 @@ class ImpalaToGreenplumBackend:
     def stage_and_insert(self, impala_select, staging_table, staging_ddl, insert_sql, on_progress=None, query_options=None, on_stage=None) -> int:
         """소스 SELECT 결과를 Greenplum staging(TEMP)에 COPY 로 넣고, 다시 staging 에서 target 으로 INSERT 한다.
 
-        한 Greenplum 세션(연결) 안에서 CREATE TEMP TABLE → COPY → INSERT 를 수행하므로
-        TEMP 테이블이 INSERT 시점까지 보인다. INSERT 직후(같은 트랜잭션) staging_table 을
-        **명시적으로 DROP** 해 커밋 시점에 확정 정리하므로, 커넥션 풀이 세션을 재사용해도
-        잔존 TEMP 로 인한 다음 task 의 "already exists" 가 발생하지 않는다(DISCARD ALL
-        동작에 의존하지 않는다). staging 이름은 coordinator 가 task 마다 고유화해 보낸다.
-        한 Greenplum 세션(연결) 안에서 (DROP →) CREATE TEMP TABLE → COPY → INSERT 를
-        수행하므로 TEMP 테이블이 INSERT 시점까지 보이며, 세션 종료 시 자동 정리된다. CREATE
-        직전 ``DROP TABLE IF EXISTS`` 로 선삭제하는데, 풀에서 재사용한 연결에 이전 task 의
-        TEMP staging 이 남아 있으면(일부 GP 는 DISCARD ALL 이 TEMP 를 안 떨군다) CREATE 가
-        "already exists" 로 실패하기 때문이다.
-        SELECT(Impala)과 INSERT(Greenplum)이 서로 다른 엔진일 때의 표준 패턴.
-        query_options 는 Impala SELECT 에만 적용된다(INSERT 는 Greenplum).
-        반환: INSERT 영향 행 수(미지원 시 적재 행 수).
+        한 Greenplum 세션 안에서 DROP, CREATE TEMP TABLE, COPY, INSERT 를 차례로 수행하므로
+        TEMP 테이블이 INSERT 시점까지 살아 있다. CREATE 직전에 ``DROP TABLE IF EXISTS`` 로
+        먼저 지우는데, 풀에서 재사용한 연결에 이전 task 의 TEMP staging 이 남아 있으면(일부
+        GP 는 DISCARD ALL 이 TEMP 를 떨구지 않는다) CREATE 가 "already exists" 로 실패하기
+        때문이다. INSERT 직후 같은 트랜잭션에서 staging_table 을 **명시적으로 DROP** 해
+        커밋 시점에 확정 정리하므로, 커넥션 풀이 세션을 재사용해도 잔존 TEMP 때문에 다음
+        task 가 깨지지 않는다. staging 이름은 coordinator 가 task 마다 고유하게 만들어 보낸다.
+
+        SELECT 와 INSERT 를 서로 다른 엔진이 맡을 때 쓰는 표준 패턴이다. query_options 는
+        소스 SELECT 에만 적용되고 INSERT 는 Greenplum 이 처리한다. 반환값은 INSERT 영향
+        행 수이며, 드라이버가 지원하지 않으면 적재 행 수를 돌려준다.
 
         staging_ddl 이 비어 있으면 테이블 생성을 건너뛰고 **이미 존재하는** staging_table 에
         곧장 COPY 한다. 이 경우 staging_table 은 세션 임시(TEMP)가 아니므로, 여러 task 가
@@ -1115,14 +1113,14 @@ class ImpalaToGreenplumBackend:
 
     def export_to_s3(self, impala_select, key, job_id, task_id, csv_options=None,
                      on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
-        """s3_stage Phase 1: Impala SELECT 결과를 로컬 CSV 로 export → S3 업로드 → 로컬 삭제.
+        """s3_stage Phase 1 로, 소스 SELECT 결과를 로컬 CSV 로 내린 뒤 S3 에 올리고 로컬 파일을 지운다.
 
         executor 가 GP 를 건드리지 않는 순수 Phase 1 이다(외부테이블 생성·INSERT 는
         coordinator 가 배리어 후 Phase 2 에서 수행한다 — local_stage 와 같은 구조). ``key`` 는
         coordinator 가 확정한 S3 객체 키(``<prefix>/<job_id>/<task_id>.csv``)이고, 로컬 임시
         CSV 는 ``{local_tmp_dir}/{job_id}/{task_id}.csv`` 에 잠깐 썼다가 업로드 후 지운다.
 
-        단계: IMPALA_SUBMIT→EXPORT_WRITE(export 가 방출) → S3_UPLOAD(업로드+로컬 삭제).
+        단계는 IMPALA_SUBMIT 와 EXPORT_WRITE(export 가 방출한다)를 거쳐 S3_UPLOAD(업로드 후 로컬 삭제)로 끝난다.
         반환: export 한 행 수. 로컬 임시 파일은 finally 에서 항상 정리한다.
         """
         import os
