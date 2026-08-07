@@ -1,9 +1,9 @@
 stateDiagram-v2
     [*] --> QUEUED: POST /tasks 수신
-    QUEUED --> READING: Impala sub-query 실행
+    QUEUED --> READING: 소스 sub-query 실행
     READING --> WRITING: 배치 fetch → Greenplum 적재
     WRITING --> DONE: 적재 완료
-    READING --> FAILED: Impala 읽기 에러
+    READING --> FAILED: 소스 읽기 에러
     WRITING --> FAILED: Greenplum 적재 에러
     QUEUED --> CANCELLED: 시작 전 취소
     WRITING --> CANCELLED: 실행 중 취소(작업 완료 후 마감)

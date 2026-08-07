@@ -1,6 +1,7 @@
 flowchart TB
     Client([Client])
-    Impala[(Impala<br/>source)]
+    Impala[(Impala<br/>source · 커서)]
+    CustomAPI[/"커스텀 API<br/>(커서 없는 소스)"/]
     GP[(Greenplum<br/>target)]
     PG[(PostgreSQL<br/>이력·메트릭)]
 
@@ -24,7 +25,8 @@ flowchart TB
     API --> Parser --> Splitter --> Dispatcher
     Dispatcher <--> JobStore
     Dispatcher -- "② POST /tasks (sub-query)" --> E1 & E2 & E3
-    E1 & E2 & E3 -- "③ read (TLS+LDAP)" --> Impala
+    E1 & E2 & E3 -- "③-a read (TLS+LDAP)<br/>datasource=impala" --> Impala
+    E1 & E2 & E3 -. "③-b fetch (datasource=trino 등)" .-> CustomAPI
     E1 & E2 & E3 -- "④ COPY 적재" --> GP
     Dispatcher -- "job_history" --> PG
     E1 & E2 & E3 -- "task_history" --> PG

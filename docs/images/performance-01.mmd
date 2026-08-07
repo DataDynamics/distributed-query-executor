@@ -3,7 +3,7 @@ flowchart LR
     Coord -- "POST /tasks (제어)" --> E1["Executor 1"]
     Coord -- "POST /tasks (제어)" --> E2["Executor 2"]
     Coord -- "POST /tasks (제어)" --> EN["Executor N"]
-    Impala[("Impala<br/>source")] -. "읽기 (데이터)" .-> E1
+    Impala[("소스<br/>Impala 커서 | 커스텀 API")] -. "읽기 (데이터)" .-> E1
     Impala -. "읽기 (데이터)" .-> E2
     Impala -. "읽기 (데이터)" .-> EN
     E1 == "적재 (데이터)" ==> GP[("Greenplum<br/>target")]

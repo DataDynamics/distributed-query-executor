@@ -84,6 +84,8 @@ Impala의 큰 `SELECT` 한 건을 여러 executor에게 나눠 병렬로 읽히�
 
 executor는 sub-query 결과를 **스트리밍(배치 fetch)** 해 전체를 메모리에 올리지 않으므로 데이터가 아무리 커도 안전하다. 적재는 `COPY`로 배치 단위 수행하며(INSERT 다건보다 훨씬 빠르다), `exec_mode`에 따라 INSERT/staging 경유도 가능하다(§9). 각 executor가 서로 다른 파티션 값 집합을 담당하므로 Greenplum 쓰기 충돌이 없고 병합도 불필요하다.
 
+> 위 그림은 **소스가 Impala(impyla 커서)인 경우**의 흐름이다 — `copy`·`stage_insert` 는 이 경로를 쓴다. `s3_stage`/`local_stage` 는 CSV 를 거치는 2-phase 라 흐름이 다르고(§17·§17.10), 그 두 모드는 job 의 `datasource` 로 **커서 없는 커스텀 API** 를 소스로 쓸 수도 있다(§17.11). 그때는 배치 스트리밍이 커스텀 API 의 반환 형태에 달려 있다.
+
 ---
 
 ## 5. 데이터 모델

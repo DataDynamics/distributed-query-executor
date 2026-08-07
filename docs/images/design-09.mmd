@@ -1,6 +1,6 @@
 flowchart TB
     Client([Client])
-    Impala[(Impala<br/>source)]
+    Impala[("소스<br/>Impala 커서 | 커스텀 API")]
     GPM[(Greenplum<br/>Master)]
 
     subgraph Ctrl["Coordinator (독립 컨트롤 노드 · master 아님)"]
@@ -20,7 +20,7 @@ flowchart TB
 
     Client -- "SELECT + partition_column + local_stage" --> API
     API -- "① export task (sub-query + out_path)" --> Ex1 & Ex2
-    Ex1 & Ex2 -- "② impyla read" --> Impala
+    Ex1 & Ex2 -- "② 소스 read (impyla 커서 또는 fetch)" --> Impala
     Ex1 --> D1
     Ex2 --> D2
     API -- "④ file:// 외부테이블 + INSERT (배리어 후 1회)" --> GPM

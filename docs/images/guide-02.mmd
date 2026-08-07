@@ -3,17 +3,21 @@ sequenceDiagram
     participant C as Client
     participant CO as Coordinator
     participant EX as Executor
+    participant SRC as 소스 (Impala 커서 | 커스텀 API)
     participant S3 as S3 (오브젝트 스토어)
     participant GP as Greenplum master
 
     C->>CO: POST /jobs (exec_mode=s3_stage)
     CO->>CO: 검증(staging_table/external_columns/insert_sql 필수) + IN N분할
+    CO->>CO: datasource 확정 (요청 > manifest > source.type)
     CO->>CO: 각 task out_path = S3 키 확정 (prefix/{job_id}/{task_id}.csv)
     CO-->>C: 202 {job_id}
     Note over CO: run(): PENDING→RUNNING
     par Phase 1 (executor 병렬, GP 미접속)
-        CO->>EX: POST /tasks (out_path=S3 키, csv_options)
-        EX->>EX: Impala SELECT(자기 슬라이스) → 로컬 임시 CSV write
+        CO->>EX: POST /tasks (out_path=S3 키, csv_options, datasource)
+        EX->>SRC: 자기 슬라이스 SELECT 실행<br/>datasource=impala → 커서 fetchmany / 그 외 → fetch(sql, config)
+        SRC-->>EX: rows (배치 또는 전량)
+        EX->>EX: 로컬 임시 CSV write
         EX->>S3: 로컬 CSV 업로드 (boto3) → prefix/{job_id}/{task_id}.csv
         EX->>EX: 로컬 임시 CSV 삭제
         EX-->>CO: 상태 폴링(READING→WRITING→DONE, rows_written)
