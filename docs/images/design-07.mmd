@@ -1,8 +1,11 @@
 flowchart LR
-    Q[원본 SQL] --> P[AST 파싱] --> F{파티션 IN 절 발견?}
+    Q[원본 SQL<br/>또는 template 렌더 결과] --> M{task_params 지정?}
+    M -- "Yes — 날짜 fan-out (§18.8)" --> FO[구간을 하루 단위로 펼침<br/>task마다 파라미터 재렌더<br/>IN 분할 우회]
+    FO --> ST
+    M -- No --> P[AST 파싱] --> F{파티션 IN 절 발견?}
     F -- No --> R[4xx 거부]
-    F -- Yes --> S[IN 값 N등분]
+    F -- Yes --> S[IN 값 N등분<br/>contiguous / round_robin]
     S --> G1[sub-query 1<br/>IN v1..vk]
     S --> G2[sub-query 2<br/>IN vk+1..]
     S --> G3[sub-query N]
-    G1 & G2 & G3 --> ST[(Task에 전문 저장)]
+    G1 & G2 & G3 --> ST[(Task에 sub-query 전문 저장)]

@@ -1,18 +1,30 @@
 classDiagram
     class Job {
         +str job_id
-        +str original_sql        // 원본 쿼리 전문
+        +str original_sql        // 원본(또는 렌더된) 쿼리 전문
         +str partition_column
         +str target_table        // Greenplum 적재 대상
         +str write_mode          // append | overwrite_partitions
-        +str exec_mode           // copy | statement | stage_insert | local_stage(§17)
+        +str exec_mode           // copy | statement | stage_insert | local_stage(§17) | s3_stage(§17.10)
+        +str datasource          // 소스 엔진: impala(커서) | 그 외(커스텀 API, §17.11)
         +int parallelism
         +str split_strategy      // contiguous | round_robin
         +str failure_policy      // fail_fast | best_effort
         +str username            // 제출자(이력/대시보드 표시)
-        +str staging_table       // stage_insert 전용
-        +str staging_ddl         // stage_insert 전용(선택 — 없으면 생성 건너뜀)
-        +str insert_sql          // stage_insert INSERT 문
+        +dict impala_query_options // 요청별 Impala SET 옵션(전역에 병합)
+        +str staging_table       // stage_insert/local_stage/s3_stage 공용
+        +str staging_ddl         // 선택 — 없으면 생성 건너뜀(s3_stage 는 미사용)
+        +str insert_sql          // staging→target INSERT (stage_insert/local_stage/s3_stage)
+        +bool pre_delete         // 적재 전 파티션 DELETE 강제/생략(null=write_mode 따름)
+        +str external_columns    // local_stage/s3_stage 외부테이블 컬럼 정의
+        +str export_local_dir    // local_stage 로컬 CSV 루트 오버라이드
+        +str csv_delimiter       // CSV 방언 — executor write 와 외부테이블 FORMAT 이 공유
+        +str csv_null
+        +str csv_quote
+        +str template_id         // 템플릿 모드면 사용한 템플릿(감사·재현)
+        +dict template_params    // 렌더에 쓴 파라미터
+        +str idempotency_key     // 요청 멱등 — 같은 키 재제출은 기존 job 재생
+        +str request_fingerprint // 본문 sha256(같은 키·다른 본문 → 409)
         +bool cancel_requested
         +str retry_of            // 재실행으로 생성된 job이면 원본 job_id
         +JobStatus status
@@ -30,8 +42,12 @@ classDiagram
         +str executor_url        // 어느 executor로 보냈는지
         +str sub_query           // ★ 보낸 sub-query 전문
         +list partition_values   // 이 task가 담당한 IN 값들
+        +str out_path            // local_stage=로컬 CSV 경로 | s3_stage=S3 객체 키
         +TaskStatus status
         +int rows_written        // 이 task가 적재한 행 수
+        +int rows_read           // 소스에서 읽은 행 수(=조회 건수)
+        +str current_phase       // 진행 중 세부 단계(QUEUE_WAIT/IMPALA_SUBMIT/...)
+        +list phases             // 단계 타임라인(시작·종료·소요·행수)
         +int attempt
         +str error
     }

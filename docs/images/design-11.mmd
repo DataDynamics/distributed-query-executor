@@ -2,5 +2,7 @@ flowchart LR
     C([Client: template_id + params]) --> R[템플릿 렌더<br/>coordinator/template.py]
     T[(서버 템플릿 파일<br/>manifest.yml + *.sql.j2)] --> R
     F[커스텀 함수<br/>template_funcs.py] --> R
-    R -->|sql/staging_ddl/insert_sql 주입| V[validate_and_parse]
+    R -->|"① SQL 조각 주입<br/>sql / staging_ddl / insert_sql / external_columns"| V[validate_and_parse]
+    R -->|"② manifest 스칼라 주입(요청이 우선)<br/>exec_mode · datasource · sql_dialect · target_table ..."| V
     V --> S[split] --> D[dispatch]
+    R -. "render_query(select 조각만)<br/>POST /query-execute" .-> QE[결과 반환 실행]
