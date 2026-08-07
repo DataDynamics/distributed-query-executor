@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Impala 대화형 SQL 셸. beeline 처럼 붙어서 쿼리를 주고받는다.
+#
+# 접속 정보는 config/config.properties 의 impala.* 에서 자동으로 읽는다.
+# 명령행으로 준 값이 항상 우선한다.
+#   예) impala-shell                                     # 설정대로 접속
+#       impala-shell --host other-impala.example.com     # 개별 값만 덮어쓰기
+#       impala-shell --config-dir /path/to/config        # 다른 설정 디렉터리
+#       echo "SELECT 1;" | impala-shell                  # 파이프로 넘겨도 된다
+#
+# 한 번만 실행하고 끝내려면 모듈을 직접 부른다:
+#   PYTHONPATH=src python -m tools.impala_query -q "SELECT 1"
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"
+
+# 파이썬: 배포 트리 .venv 우선, 없으면 소스 트리 .venv, 없으면 python3.
+# PYTHON 환경변수로 직접 지정할 수도 있다.
+if [[ -n "${PYTHON:-}" ]]; then
+    PY="$PYTHON"
+elif [[ -x "/data1/distributed-query-executor/.venv/bin/python" ]]; then
+    PY="/data1/distributed-query-executor/.venv/bin/python"
+elif [[ -x "$ROOT/.venv/bin/python" ]]; then
+    PY="$ROOT/.venv/bin/python"
+else
+    PY="$(command -v python3)"
+fi
+
+# src 레이아웃이므로 PYTHONPATH 에 src 를 넣어야 tools·core 모듈을 찾는다.
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# 크론에서 돌 때를 위한 설정이다. 크론은 LANG 없이 실행되는 경우가 많은데, 그러면
+# 파이썬이 출력 인코딩을 ascii 로 잡아 한글을 출력하는 순간 UnicodeEncodeError 로 죽는다.
+# 버퍼링을 끄면 출력을 파일로 넘겨도 진행 상황이 제때 보이고 중간에 죽어도 로그가 남는다.
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+
+# --help 에 실제로 친 명령 이름이 나오게 한다.
+export PROG_NAME="bin/impala-shell"
+
+exec "$PY" -m tools.impala_query --interactive "$@"

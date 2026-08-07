@@ -87,13 +87,44 @@ src/
   core/          # 공용: 설정 로더/설정/로깅/HTTP 로깅/메트릭 (coordinator·executor 공유)
   coordinator/   # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/      # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
+  tools/         # 운영자용 CLI(gp-shell·impala-shell·s3-ops)
 bin/             # 런처·설치 스크립트(install·start/stop/status·env·check-prereqs·*-tui·migrate-config)
+                 #  + 운영자 CLI 래퍼(gp-shell·impala-shell·s3-ops)
 config/          # config.properties + config.yml 기본값 + templates/ + 스키마(*.sql)
 templates/       # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2)
 customs/         # 사이트 커스텀 코드(customs.query_funcs.* — 커스텀 쿼리 함수)
 packaging/       # 배포·패키징: README.md + wheels/(에어갭 휠 번들 py39·py311)
 tests/           # pytest (검증/라이프사이클/admission/대시보드)
 ```
+
+## 운영자 CLI
+
+서비스와 별개로, 터미널에서 직접 쓰는 도구 셋이 `bin/` 에 있습니다. 이관 결과를 바로 조회하거나
+스테이징 객체를 정리할 때 씁니다. 접속 정보는 아래 설정(`config.properties`)에서 자동으로 읽으므로
+같은 값을 두 번 적을 필요가 없습니다.
+
+| 명령 | 하는 일 | 필요한 패키지 |
+|---|---|---|
+| `bin/gp-shell` | Greenplum 대화형 SQL 셸(`psql` 처럼 붙어서 주고받음) | `psycopg`(기본 포함) |
+| `bin/impala-shell` | Impala 대화형 SQL 셸(`beeline` 처럼) | `impyla` |
+| `bin/s3-ops` | S3 업로드·다운로드·복사·이동·삭제·목록·내용 확인 | `boto3` |
+
+```bash
+bin/gp-shell                                     # 설정대로 접속
+bin/gp-shell --host other-gp.example.com         # 개별 값만 덮어쓰기
+echo "SELECT 1;" | bin/gp-shell                  # 파이프로 넘겨도 됩니다
+
+bin/s3-ops ls s3://dw-stage/dqe-stage/ --summary
+bin/s3-ops head s3://dw-stage/dqe-stage/job_abc123/t_0.csv -n 3
+bin/s3-ops rmdir s3://dw-stage/dqe-stage/ --older-than 7d --yes
+```
+
+셸 안에서는 `\?` 로 메타 명령 목록을, `\dt` 로 테이블 목록을, `\d 이름` 으로 컬럼 정보를 봅니다.
+`--config-dir` 로 다른 설정 디렉터리를, `--no-config` 로 설정을 무시하고 명령행 인자만 쓸 수
+있습니다. 한 번만 실행하고 끝내려면 `PYTHONPATH=src python -m tools.gp_query -q "SELECT 1"` 처럼
+모듈을 직접 부릅니다. 이 도구들은
+[DataDynamics/impala-to-whpg](https://github.com/DataDynamics/impala-to-whpg) 의 같은 이름 도구를
+이 저장소 설정 체계에 맞춰 옮겨 온 것입니다.
 
 ## 설정
 

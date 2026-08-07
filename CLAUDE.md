@@ -39,7 +39,8 @@ src/
   core/        # 공용: 설정 로더/설정/로깅/메트릭 (coordinator·executor 공유)
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: 소스 읽기 → Greenplum 적재(backend), task 상태 노출
-bin/           # 런처·설치 스크립트 + systemd 유닛(/data1 배포 트리와 공용)
+  tools/       # 운영자용 CLI(gp-shell·impala-shell·s3-ops). 서비스와 별개로 사람이 직접 쓴다
+bin/           # 런처·설치 스크립트 + 운영자 CLI 래퍼 + systemd 유닛(/data1 배포 트리와 공용)
 config/        # config.properties + config.yml 기본값 + 스키마(postgresql.sql / warehousepg.sql)
 templates/     # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2)
 customs/       # 사이트 커스텀 코드(customs.query_funcs.* — src 밖 최상위 패키지)
@@ -47,7 +48,7 @@ packaging/     # 배포 안내 + wheels/(에어갭 휠 번들 py39·py311). 설�
 tests/         # pytest (검증/라이프사이클/admission/대시보드/로깅)
 ```
 
-소스는 src 레이아웃이다. 패키지 임포트명은 `core`/`coordinator`/`executor` 그대로이고
+소스는 src 레이아웃이다. 패키지 임포트명은 `core`/`coordinator`/`executor`/`tools` 그대로이고
 (`pyproject.toml` 의 `package-dir`), 실행할 때는 `PYTHONPATH=src` 가 필요하다. 테스트는 루트
 `conftest.py` 가 `src/` 와 저장소 루트를 sys.path 에 넣어 주므로 신경 쓰지 않아도 된다.
 
@@ -269,6 +270,32 @@ core.config_migrate`, `bin/migrate-config.sh`). 대상은 config/·templates/·c
 템플릿·커스텀 함수·인증서)은 지우지 않는다. **`config.yml` 을 교체해야 새 버전이 추가한 설정
 구조가 반영된다** — 이걸 빠뜨려 새 설정이 조용히 무시되던 버그를 이 도구로 해결했다. `--dry-run`
 으로 보고만 받을 수 있고 비밀값은 마스킹한다.
+
+### 운영자 CLI(`src/tools/`)
+
+서비스와 별개로 사람이 터미널에서 직접 쓰는 도구 셋이다. 이관 중에 무엇이 들어갔는지 바로
+확인하거나(SQL 셸) 스테이징 객체를 정리할 때(S3 조작) 쓴다.
+[DataDynamics/impala-to-whpg](https://github.com/DataDynamics/impala-to-whpg) 의 같은 이름 도구를
+이 저장소에 맞춰 옮겨 온 것이다.
+
+- **`bin/gp-shell`** 은 Greenplum 대화형 SQL 셸이다(`tools/gp_query.py --interactive`).
+- **`bin/impala-shell`** 은 Impala 대화형 SQL 셸이다(`tools/impala_query.py --interactive`).
+- **`bin/s3-ops`** 는 S3 객체를 올리고 내리고 지운다(`ls`·`upload`·`download`·`head`·`cp`·`mv`·
+  `rm`·`rmdir`·`exists`·`mkdir`·`buckets`).
+
+**핵심은 설정을 새로 만들지 않은 것이다.** 원본은 자체 `conf/config.yaml` 을 읽지만, 그대로 옮기면
+같은 접속 정보를 두 곳에 적어야 하고 한쪽만 고쳐서 어긋나는 사고가 난다. 그래서
+`tools/appconfig.py` 가 이 저장소의 `config.properties`/`config.yml` 을 읽어 도구가 기대하는
+섹션(`impala`/`greenplum`/`s3`/`sql`) 모양으로 바꿔 준다. Greenplum 만 형태가 달라서
+(이 저장소는 `greenplum.dsn` 한 줄로 들고 있다) `parse_dsn` 이 DSN 을 host·port·user 로 풀어 준다.
+우선순위는 명령행 인자 > 설정 > 기본값이고, `--config-dir` 로 다른 디렉터리를, `--no-config` 로
+설정 무시를 고를 수 있다.
+
+드라이버도 서비스 쪽과 맞췄다. 원본의 psycopg2 대신 executor 백엔드가 쓰는 **psycopg 3** 을 쓴다.
+impyla 와 boto3 는 이미 `requirements-executor.txt` 에 있으므로 추가 의존성이 없다.
+
+`bin/` 래퍼는 대화형 셸만 노출하지만 모듈 자체는 한 번 실행도 지원한다. 배치로 쓰려면
+`PYTHONPATH=src python -m tools.gp_query -q "SELECT 1" -o out.csv` 처럼 직접 부른다.
 
 **`core/version.py` 와 `core/banner.py`** 는 버전 단일 소스와 기동 배너를 맡는다. 버전은
 `version.py` 의 `__version__` 한 줄이 유일한 출처이고 `pyproject.toml` 이 `dynamic` + `attr` 로

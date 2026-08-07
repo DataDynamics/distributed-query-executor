@@ -93,8 +93,11 @@ fi
 [[ -f "$CONF_DIR/impala-ca.pem" ]] || printf '# TLS CA 인증서(PEM) 자리표시 — 실제 Impala CA 로 교체할 것\n' > "$CONF_DIR/impala-ca.pem"
 
 # 런처 스크립트는 소스 트리의 bin/ 이 rsync 로 이미 $APP_HOME/bin 에 놓였다.
+# 서비스 런처는 .sh 로 끝나지만 운영자용 CLI 도구(gp-shell·impala-shell·s3-ops)는
+# 손으로 자주 치는 명령이라 확장자를 붙이지 않았다. 둘 다 실행 권한을 준다.
 echo "==> 런처 스크립트 실행 권한 -> $BIN_DIR"
 chmod +x "$BIN_DIR"/*.sh
+chmod +x "$BIN_DIR"/gp-shell "$BIN_DIR"/impala-shell "$BIN_DIR"/s3-ops
 
 echo "==> 소유권/권한"
 chown -R "$APP_USER:$APP_USER" "$APP_BASE"
