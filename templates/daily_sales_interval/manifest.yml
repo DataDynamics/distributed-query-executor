@@ -30,7 +30,7 @@ staging_table: stg_sales
 strict_validation: false
 task_bound: point                    # BETWEEN(양끝 포함) + DATE 컬럼 → 하루=한 점
 # 렌더된 SELECT 는 구조 검증(단일 SELECT 인지)을 위해 sqlglot 으로 한 번 파싱된다. sqlglot 에는
-# impala 방언이 없고 기본값 hive 는 인자 1개짜리 trunc(date) 를 거부하므로(PARSE_ERROR),
+# impala 방언(dialect)이 없고 기본값 hive 는 인자 1개짜리 trunc(date) 를 거부하므로(PARSE_ERROR),
 # interval/trunc 를 쓰는 Impala 쿼리는 파싱만이라도 통과하는 방언을 지정한다. 실행은 그대로
 # Impala 가 하며 이 값은 파싱에만 쓰인다.
 sql_dialect: trino

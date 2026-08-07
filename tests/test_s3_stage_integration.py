@@ -82,9 +82,9 @@ def test_s3_stage_mock_integration_closes_the_loop(monkeypatch):
     assert f"pxf://mybkt/{prefix}?PROFILE=s3:csv&SERVER=s3srv" in ext_ddl
     assert f"FROM {ext_name}" in insert_sql and "public.sales_mirror" in insert_sql
 
-    # ④ CSV 방언: 기본 backtick 구분자로 객체가 써졌다(외부테이블 FORMAT 과 일치).
+    # ④ CSV 형식: 기본 backtick 구분자로 객체가 써졌다(외부테이블 FORMAT 과 일치).
     first = backend.s3.get(backend.uploaded_keys[0])
-    # Phase 3 에서 삭제됐을 수 있으니, 삭제 전 방언 검증은 target 존재로 갈음하고 프리픽스만 확인.
+    # Phase 3 에서 삭제됐을 수 있으니, 삭제 전 형식 검증은 target 존재로 갈음하고 프리픽스만 확인.
     assert backend.cleaned == [prefix]  # Phase 3 정리됨
     assert first is None  # 정리 후 인메모리 S3 에서 사라짐
 
@@ -151,5 +151,5 @@ def test_s3_stage_mock_integration_cleanup_disabled_keeps_objects(monkeypatch):
     assert len(backend.target) == 4
     assert backend.cleaned == []
     assert len(backend.s3) == 4  # 업로드한 4개 객체가 그대로 남음
-    # CSV 방언: 기본 backtick 구분자로 객체가 써졌다(외부테이블 FORMAT 과 일치).
+    # CSV 형식: 기본 backtick 구분자로 객체가 써졌다(외부테이블 FORMAT 과 일치).
     assert "`" in next(iter(backend.s3.values()))

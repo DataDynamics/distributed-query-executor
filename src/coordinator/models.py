@@ -271,7 +271,7 @@ class Job:
     # local_stage 에서만 쓰는 필드다(file:// 세그먼트 로컬 스테이징, §17).
     external_columns: Optional[str] = None   # file:// 외부테이블 컬럼 정의로, 요청자가 명시한다
     export_local_dir: Optional[str] = None   # 로컬 CSV 루트를 덮어쓴다. 없으면 stage.local_dir 을 쓴다
-    csv_delimiter: Optional[str] = None      # CSV 방언을 덮어쓴다. 없으면 설정값을 쓴다
+    csv_delimiter: Optional[str] = None      # CSV 형식을 덮어쓴다. 없으면 설정값을 쓴다
     csv_null: Optional[str] = None
     csv_quote: Optional[str] = None
     job_id: str = field(default_factory=lambda: _new_id("job"))
@@ -592,7 +592,7 @@ class CreateJobRequest(BaseModel):
     )
     sql_dialect: Optional[str] = Field(
         default=None,
-        description="SQL 방언(미지정 시 서버 기본값). 예: hive, impala, postgres",
+        description="SQL 방언(dialect). 미지정 시 서버 기본값을 쓴다. 예: hive, impala, postgres",
     )
     strict_validation: bool = Field(
         default=True,
@@ -676,7 +676,7 @@ class QueryExecuteRequest(BaseModel):
     )
     limit: int = Field(default=100, ge=1, le=10_000, description="반환 최대 행수(1~10000).")
     sql_dialect: Optional[str] = Field(
-        default=None, description="렌더된 SELECT 검증에 쓸 방언(미지정 시 서버 기본 hive)."
+        default=None, description="렌더된 SELECT 검증에 쓸 SQL 방언(dialect). 미지정 시 서버 기본 hive."
     )
 
 

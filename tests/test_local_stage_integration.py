@@ -64,7 +64,7 @@ def test_local_stage_mock_integration_closes_the_loop(monkeypatch, tmp_path):
     # ③ host 매핑: Phase 2 URI 가 gp_hostname(seg1/seg2) 기반(URL 파싱 폴백으로 동일)
     assert "file://seg1/" in backend.loads[0] and "file://seg2/" in backend.loads[0]
 
-    # ④ CSV 방언: 기본 backtick 구분자로 파일이 써졌다.
+    # ④ CSV 형식: 기본 backtick 구분자로 파일이 써졌다.
     first_file = backend.exported[0][0]
     assert "`" in open(first_file, encoding="utf-8").readline()
 

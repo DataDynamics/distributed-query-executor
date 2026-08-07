@@ -14,7 +14,7 @@ Impala의 큰 `SELECT` 한 건을 여러 executor에게 나눠 병렬로 읽히�
 핵심 설정·동작 요약:
 
 - **분할 기준**: `IN` 값 리스트를 `parallelism`개로 N등분.
-- **소스 방언**: 기본 **Impala**(`sqlglot`의 `hive` 방언), 요청 `sql_dialect`로 재정의(`impala`/`postgres` 등).
+- **소스 방언(dialect)**: 기본 **Impala**(`sqlglot`의 `hive` 방언), 요청 `sql_dialect`로 재정의(`impala`/`postgres` 등).
 - **타깃**: **Greenplum**(PostgreSQL 기반) → psycopg `COPY` 또는 INSERT.
 - **검증 범위**: 기본 단순 `SELECT`(strict). `strict_validation=false`면 JOIN·서브쿼리·GROUP BY 등 복합 쿼리도 허용(파티션 `IN` 절을 트리 어디서든 탐색).
 - **적재 방식**(`exec_mode`): `copy`(기본) / `statement` / `stage_insert` / `local_stage`(§17).
@@ -394,7 +394,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 | 영역 | 선택 |
 |---|---|
 | 언어/프레임워크 | Python 3.9+(RHEL 9.2 기본), **FastAPI**(coordinator·executor 공통) |
-| SQL 파싱 | **sqlglot**(기본 `read="hive"`, 요청별 방언 재정의) |
+| SQL 파싱 | **sqlglot**(기본 `read="hive"`, 요청별 방언(dialect) 재정의) |
 | Impala 읽기 | **impyla**(HiveServer2, TLS+LDAP) + 배치 fetch |
 | Greenplum 쓰기 | **psycopg** `COPY FROM STDIN` / INSERT |
 | Coordinator↔Executor | **httpx**(AsyncClient) |
@@ -482,13 +482,13 @@ DROP EXTERNAL TABLE ext_{job};                            -- staging 은 TRUNCAT
 | `insert_sql` | ✓ | `INSERT INTO <target> SELECT ... FROM <staging_table>` — 변환/컬럼 매핑 담당 |
 | `partition_column` | ✓ | 분할 기준(§8). `overwrite_partitions` 선삭제에도 사용 |
 | `export_local_dir` | 선택 | 로컬 저장 경로 오버라이드(기본 `stage.local_dir`, 모든 호스트 동일) |
-| `csv_delimiter` 등 | 선택 | CSV 방언 오버라이드(기본은 §17.5 설정값) |
+| `csv_delimiter` 등 | 선택 | CSV 형식 오버라이드(기본은 §17.5 설정값) |
 
 `LOCATION`의 URI, `FORMAT 'CSV'(...)` 절, 파일 인덱스는 **coordinator가 조립**하므로 요청자는 컬럼 정의(`external_columns`)와 최종 INSERT(`insert_sql`)만 책임진다.
 
-### 17.5 CSV 방언 — 기본 구분자 backtick
+### 17.5 CSV 형식 — 기본 구분자 backtick
 
-executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방언은 정확히 일치해야 한다(어긋나면 조용히 데이터가 오염될 수 있으므로 **설정 단일 소스**에서 강제). 기본 구분자는 데이터에 잘 없는 backtick이다.
+executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형식은 정확히 일치해야 한다(어긋나면 조용히 데이터가 오염될 수 있으므로 **설정 단일 소스**에서 강제). 기본 구분자는 데이터에 잘 없는 backtick이다.
 
 | 설정 | 기본값 | 의미 |
 |---|---|---|
@@ -518,7 +518,7 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 | 설정(프로퍼티) | 기본값 | 의미 |
 |---|---|---|
 | `stage.local_dir` | `/data1/distributed-query-executor/stage` | 로컬 CSV 저장 루트(모든 호스트 동일) |
-| `stage.csv_delimiter` / `stage.csv_null` / `stage.csv_quote` | `` ` `` / (빈) / `"` | CSV 방언(§17.5) |
+| `stage.csv_delimiter` / `stage.csv_null` / `stage.csv_quote` | `` ` `` / (빈) / `"` | CSV 형식(§17.5) |
 | `stage.files_per_host` | `0`(자동=`S_h`) | 호스트당 파일 수 상한. 0이면 세그먼트 수로 자동 |
 | `stage.cleanup` | `true` | Phase 3에서 로컬 파일/외부테이블/staging 정리 여부 |
 | `executor.gp_hostname` | OS hostname | executor가 self-report할 GP 세그먼트 hostname(`gp_segment_configuration`과 일치) |
@@ -678,7 +678,7 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **안전장치(`_validate_sign_contract`)**: select 조각이 task 파라미터를 참조하면서 `<name>_sign`을 쓰지 않으면 `422 TEMPLATE_MISSING_SIGN_VAR`로 거부한다. 부호가 SQL에 고정된 템플릿에 절대값을 넣으면 `d=-3` task가 `BETWEEN today-3 AND today+3`(7일치)을 읽어 **모든 task가 겹친 채 append**되는데, 오류 없이 데이터만 틀리는 실패라 접수 시점에 막는다. 문자열 grep이 아니라 Jinja2 AST(`TemplateEngine.referenced_variables`, `jinja2.meta`)를 본다. 파라미터를 아예 참조하지 않는 템플릿(날짜 리터럴 방식)은 구간 도출에만 쓰는 것이므로 통과.
 - **상한**: task 수 > 366이면 `422 TASK_RANGE_TOO_LARGE`(오타로 수만 개의 task가 생기는 것을 차단).
 - **적재 방식**: fan-out은 `exec_mode=stage_insert` 또는 `s3_stage`를 지원한다(그 외는 `422 FANOUT_REQUIRES_STAGE_INSERT`). 둘 다 **append**다(그 날짜 SELECT → staging COPY 또는 S3 경유 → target INSERT). 하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을 쓴다 — 프레임워크는 대상에 DELETE를 하지 않는다.
-- **방언 주의**: 렌더된 SELECT는 구조 검증(단일 SELECT)을 위해 sqlglot으로 한 번 파싱된다. sqlglot에 impala 방언이 없고 기본값 `hive`는 인자 1개짜리 `trunc(date)`를 거부하므로, `trunc()`+`interval`을 쓰는 템플릿은 manifest에 `sql_dialect`(예: `trino`)를 지정한다. 실행은 그대로 Impala가 하며 이 값은 파싱에만 쓰인다.
+- **방언(dialect) 주의**: 렌더된 SELECT는 구조 검증(단일 SELECT)을 위해 sqlglot으로 한 번 파싱된다. sqlglot에 impala 방언이 없고 기본값 `hive`는 인자 1개짜리 `trunc(date)`를 거부하므로, `trunc()`+`interval`을 쓰는 템플릿은 manifest에 `sql_dialect`(예: `trino`)를 지정한다. 실행은 그대로 Impala가 하며 이 값은 파싱에만 쓰인다.
 - **예제**: `templates/daily_sales_interval/`(상대 일수 interval + sign 방식), `templates/daily_sales/`(절대 날짜 리터럴 방식).
 
 **테스트**: `tests/test_task_fanout.py` — `_param_offset`/`_compute_task_offsets`/`_offset_value_sign`/`_split_params`(순수 함수), dry-run(두 방식 모두 하루=1 task·절대값만 렌더·음수 interval 없음·partition_values·INSERT 공유·pair 모드), 부호 계약 위반·task_params/템플릿/exec_mode 검증(422).

@@ -73,9 +73,9 @@ def external_table_name(job_id: str, schema: str = "") -> str:
 def csv_format_clause(csv_options: dict | None) -> str:
     """``FORMAT 'CSV' ( DELIMITER '`' NULL '' QUOTE '"' )`` 절을 만든다.
 
-    executor 가 CSV 를 쓸 때 쓴 방언과 **정확히 일치**해야 하므로 같은 csv_options 를 쓴다.
+    executor 가 CSV 를 쓸 때 쓴 형식과 **정확히 일치**해야 하므로 같은 csv_options 를 쓴다.
     ``coordinator/stage.py`` 의 동명 함수와 규칙이 같다(core 는 coordinator 에 의존하지
-    않으므로 규칙만 복제한다 — file:// 판과 CSV 방언을 공유).
+    않으므로 규칙만 복제한다 — file:// 판과 CSV 형식을 공유).
     """
     opts = csv_options or {}
     delim = opts.get("delimiter", "`")
@@ -121,7 +121,7 @@ def build_s3_external_ddl(
         external_table  : 생성할 외부테이블 이름(job 별 고유 — ``external_table_name(job_id)``).
         external_columns: 컬럼 정의 문자열(요청자 명시). 예: "user_id int, dt date".
         location        : ``build_s3_location`` 이 만든 ``pxf://...`` LOCATION 문자열(job 프리픽스).
-        csv_options     : CSV 방언(executor write 와 동일해야 함).
+        csv_options     : CSV 형식(executor 의 write 와 동일해야 함).
 
     외부테이블이 곧 staging 역할을 하므로(coordinator 가 Phase 2 에 생성), insert_sql 의 staging
     참조를 이 이름으로 치환해 ``INSERT INTO target SELECT ... FROM <external_table>`` 이 되게 한다.

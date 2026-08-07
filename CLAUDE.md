@@ -317,7 +317,14 @@ core.config_migrate`, `bin/migrate-config.sh`). 대상은 config/·templates/·c
 ## 관례와 주의점
 
 **주석과 문서는 한글로 쓴다.** 코드 주석과 docstring 은 "무엇을·왜" 중심으로 상세히 쓰되, 로그·
-예외 메시지·SQL·HTML 같은 문자열 리터럴은 주석이 아니라 코드이므로 구분한다.
+예외 메시지·SQL·HTML 같은 문자열 리터럴은 주석이 아니라 코드이므로 구분한다. 서술은 개조식이
+아니라 **산문체**로 쓴다(명사 종결이나 화살표 나열 대신 완결된 문장).
+
+**용어 두 가지를 구분한다.** `방언`은 **SQL dialect** 하나만 가리킨다(`query.sql_dialect`,
+sqlglot 의 `hive`/`trino`/`postgres`). 문서나 모듈에서 처음 나올 때는 설정 키와 이어지도록
+`방언(dialect)` 으로 병기하고, 그 뒤로는 `방언` 만 쓴다. 반면 CSV 의 delimiter·null·quote 는
+방언이 아니라 **`CSV 형식`** 이라고 쓴다 — GP 쪽 SQL 이 실제로 `FORMAT 'CSV'(...)` 이고, 한
+저장소에서 `방언` 이 두 뜻으로 쓰이면 executor 의 write 설정과 파서 설정이 뒤섞여 읽힌다.
 
 **대시보드는 빌드 도구 없이 인라인 HTML 문자열로 되어 있다**(`src/coordinator/dashboard.py` 와
 `src/executor/dashboard.py` 의 `DASHBOARD_HTML`). 이 문자열 안의 HTML/CSS/JS 를 고칠 때는 따옴표와

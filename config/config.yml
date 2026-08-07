@@ -7,7 +7,7 @@ app:
   debug: ${app.debug:false}                       # 디버그 모드(상세 로깅/검증)
 
 query:
-  sql_dialect: ${query.sql_dialect:hive}          # 쿼리 파싱 기본 방언(요청에서 재정의 가능)
+  sql_dialect: ${query.sql_dialect:hive}          # 쿼리 파싱 기본 방언(dialect). 요청에서 재정의 가능
 
 # ───────── 쿼리 템플릿 엔진 ─────────
 # SELECT/STAGING DDL/INSERT 를 서버 템플릿 파일로 런타임 생성한다(요청은 파라미터만 전달).

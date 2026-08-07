@@ -95,7 +95,7 @@ class Task:
     # SELECT 를 읽을 소스 엔진. None/impala 면 built-in Impala 커서(기존 동작), 그 외 이름이면
     # 설정 query.func.fetch_module 의 커스텀 API 로 읽는다(커서 없는 소스).
     datasource: Optional[str] = None
-    # local_stage 모드: Impala 결과를 떨어뜨릴 로컬 CSV 파일의 절대 경로와 CSV 방언.
+    # local_stage 모드: 소스 결과를 떨어뜨릴 로컬 CSV 파일의 절대 경로와 CSV 형식.
     # coordinator 가 파일 경로/인덱스를 확정해 넘긴다(file:// URI 와 짝을 이룬다).
     out_path: Optional[str] = None
     csv_options: Optional[dict] = None  # delimiter·null·quote 를 담으며 외부테이블 FORMAT 과 일치해야 한다

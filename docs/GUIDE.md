@@ -138,7 +138,7 @@ manifest 에 `task_bound` 를 못 박아 두면 요청자가 컬럼 타입을 �
 날짜 리터럴로 하루를 고르는 템플릿(`WHERE dt = {{ task_date | sql_str }}`)도 같은 fan-out 으로
 동작한다 — 이때 두 파라미터는 구간 도출에만 쓰인다(예제: `templates/daily_sales/`).
 
-> **주의(방언)**: 렌더된 SELECT 는 구조 검증을 위해 sqlglot 으로 한 번 파싱된다. sqlglot 에
+> **주의(방언, dialect)**: 렌더된 SELECT 는 구조 검증을 위해 sqlglot 으로 한 번 파싱된다. sqlglot 에
 > impala 방언이 없고 기본값 `hive` 는 인자 1개짜리 `trunc(date)` 를 거부하므로, `trunc()`+
 > `interval` 을 쓰는 템플릿은 manifest 에 `sql_dialect: trino` 를 지정한다(파싱 전용, 실행은
 > 그대로 Impala).
@@ -159,7 +159,7 @@ manifest 에 `task_bound` 를 못 박아 두면 요청자가 컬럼 타입을 �
 | `task_bound` | ✕ | fan-out task 하나의 폭: `point`(기본) \| `pair` |
 | `parallelism` | ✕ | 분할(=task) 수, 1~128 (기본 4) |
 | `split_strategy` | ✕ | `contiguous`(기본) \| `round_robin` |
-| `sql_dialect` | ✕ | 파싱 방언(기본 hive) |
+| `sql_dialect` | ✕ | 파싱 방언(dialect, 기본 hive) |
 | `strict_validation` | ✕ | true=단순 SELECT, false=복합 쿼리 허용 |
 | `impala_query_options` | ✕ | 소스 SELECT 에만 적용되는 SET 옵션 |
 | `username` | ✕ | 이력/감사용 |
@@ -346,7 +346,7 @@ DROP EXTERNAL TABLE IF EXISTS ext_job_ab12cd;                      -- cleanup
 | **executor 설정** | `impala.host`(export 소스), `greenplum.dsn`(⚠️ export 는 GP 를 쓰지 않지만 `build_backend` 가 DSN 이 있어야 실백엔드를 고른다 — 연결은 lazy 라 export 경로에선 실제 접속하지 않음), `executor.gp_hostname`(그 호스트의 `gp_segment_configuration.hostname` 과 일치, 미설정 시 OS hostname), `stage.local_dir`. |
 | **로컬 디렉터리** | `stage.local_dir`(예: `/data1/distributed-query-executor/stage`)가 **모든 세그먼트 호스트에 동일 경로**로 존재하고, executor 프로세스가 write, **GP 세그먼트 postgres(보통 gpadmin)가 read** 가능해야 한다. |
 | **GP 스키마** | target 테이블과 staging 테이블(또는 job 이 만들 `staging_ddl`)이 존재/생성 가능. `gp_segment_configuration` 조회 권한. |
-| **CSV 방언** | executor write 와 외부테이블 `FORMAT 'CSV'` 는 같은 설정(`stage.csv_delimiter` 기본 backtick `` ` ``)을 쓰므로 자동 일치. |
+| **CSV 형식** | executor write 와 외부테이블 `FORMAT 'CSV'` 는 같은 설정(`stage.csv_delimiter` 기본 backtick `` ` ``)을 쓰므로 자동 일치. |
 
 `stage.cleanup=true`(기본)면 적재 후 job 디렉터리를 삭제하고, 디버깅 시 `false` 로 보존한다.
 
@@ -465,7 +465,7 @@ Phase 2 가 `S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
 | **coordinator 설정(Phase 2 적재)** | `greenplum.dsn`(GP master — 외부테이블 생성·INSERT), 그리고 Phase 2 LOCATION 조립을 위해 **coordinator 도 같은 `s3.*`**(bucket/prefix/pxf_server/pxf_profile)를 읽는다(설정은 coordinator·executor 공유). |
 | **GP 읽기(PXF)** | GP 세그먼트에 **PXF 를 설치·기동**하고 **S3 SERVER 프로파일**을 구성한다: `$PXF_BASE/servers/<server>/s3-site.xml` 에 S3 자격증명·엔드포인트. 그 서버 이름을 `s3.pxf_server` 로 지정(프로파일 기본 `s3:csv`). 업로드 자격증명과 **경로가 분리**된다. |
 | **GP 스키마** | target 테이블 존재/생성 가능, 외부테이블 생성 권한. 외부테이블을 특정 스키마에 만들려면 `s3.external_schema`(예: `dwtemp`)를 지정한다 — 그 스키마는 **미리 생성**돼 있어야 하고 GP 롤에 `CREATE` 권한이 필요하다. 비우면 세션 `search_path` 를 따른다. |
-| **CSV 방언** | executor write 와 외부테이블 `FORMAT 'CSV'` 는 같은 설정(`stage.csv_delimiter` 기본 backtick `` ` ``)을 쓰므로 자동 일치. |
+| **CSV 형식** | executor write 와 외부테이블 `FORMAT 'CSV'` 는 같은 설정(`stage.csv_delimiter` 기본 backtick `` ` ``)을 쓰므로 자동 일치. |
 
 `s3.delete_on_cleanup=true`(기본)면 적재 후 S3 객체를 삭제하고, 디버깅 시 `false` 로 보존한다.
 사이트의 PXF LOCATION 형식이 다르면 `s3.gp_location_template` 으로 raw override 한다

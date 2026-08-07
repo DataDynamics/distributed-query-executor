@@ -157,7 +157,7 @@ def per_task_staging(
 def csv_format_clause(csv_options: dict | None) -> str:
     """``FORMAT 'CSV' ( DELIMITER '`' NULL '' QUOTE '"' )`` 절을 만든다.
 
-    executor 가 CSV 를 쓸 때 쓴 방언과 **정확히 일치**해야 하므로 같은 csv_options 를 쓴다.
+    executor 가 CSV 를 쓸 때 쓴 형식과 **정확히 일치**해야 하므로 같은 csv_options 를 쓴다.
     """
     opts = csv_options or {}
     delim = opts.get("delimiter", "`")
@@ -179,7 +179,7 @@ def build_external_ddl(
         external_columns: 컬럼 정의 문자열(요청자 명시). 예: "user_id int, dt date".
         uris            : ``[(host, path), ...]`` — host 가 있으면 ``file://host/path``,
                           없으면(로컬/목 모드) ``file://path``. path 는 세그먼트 로컬 절대경로.
-        csv_options     : CSV 방언(executor write 와 동일해야 함).
+        csv_options     : CSV 형식(executor 의 write 와 동일해야 함).
     """
     locs = []
     for host, path in uris:
@@ -285,9 +285,9 @@ def plan_file_budget(
 
 
 def resolve_csv_options(job, settings) -> dict:
-    """job 의 CSV 오버라이드와 설정 기본값을 합쳐 최종 CSV 방언 dict 를 만든다.
+    """job 의 CSV 오버라이드와 설정 기본값을 합쳐 최종 CSV 형식 dict 를 만든다.
 
-    executor payload(export)와 Phase 2(외부테이블 FORMAT) 양쪽이 **같은 함수**로 방언을
+    executor payload(export)와 Phase 2(외부테이블 FORMAT) 양쪽이 **같은 함수**로 형식을
     해석하므로 항상 일치한다.
     """
     return {

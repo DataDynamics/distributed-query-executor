@@ -38,7 +38,7 @@ def masked_config(settings) -> list[dict]:
         ("app", "name", settings.app_name, "애플리케이션 이름"),
         ("app", "debug", settings.debug, "디버그 모드(상세 로깅/검증)"),
         ("app", "query.sql_dialect", settings.query_default_dialect,
-         "쿼리 파싱 기본 방언(요청에서 sql_dialect 로 재정의 가능)"),
+         "쿼리 파싱 기본 방언(dialect). 요청에서 sql_dialect 로 재정의 가능"),
         ("coordinator", "host", settings.coordinator_host, "coordinator 바인드 주소"),
         ("coordinator", "port", settings.coordinator_port, "coordinator 수신 포트"),
         ("coordinator", "id", settings.coordinator_id,
@@ -141,7 +141,7 @@ def masked_config(settings) -> list[dict]:
          "COPY 포맷 text|binary. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백)"),
         # local_stage(file:// 세그먼트 로컬 스테이징). coordinator 는 Phase 2(외부테이블 DDL·
         # 파일 예산·호스트 검증)에서, executor 는 Phase 1(CSV write)에서 같은 값을 쓴다.
-        # CSV 방언은 양쪽이 반드시 일치해야 하므로(write 방언 = 외부테이블 FORMAT) 함께 보인다.
+        # CSV 형식은 양쪽이 반드시 일치해야 하므로(executor 의 write 형식 = 외부테이블 FORMAT) 함께 보인다.
         ("stage", "local_dir", getattr(settings, "stage_local_dir", ""),
          "local_stage 로컬 CSV 저장 루트(모든 세그먼트 호스트 동일 경로, job_id 하위 격리)"),
         ("stage", "csv_delimiter", getattr(settings, "stage_csv_delimiter", "`"),

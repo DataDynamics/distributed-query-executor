@@ -209,7 +209,7 @@ def test_subquery_in_on_partition_column_rejected():
     assert exc.value.code == "SUBQUERY_IN_CLAUSE"
 
 
-# ───────────────────── 방언 ─────────────────────
+# ───────────────────── 방언(dialect) ─────────────────────
 
 
 def test_hive_dialect_also_parses_and_splits():

@@ -149,7 +149,7 @@ INFO 2026-08-07 09:51:15.091 18355 executor sqllog.py:log_sql:121 [job_abc123][t
 | 필드 | 기본 | 설명 |
 |---|---|---|
 | `strict_validation` | `true` | `true`: 단순 SELECT(+`ORDER BY`/`LIMIT`)만 허용. `false`: JOIN/서브쿼리/GROUP BY 등 **복합 쿼리**를 허용하고 파티션 컬럼의 `IN` 절을 트리 어디서든 찾아 분할 |
-| `sql_dialect` | 서버 기본(`query.sql_dialect`, 기본 `hive`) | 파싱 방언. 예: `hive`, `impala`, `postgres`(Greenplum) |
+| `sql_dialect` | 서버 기본(`query.sql_dialect`, 기본 `hive`) | 파싱 방언(dialect). 예: `hive`, `impala`, `postgres`(Greenplum) |
 | `wrapper_query` | (없음) | 분할된 sub-query 를 감싸는 쿼리. `wrapper_placeholder`(기본 `{{SUBQUERY}}`) 자리에 각 sub-query 가 치환 |
 | `impala_query_options` | (없음) | 이 작업의 Impala 쿼리 옵션(SET). 전역 `impala.query_options` 위에 병합(같은 키는 요청값 우선), copy·stage_insert 의 Impala SELECT 에만 적용 |
 

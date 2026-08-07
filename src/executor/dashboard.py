@@ -86,12 +86,12 @@ def masked_config(settings) -> list[dict]:
          "COPY 포맷 text|binary. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백)"),
         # local_stage(file:// 세그먼트 로컬 스테이징) 설정이다. executor 는 소스 결과를 로컬 CSV 로
         # 쓰는 Phase 1 을 맡고, 호스트 검증과 파일 예산 같은 나머지 값은 coordinator 의 Phase 2
-        # 용이지만 설정을 공유하므로 함께 보인다. CSV 방언은 write 와 외부테이블 FORMAT 이
+        # 용이지만 설정을 공유하므로 함께 보인다. CSV 형식은 write 와 외부테이블 FORMAT 이
         # 반드시 일치해야 한다.
         ("stage", "local_dir", getattr(settings, "stage_local_dir", ""),
          "local_stage 로컬 CSV 저장 루트(GP 세그먼트가 file:// 로 읽는 경로, job_id 하위 격리)"),
         ("stage", "csv_delimiter", getattr(settings, "stage_csv_delimiter", "`"),
-         "CSV 컬럼 구분자. 이 write 방언이 외부테이블 FORMAT 과 일치해야 함(s3_stage 도 동일)"),
+         "CSV 컬럼 구분자. 이 write 형식이 외부테이블 FORMAT 과 일치해야 함(s3_stage 도 동일)"),
         ("stage", "csv_null", getattr(settings, "stage_csv_null", "") or "(빈 문자열)",
          "CSV NULL 표현"),
         ("stage", "csv_quote", getattr(settings, "stage_csv_quote", '"'), "CSV 인용문자"),

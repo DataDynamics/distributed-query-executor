@@ -173,7 +173,7 @@ class Settings:
         self.app_name: str = _get("app", "name", "distributed-query-executor")
         self.debug: bool = _to_bool(_get("app", "debug", False))
 
-        # 쿼리 파싱에 쓸 기본 방언이다. 요청의 sql_dialect 로 재정의할 수 있다.
+        # 쿼리 파싱에 쓸 기본 방언(dialect)이다. 요청의 sql_dialect 로 재정의할 수 있다.
         self.query_default_dialect: str = _get("query", "sql_dialect", "hive")
 
         # ───────── 쿼리 템플릿 엔진 ─────────
@@ -498,7 +498,7 @@ class Settings:
         self.stage_local_dir: str = _get_nested(
             "executor", "stage", "local_dir", "/data1/distributed-query-executor/stage"
         )
-        # CSV 방언 — executor 의 write 와 GP file:// 외부테이블 FORMAT 'CSV'(...) 에 공통 적용된다.
+        # CSV 형식이다. executor 의 write 와 GP file:// 외부테이블 FORMAT 'CSV'(...) 에 공통 적용된다.
         # 양쪽이 정확히 일치해야 하며(불일치 시 조용한 데이터 오염), 기본 구분자는 데이터에 잘
         # 나타나지 않는 backtick(`). 설정으로 바꿀 수 있다.
         self.stage_csv_delimiter: str = str(

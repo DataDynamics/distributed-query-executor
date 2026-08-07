@@ -229,7 +229,7 @@ executor 가 Greenplum 으로 데이터를 실제로 밀어 넣을 때의 처리
 | `copy.queue_size` | 8 | 파이프라인 큐 크기(배치 개수). 메모리 ≈ `queue_size × batch_size` 행 |
 | `copy.format` | text | COPY 포맷 `text`\|`binary`. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백) |
 | `impala.query_options` | (빈값) | Impala SET 전역 기본값. 예: `MEM_LIMIT=2g,REQUEST_POOL=etl` |
-| `query.sql_dialect` | hive | 파싱 기본 방언(요청에서 재정의 가능) |
+| `query.sql_dialect` | hive | 파싱 기본 방언(dialect). 요청에서 재정의 가능 |
 
 ### 3.6 SELECT→COPY 병목 진단·튜닝 (executor 단일 task 관점)
 

@@ -879,7 +879,7 @@ class HttpDispatcher(_DispatcherBase):
                 # (둘 다 coordinator 가 확정한 "이 task 가 쓸 위치"). 외부테이블 생성/INSERT 는
                 # 두 모드 모두 coordinator 가 배리어 후 Phase 2 에서 하므로 여기선 보내지 않는다.
                 "out_path": task.out_path,
-                # csv_options 는 local_stage 와 s3_stage 가 공유한다. 이 CSV 방언이 곧 외부테이블의 FORMAT 이다.
+                # csv_options 는 local_stage 와 s3_stage 가 공유한다. 이 CSV 형식이 곧 외부테이블의 FORMAT 이다.
                 "csv_options": (
                     stage_sql.resolve_csv_options(job, self.settings)
                     if job.exec_mode in ("local_stage", "s3_stage") else None

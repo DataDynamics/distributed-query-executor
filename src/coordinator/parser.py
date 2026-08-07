@@ -19,7 +19,7 @@ lenient 모드(strict=False): 중첩 서브쿼리·JOIN·GROUP BY 등 복합 쿼
 공통적으로 IN 목록은 리터럴 값이어야 하고(서브쿼리 불가), 비어 있지 않으며,
 부정(NOT IN)이 아니어야 한다.
 
-Impala SQL은 전용 방언이 없으므로 sqlglot의 ``hive`` 방언으로 파싱한다
+Impala SQL은 전용 방언(dialect)이 없으므로 sqlglot의 ``hive`` 방언으로 파싱한다
 (문법이 가장 근접하기 때문).
 """
 
@@ -30,7 +30,7 @@ from dataclasses import dataclass
 import sqlglot
 from sqlglot import exp
 
-# sqlglot 파싱 시 사용하는 기본 방언. Impala 전용 방언이 없어 가장 가까운 hive를 쓴다.
+# sqlglot 파싱에 쓰는 기본 방언(dialect)이다. Impala 전용 방언이 없어 가장 가까운 hive 를 쓴다.
 DIALECT = "hive"
 
 
@@ -57,7 +57,7 @@ class ParsedQuery:
         partition_column : 분할 기준 컬럼명.
         expression       : sqlglot로 파싱된 SELECT AST 루트.
         partition_values : 추출된 IN 목록의 각 값(방언 기준 SQL 문자열 형태).
-        dialect          : 파싱·재직렬화에 쓰인 sqlglot 방언.
+        dialect          : 파싱과 재직렬화에 쓰인 sqlglot 방언(dialect).
     """
 
     sql: str

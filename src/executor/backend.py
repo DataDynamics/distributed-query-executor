@@ -1004,7 +1004,7 @@ class ImpalaToGreenplumBackend:
         """local_stage 1단계로, 소스 SELECT 결과를 out_path 의 로컬 CSV 파일에 스트리밍 저장한다.
 
         impyla 커서를 batch_size 단위로 fetch 하며 표준 라이브러리 ``csv`` 로 한 줄씩 쓴다.
-        전체 결과를 메모리에 올리지 않는다. CSV 방언(delimiter/null/quote)은 GP file:// 외부
+        전체 결과를 메모리에 올리지 않는다. CSV 형식(delimiter/null/quote)은 GP file:// 외부
         테이블의 ``FORMAT 'CSV'(...)`` 와 정확히 일치해야 하므로 coordinator 가 넘긴 값을 쓴다.
         NULL 은 지정된 null 문자열로, 나머지 값은 문자열화해 기록한다. 반환: 기록한 행 수.
         """

@@ -2,7 +2,7 @@
 #
 # sales_migration_s3 과 하는 일이 같고 **SELECT 를 읽는 엔진만 다르다**. 바뀌는 것은 둘뿐이다:
 #   1. manifest 의 datasource: trino  — 커스텀 API 로 읽는다(커서 없음)
-#   2. select.sql.j2 의 방언          — 3단 테이블 이름, DATE '...' 리터럴
+#   2. select.sql.j2 의 방언(dialect) — 3단 테이블 이름, DATE '...' 리터럴
 # 적재(Greenplum)·exec_mode·분할·Phase 2(PXF 외부테이블→target INSERT)·Phase 3(S3 정리)는
 # 전혀 바뀌지 않는다. insert/external_columns 조각은 sales_migration_s3 과 동일하다.
 #
@@ -41,7 +41,7 @@ description: 일별 매출 Trino→Greenplum 이관(s3_stage — SELECT 만 커�
 # impala 가 아니므로 executor 가 query.func.fetch_module 커스텀 API 로 SELECT 를 읽는다.
 datasource: trino
 
-# ── 파서 방언(다른 축) ──
+# ── 파서 방언(dialect — datasource 와 다른 축) ──
 # datasource 는 "누가 실행하나", sql_dialect 는 "coordinator 가 어떤 문법으로 읽나"다.
 # splitter 가 IN 목록을 찾아 N등분하려면 렌더된 SELECT 가 이 방언으로 파싱돼야 한다.
 sql_dialect: trino
