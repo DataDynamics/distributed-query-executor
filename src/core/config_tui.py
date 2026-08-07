@@ -1,4 +1,4 @@
-"""config.properties 를 편집하는 curses 기반 전체화면 설정 TUI.
+"""config.properties 를 편집하는 curses 기반 전체화면 설정 TUI 다.
 
 ## 왜 이렇게 만드나
 
@@ -38,7 +38,7 @@ from typing import Any
 from core.config_loader import DEFAULT_CONFIG_DIR, load_properties
 from core.masking import mask_dsn
 
-# ``${변수:기본값}`` 자리표시자(config_loader 와 동일 규칙). group(1)=변수명, group(2)=기본값.
+# ``${변수:기본값}`` 자리표시자를 찾는다(config_loader 와 같은 규칙이다). group(1)이 변수명이고 group(2)가 기본값이다.
 _VAR_PATTERN = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ ENUM_CHOICES: dict[str, list[str]] = {
     "query.sql_dialect": ["hive", "impala", "trino", "postgres"],
 }
 
-# 사람이 읽기 좋은 섹션 라벨(YAML 최상위 키 → 탭 이름). 없으면 키를 그대로 쓴다.
+# YAML 최상위 키를 사람이 읽기 좋은 탭 이름으로 바꾼다. 표에 없으면 키를 그대로 쓴다.
 SECTION_LABELS: dict[str, str] = {
     "app": "App",
     "query": "Query",
@@ -87,9 +87,9 @@ def _is_secret(prop_key: str) -> bool:
 
 
 def infer_type(default: str) -> str:
-    """기본값 문자열에서 항목 타입을 추론한다: ``bool``|``int``|``float``|``str``.
+    """기본값 문자열에서 항목 타입을 ``bool``·``int``·``float``·``str`` 중 하나로 추론한다.
 
-    ``true``/``false`` → bool, 정수/실수 리터럴 → int/float, 그 외 → str.
+    ``true`` 와 ``false`` 는 bool 로, 정수·실수 리터럴은 int·float 로 보고 나머지는 str 로 둔다.
     """
     if default in ("true", "false"):
         return "bool"
@@ -102,29 +102,29 @@ def infer_type(default: str) -> str:
 
 @dataclass
 class Field:
-    """설정 항목 하나의 메타데이터(config.yml 한 줄에서 추출)."""
+    """설정 항목 하나의 메타데이터이며 config.yml 한 줄에서 뽑아낸다."""
 
-    prop_key: str                       # config.properties 키(= 자리표시자 변수명)
-    section: str                        # 소속 최상위 섹션(YAML 최상위 키)
-    path: list[str]                     # YAML 중첩 경로(그룹 헤더 표시용)
-    default: str                        # ${...:기본값} 의 기본값(콜론 없으면 "")
-    has_default: bool                   # 자리표시자에 기본값(콜론)이 명시됐는지
-    help_inline: str = ""               # 줄 끝 주석(짧은 설명)
-    help_long: str = ""                 # 항목 위 주석 줄(긴 설명, 여러 줄 가능)
+    prop_key: str                       # config.properties 의 키이자 자리표시자 변수명이다
+    section: str                        # 소속된 최상위 섹션이며 YAML 최상위 키와 같다
+    path: list[str]                     # YAML 중첩 경로이며 그룹 헤더를 표시할 때 쓴다
+    default: str                        # ${...:기본값} 에서 뽑은 기본값이며 콜론이 없으면 "" 다
+    has_default: bool                   # 자리표시자에 기본값(콜론)이 명시됐는지를 나타낸다
+    help_inline: str = ""               # 줄 끝 주석에서 뽑은 짧은 설명이다
+    help_long: str = ""                 # 항목 위 주석에서 뽑은 긴 설명이며 여러 줄일 수 있다
     ftype: str = "str"                  # bool|int|float|str
-    enum: list[str] = dataclass_field(default_factory=list)  # 값 후보(있으면 토글/선택)
-    secret: bool = False                # 비밀값(화면 마스킹)
+    enum: list[str] = dataclass_field(default_factory=list)  # 값 후보이며 있으면 토글로 고른다
+    secret: bool = False                # 비밀값이라 화면에서 마스킹한다
 
     @property
     def group(self) -> str:
-        """섹션 안 하위 그룹 라벨(예: [executor,impala,host] → 'impala'). 최상위면 "".
+        """섹션 안 하위 그룹의 라벨이다. [executor,impala,host] 면 'impala' 가 되고, 최상위면 "" 다.
 
         path 의 첫 원소는 섹션, 마지막 원소는 이 항목의 YAML 키이므로 그 사이가 그룹이다.
         """
         return ".".join(self.path[1:-1])
 
 
-# 설명으로 쓰기엔 장식일 뿐인 배너 주석(─── 류)을 걸러내는 판정.
+# 구분선처럼 생긴 배너 주석(`───` 류)은 설명이 아니라 장식일 뿐이므로 걸러낸다.
 _BANNER = re.compile(r"^[#\s─\-=*]+$")
 
 
@@ -143,8 +143,8 @@ def parse_schema(yaml_text: str) -> list[Field]:
         ``${...}`` 자리표시자를 값으로 가진 리프(leaf) 항목들의 :class:`Field` 목록.
     """
     fields: list[Field] = []
-    stack: list[tuple[int, str]] = []   # (indent, key) — 현재 열려 있는 상위 매핑들
-    pending: list[str] = []             # 다음 항목에 붙일 위쪽 주석 줄 버퍼
+    stack: list[tuple[int, str]] = []   # 현재 열려 있는 상위 매핑들을 (indent, key) 로 쌓는다
+    pending: list[str] = []             # 다음 항목에 붙일 위쪽 주석 줄을 모아 두는 버퍼다
 
     for raw in yaml_text.splitlines():
         if not raw.strip():
@@ -168,7 +168,7 @@ def parse_schema(yaml_text: str) -> list[Field]:
         key = key.strip()
         rest = rest.strip()
 
-        # rest 에서 값과 줄 끝 주석을 분리한다. 값이 ${...} 면 닫는 '}' 뒤의 '#' 만 주석.
+        # rest 에서 값과 줄 끝 주석을 분리한다. 값이 ${...} 면 닫는 '}' 뒤의 '#' 부터만 주석으로 본다.
         value, comment = _split_value_comment(rest)
 
         # 들여쓰기 스택 정리: 현재보다 깊거나 같은 항목을 닫는다.
@@ -245,12 +245,12 @@ def display_value(fld: Field, value: str) -> str:
     return value
 
 
-# diff-write 로 추가되는 키 앞에 붙이는 표식(중복 추가 방지용으로도 쓴다).
+# diff-write 로 새로 추가하는 키 앞에 붙이는 표식이다. 중복 추가를 막는 데도 쓴다.
 _APPEND_MARKER = "# ─── config-tui 로 추가된 설정 ───"
 
 
 def merge_properties_lines(existing: list[str], values: dict[str, str]) -> list[str]:
-    """기존 properties 줄들에 ``values`` 를 반영한 **새 줄 목록**을 만든다(주석·순서 보존).
+    """기존 properties 줄들에 ``values`` 를 반영해 **새 줄 목록**을 만든다. 주석과 순서는 보존한다.
 
     * 파일에 이미 있는 키는 **제자리에서 값만** 교체한다(주석·배치 유지).
     * 파일에 없는 키는 끝에 :data:`_APPEND_MARKER` 아래로 추가한다(마커는 1회만).
@@ -258,7 +258,7 @@ def merge_properties_lines(existing: list[str], values: dict[str, str]) -> list[
 
     인자:
         existing: config.properties 의 현재 줄 목록(개행 없는 문자열들).
-        values:  기록할 ``프로퍼티키 → 값`` 매핑(사용자가 유지하려는 항목만).
+        values:  기록할 프로퍼티키와 값의 매핑이며 사용자가 유지하려는 항목만 담는다.
 
     반환:
         기록할 새 줄 목록.
@@ -268,7 +268,7 @@ def merge_properties_lines(existing: list[str], values: dict[str, str]) -> list[
 
     for line in existing:
         stripped = line.strip()
-        # 주석/빈 줄은 그대로. key=value 줄만 대상.
+        # 주석과 빈 줄은 그대로 두고 key=value 줄만 다룬다.
         if stripped and not stripped.startswith(("#", "!")):
             for sep in ("=", ":"):
                 idx = line.find(sep)
@@ -312,16 +312,16 @@ def write_config(config_dir: Path, persist: dict[str, str]) -> Path:
 
 
 def validate(fields: list[Field], values: dict[str, str]) -> list[tuple[str, str, str]]:
-    """편집 중인 값들을 검증해 ``(심각도, 프로퍼티키, 메시지)`` 목록을 반환한다.
+    """편집 중인 값들을 검증해 ``(심각도, 프로퍼티키, 메시지)`` 목록을 돌려준다.
 
     심각도는 ``error``(저장 차단)|``warn``(안내). 타입 불일치·enum 이탈·포트 범위는
-    error, 조건부 필수(예: store.backend=postgres → history.db_dsn)·URL 형식은 warn.
+    error 로 보고, 조건부 필수(예: store.backend 가 postgres 면 history.db_dsn 이 있어야 한다)와 URL 형식은 warn 으로 본다.
     """
     issues: list[tuple[str, str, str]] = []
     by_key = {f.prop_key: f for f in fields}
 
     def eff(key: str) -> str:
-        """현재 유효 값(오버라이드 없으면 기본값)."""
+        """현재 유효한 값이다. 오버라이드가 없으면 기본값을 쓴다."""
         if key in values:
             return values[key]
         f = by_key.get(key)
@@ -346,7 +346,7 @@ def validate(fields: list[Field], values: dict[str, str]) -> list[tuple[str, str
     # 조건부 필수: postgres 저장소는 공유 DB DSN 이 있어야 한다.
     if eff("store.backend") == "postgres" and not eff("history.db_dsn"):
         issues.append(("warn", "history.db_dsn", "store.backend=postgres 는 history.db_dsn 이 필요"))
-    # executor URL 목록 형식 점검.
+    # executor URL 목록의 형식을 점검한다.
     execs = eff("coordinator.executors")
     if execs:
         for u in [x.strip() for x in execs.split(",") if x.strip()]:
@@ -368,31 +368,31 @@ def _load_yaml_text(config_dir: Path) -> str:
 
 
 class ConfigTUI:
-    """섹션 탭 + 스크롤 항목 목록 + 편집/저장을 담당하는 curses 애플리케이션.
+    """섹션 탭과 스크롤 항목 목록, 편집과 저장을 담당하는 curses 애플리케이션이다.
 
-    상태는 ``self.values``(프로퍼티키 → 오버라이드 값)에 모으고, 저장 시
+    상태는 프로퍼티키별 오버라이드 값을 담은 ``self.values`` 에 모으고, 저장할 때
     :func:`merge_properties_lines` 로 config.properties 를 갱신한다.
     """
 
     def __init__(self, config_dir: Path, fields: list[Field], overrides: dict[str, str]):
         self.config_dir = config_dir
         self.fields = fields
-        self.overrides = overrides                 # 파일에 원래 있던 오버라이드(저장 기준선)
-        # 편집 중 값: 파일에 있던 오버라이드로 시작. 없으면 미설정(기본값 사용).
+        self.overrides = overrides                 # 파일에 원래 있던 오버라이드이며 저장의 기준선이 된다
+        # 편집 중인 값은 파일에 있던 오버라이드에서 출발한다. 없으면 미설정이라 기본값을 쓴다.
         self.values: dict[str, str] = dict(overrides)
         self.sections = list(dict.fromkeys(f.section for f in fields))
         self.tab = 0
         self.row = 0
-        self.top = 0                               # 스크롤 오프셋
+        self.top = 0                               # 스크롤 오프셋이다
         self.status = "↑↓ 이동  ←→ 탭  Enter 편집  스페이스 토글  s 저장  q 종료"
         self.dirty = False
 
-    # 현재 탭의 항목들.
+    # 현재 탭에 속한 항목들을 모은다.
     def _visible(self) -> list[Field]:
         return [f for f in self.fields if f.section == self.sections[self.tab]]
 
     def _eff(self, f: Field) -> str:
-        """유효 값: 오버라이드가 있으면 그 값, 없으면 기본값."""
+        """유효한 값을 구한다. 오버라이드가 있으면 그 값을, 없으면 기본값을 쓴다."""
         return self.values.get(f.prop_key, f.default)
 
     def _is_override(self, f: Field) -> bool:
@@ -434,14 +434,14 @@ class ConfigTUI:
     def _init_colors(self, curses: Any) -> None:
         curses.start_color()
         curses.use_default_colors()
-        curses.init_pair(1, curses.COLOR_CYAN, -1)     # 탭/헤더
-        curses.init_pair(2, curses.COLOR_YELLOW, -1)   # 오버라이드 표시
-        curses.init_pair(3, curses.COLOR_GREEN, -1)    # 값
-        curses.init_pair(4, curses.COLOR_RED, -1)      # 오류
-        curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLUE)  # 선택 행
+        curses.init_pair(1, curses.COLOR_CYAN, -1)     # 탭과 헤더에 쓴다
+        curses.init_pair(2, curses.COLOR_YELLOW, -1)   # 오버라이드 표시에 쓴다
+        curses.init_pair(3, curses.COLOR_GREEN, -1)    # 값에 쓴다
+        curses.init_pair(4, curses.COLOR_RED, -1)      # 오류에 쓴다
+        curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLUE)  # 선택된 행에 쓴다
 
     def _toggle(self, f: Field) -> None:
-        """bool/enum 항목을 다음 값으로 순환. 그 외에는 무시."""
+        """bool 과 enum 항목을 다음 값으로 순환시킨다. 그 밖의 타입은 무시한다."""
         cur = self._eff(f)
         if f.ftype == "bool":
             self._set(f, "false" if cur == "true" else "true")
@@ -489,8 +489,8 @@ class ConfigTUI:
         return stdscr.getch() in (ord("y"), ord("Y"))
 
     def _save(self, stdscr: Any, curses: Any) -> bool:
-        """검증 후 config.properties 를 백업하고 갱신한다. 성공 시 True."""
-        # 기록 대상: 파일에 원래 있던 키 + 기본값과 달라진 키.
+        """검증한 뒤 config.properties 를 백업하고 갱신한다. 성공하면 True 를 돌려준다."""
+        # 파일에 원래 있던 키와 기본값에서 달라진 키를 기록 대상으로 삼는다.
         persist = {
             f.prop_key: self._eff(f)
             for f in self.fields
@@ -515,7 +515,7 @@ class ConfigTUI:
         stdscr.erase()
         h, w = stdscr.getmaxyx()
 
-        # 타이틀 + 탭 바
+        # 타이틀과 탭 바를 그린다.
         title = " Distributed Query Executor — 설정 "
         stdscr.addstr(0, 0, title[: w - 1], curses.color_pair(1) | curses.A_BOLD)
         x = 0
@@ -559,7 +559,7 @@ class ConfigTUI:
                 stdscr.addstr(y, 1, marker, curses.color_pair(2))
             y += 1
 
-        # 설명 패널(선택 항목).
+        # 선택한 항목의 설명 패널을 그린다.
         cur = vis[self.row] if vis else None
         if cur:
             desc = cur.help_inline or cur.help_long
@@ -575,7 +575,7 @@ class ConfigTUI:
 
 
 def run_tui(config_dir: Path) -> bool:
-    """curses TUI 를 띄운다. 저장하면 True, 취소면 False."""
+    """curses TUI 를 띄운다. 저장하면 True 를, 취소하면 False 를 돌려준다."""
     import curses
 
     yaml_text = _load_yaml_text(config_dir)
@@ -590,7 +590,7 @@ def run_tui(config_dir: Path) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI 진입점. ``python -m core.config_tui`` / ``bin/config-tui``."""
+    """CLI 진입점이다. ``python -m core.config_tui`` 나 ``bin/config-tui`` 로 실행한다."""
     parser = argparse.ArgumentParser(
         prog="config-tui",
         description="config.properties 를 편집하는 curses 설정 TUI(스키마는 config.yml 에서 자동).",

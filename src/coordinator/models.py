@@ -1,4 +1,4 @@
-"""도메인 모델(Job/Task)과 API 요청/응답 스키마 정의.
+"""도메인 모델(Job·Task)과 API 요청·응답 스키마를 정의한다.
 
 이 모듈은 분산 쿼리 실행 시스템의 핵심 도메인 객체를 정의한다.
 
@@ -27,25 +27,25 @@ from typing import Any, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 from core.phases import phase_of, record_stage
-from core.timeutil import now_iso as _now_iso  # KST(naive) ISO 시각 생성
+from core.timeutil import now_iso as _now_iso  # KST 기준 naive ISO 시각을 만든다
 
 logger = logging.getLogger(__name__)
 
 
 class JobStatus(str, enum.Enum):
-    """Job 전체의 생명주기 상태.
+    """Job 전체의 생명주기 상태를 나타낸다.
 
     ``str`` 을 함께 상속하므로 enum 멤버가 곧 문자열이며, JSON 직렬화·DB 저장 시
     ``.value`` 가 그대로 쓰인다.
 
     상태 전이(개략):
-        PENDING   → 작업 생성 직후, 아직 분할 전 대기 상태.
-        SPLITTING → 쿼리를 파싱하고 파티션 IN 목록을 N등분하여 Task로 쪼개는 중.
-        RUNNING   → Task들을 executor에 분산 실행 중.
-        DONE      → 모든 Task 성공(터미널).
-        PARTIAL   → 일부 Task만 성공(best_effort 정책에서 발생, 터미널).
-        FAILED    → 작업 실패(fail_fast 정책 등, 터미널).
-        CANCELLED → 사용자 취소 요청으로 중단됨(터미널).
+        PENDING 은 작업을 만든 직후로 아직 분할 전에 대기하는 상태다.
+        SPLITTING 은 쿼리를 파싱하고 파티션 IN 목록을 N등분해 Task 로 쪼개는 중이다.
+        RUNNING 은 Task 들을 executor 에 분산해 실행하는 중이다.
+        DONE 은 모든 Task 가 성공한 터미널 상태다.
+        PARTIAL 은 일부 Task 만 성공한 터미널 상태로 best_effort 정책에서 나온다.
+        FAILED 는 작업이 실패한 터미널 상태로 fail_fast 정책 등에서 나온다.
+        CANCELLED 는 사용자 취소 요청으로 중단된 터미널 상태다.
     """
 
     PENDING = "PENDING"
@@ -58,17 +58,17 @@ class JobStatus(str, enum.Enum):
 
 
 class TaskStatus(str, enum.Enum):
-    """개별 Task(sub-query)의 생명주기 상태.
+    """개별 Task(sub-query)의 생명주기 상태를 나타낸다.
 
     ``JobStatus`` 와 마찬가지로 문자열 enum이다.
 
     상태 전이(개략):
-        QUEUED    → 실행 대기.
-        READING   → 소스(Impala 등)에서 결과를 읽는 중.
-        WRITING   → 대상(Greenplum 등)에 적재(COPY/INSERT)하는 중.
-        DONE      → 성공(터미널).
-        FAILED    → 실패(터미널).
-        CANCELLED → 취소됨(터미널).
+        QUEUED 는 실행을 기다리는 상태다.
+        READING 은 소스(Impala 등)에서 결과를 읽는 중이다.
+        WRITING 은 대상(Greenplum 등)에 COPY 나 INSERT 로 적재하는 중이다.
+        DONE 은 성공한 터미널 상태다.
+        FAILED 는 실패한 터미널 상태다.
+        CANCELLED 는 취소된 터미널 상태다.
 
     DONE/FAILED/CANCELLED 세 상태가 '종료(terminal)'로 취급되며,
     Job 진행률 계산(``Job.completed``)의 기준이 된다.
@@ -98,7 +98,7 @@ def new_job_id() -> str:
 
 @dataclass
 class Task:
-    """Job을 구성하는 개별 실행 단위(sub-query 하나).
+    """Job 을 구성하는 개별 실행 단위이며 sub-query 하나에 해당한다.
 
     파티션 IN 목록의 부분집합(``partition_values``)을 스캔하는 sub-query 한 건을
     특정 executor에 보내 실행한 결과를 추적한다.
@@ -117,18 +117,18 @@ class Task:
 
     job_id: str
     executor_url: Optional[str]
-    sub_query: str  # executor로 보낸 sub-query 전문(보관)
+    sub_query: str  # executor 로 보낸 sub-query 전문을 그대로 보관한다
     partition_values: list[str]
     task_id: str = field(default_factory=lambda: _new_id("t"))
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
     attempt: int = 0
     error: Optional[str] = None
-    # 세부 단계 가시화(원격: executor 폴링으로 수집 / local: 직접 실행 중 on_stage 로 채움).
+    # 세부 단계를 가시화한다. 원격 모드는 executor 폴링으로 모으고, local 모드는 직접 실행하며 on_stage 로 채운다.
     rows_read: int = 0
     current_phase: Optional[str] = None
     phases: list = field(default_factory=list)
-    # local_stage 전용: 이 task 가 로컬 CSV 를 쓸 절대 경로(coordinator 가 확정).
+    # local_stage 에서만 쓰며, 이 task 가 로컬 CSV 를 쓸 절대 경로다. coordinator 가 확정한다.
     out_path: Optional[str] = None
 
     def on_stage(self, name: str, event: str, meta: Optional[dict] = None) -> None:
@@ -136,7 +136,7 @@ class Task:
         rows = record_stage(self.phases, name, event, meta)
         if event == "start":
             self.current_phase = name
-            logger.debug("단계 시작 %s", name)  # 상세 추적(DEBUG). [job][task] 자동 주입
+            logger.debug("단계 시작 %s", name)  # DEBUG 상세 추적이며 [job][task] 는 자동으로 붙는다
         elif event == "end":
             if name == "STREAM_COPY" and rows is not None:
                 self.rows_read = rows
@@ -147,7 +147,7 @@ class Task:
                          name, dur, rows, extra)
 
     def impala_done_at(self) -> Optional[str]:
-        """Impala 조회 완료 시각(STREAM_COPY 종료). 없으면 None."""
+        """소스 조회가 완료된 시각(STREAM_COPY 종료 시점)이다. 없으면 None 이다."""
         phase = phase_of(self.phases, "STREAM_COPY")
         return phase["finished_at"] if phase else None
 
@@ -236,7 +236,7 @@ class Job:
         exec_mode       : 실행 방식(copy / statement / stage_insert).
         staging_table   : stage_insert 모드에서 COPY 적재할 staging 테이블명.
         staging_ddl     : stage_insert 모드에서 staging 테이블 생성 DDL.
-        insert_sql      : stage_insert 모드에서 staging→target 적재 INSERT 문.
+        insert_sql      : stage_insert 모드에서 staging 을 target 으로 적재하는 INSERT 문.
         job_id          : ``job_...`` 형태 식별자(자동 발급).
         status          : 현재 ``JobStatus``.
         tasks           : 분할된 Task 목록.
@@ -257,7 +257,7 @@ class Job:
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
-    # 적재 전 파티션 선삭제(DELETE) 명시 제어. None=write_mode 를 따름, True/False=강제(s3_stage).
+    # 적재 전 파티션 선삭제(DELETE)를 명시적으로 제어한다. None 이면 write_mode 를 따르고, True 나 False 면 s3_stage 에서 강제한다.
     pre_delete: Optional[bool] = None
     # 요청별 Impala 쿼리 옵션(SET). executor 에서 전역 기본값 위에 병합되어 적용된다.
     impala_query_options: Optional[dict] = None
@@ -268,10 +268,10 @@ class Job:
     # original_sql 에는 이미 렌더된 SELECT 전문이 들어가므로 retry 는 재렌더 없이 동작한다.
     template_id: Optional[str] = None
     template_params: Optional[dict] = None
-    # local_stage 전용(file:// 세그먼트 로컬 스테이징, §17).
-    external_columns: Optional[str] = None   # file:// 외부테이블 컬럼 정의(요청자 명시)
-    export_local_dir: Optional[str] = None   # 로컬 CSV 루트 오버라이드(없으면 stage.local_dir)
-    csv_delimiter: Optional[str] = None      # CSV 방언 오버라이드(없으면 설정값)
+    # local_stage 에서만 쓰는 필드다(file:// 세그먼트 로컬 스테이징, §17).
+    external_columns: Optional[str] = None   # file:// 외부테이블 컬럼 정의로, 요청자가 명시한다
+    export_local_dir: Optional[str] = None   # 로컬 CSV 루트를 덮어쓴다. 없으면 stage.local_dir 을 쓴다
+    csv_delimiter: Optional[str] = None      # CSV 방언을 덮어쓴다. 없으면 설정값을 쓴다
     csv_null: Optional[str] = None
     csv_quote: Optional[str] = None
     job_id: str = field(default_factory=lambda: _new_id("job"))
@@ -292,12 +292,12 @@ class Job:
 
     @property
     def total_rows_written(self) -> int:
-        """모든 Task의 적재 행 수 합계(작업 전체 결과 규모)."""
+        """모든 Task 의 적재 행 수 합계이며 작업 전체의 결과 규모를 뜻한다."""
         return sum(t.rows_written for t in self.tasks)
 
     @property
     def total_rows_read(self) -> int:
-        """모든 Task가 Impala 에서 읽어들인 행 수 합계(=조회 건수 합)."""
+        """모든 Task 가 소스에서 읽어들인 행 수 합계이며 곧 조회 건수의 합이다."""
         return sum(getattr(t, "rows_read", 0) for t in self.tasks)
 
     def phase_summary(self) -> dict:
@@ -318,7 +318,7 @@ class Job:
 
     @property
     def completed(self) -> int:
-        """종료(terminal) 상태에 도달한 Task 수.
+        """종료(terminal) 상태에 도달한 Task 수다.
 
         성공·실패·취소를 모두 '완료'로 세는 이유는, 진행률이 '남은 일이 없는' 정도를
         나타내야 하기 때문이다(실패/취소도 더 진행할 일이 없으므로 완료로 카운트).
@@ -443,7 +443,7 @@ class Job:
         return job
 
     def progress_view(self) -> dict:
-        """진행 상태 확인용 경량 뷰(태스크 목록 제외)."""
+        """진행 상태를 확인하는 경량 뷰다. 태스크 목록은 담지 않는다."""
         return {
             "job_id": self.job_id,
             "status": self.status.value,
@@ -475,10 +475,10 @@ class Job:
 
 
 class QueryParam(BaseModel):
-    """템플릿 렌더 파라미터 한 항목(이름-값[-부호]).
+    """템플릿 렌더 파라미터 한 항목이며 이름과 값, 필요하면 부호를 담는다.
 
     ``POST /query-execute`` 와 ``POST /jobs`` 가 공유한다(``/jobs`` 는 하위 호환을 위해
-    이름→값 dict 도 계속 받는다). manifest 의 ``params`` 스키마와 이름으로 매칭되며,
+    이름과 값을 담은 dict 도 계속 받는다). manifest 의 ``params`` 스키마와 이름으로 맞추며,
     ``value`` 는 스칼라뿐 아니라 배열(list 타입 파라미터)도 될 수 있어 ``Any`` 로 둔다 —
     타입 강제/검증은 이후 템플릿 엔진의 ``ParamSpec`` 이 담당한다.
 
@@ -501,7 +501,7 @@ class QueryParam(BaseModel):
 
 
 class CreateJobRequest(BaseModel):
-    """작업 생성 API(POST)의 요청 바디 스키마.
+    """작업 생성 API(POST)의 요청 바디 스키마다.
 
     pydantic이 타입·범위·허용값(Literal)을 자동 검증한다. 각 필드의 의미는
     아래 ``Field`` description을 참고. exec_mode/stage_insert·wrapper 관련 필드는
@@ -509,10 +509,11 @@ class CreateJobRequest(BaseModel):
     """
 
     # ── 템플릿 모드(선택) ──
-    # template_id 를 주면 서버 템플릿을 params 로 렌더링해 sql/staging_ddl/insert_sql/
-    # external_columns/wrapper_query 를 자동 생성한다. 이 경우 아래 sql 등 SQL 필드는 생략 가능
-    # (렌더 결과로 채워진다). partition_column/target_table/exec_mode 등 스칼라는 요청이 명시하면
-    # 요청이, 없으면 manifest 기본값이 쓰인다. template_id 미지정 시 기존 raw-SQL 방식 그대로.
+    # template_id 를 주면 서버 템플릿을 params 로 렌더링해 sql·staging_ddl·insert_sql·
+    # external_columns·wrapper_query 를 자동으로 만든다. 이때는 아래 sql 같은 SQL 필드를 생략해도
+    # 렌더 결과로 채워진다. partition_column·target_table·exec_mode 같은 스칼라는 요청이 명시하면
+    # 요청이 이기고 없으면 manifest 기본값을 쓴다. template_id 를 주지 않으면 예전 raw-SQL 방식
+    # 그대로 동작한다.
     template_id: Optional[str] = Field(
         default=None,
         description="서버 템플릿 ID(디렉터리명). 지정 시 params 로 SQL 을 런타임 생성한다.",
@@ -532,11 +533,11 @@ class CreateJobRequest(BaseModel):
         default=None, description="Greenplum 적재 대상 테이블(raw 모드 필수, 템플릿은 manifest 기본값 가능)"
     )
     # ── 날짜 fan-out 모드(파티션 IN 분할 대체) ──
-    # task_params 로 '구간의 두 끝'을 담은 파라미터 두 개를 지목하면, IN 값 분할 대신
-    # '하루=1 task' 로 펼친다. 각 끝의 오프셋은 (값, sign)에서 도출하고(sign 없으면 값의 부호),
-    # task 마다 두 파라미터를 같은 날로 좁혀 렌더한다 — 값은 언제나 절대값, 부호는 <name>_sign
-    # 으로 나가므로 Impala interval(절대값만 허용)에 그대로 들어간다.
-    # 템플릿 stage_insert 전용(select+insert 조각 필요).
+    # task_params 로 구간의 두 끝을 담은 파라미터 두 개를 지목하면 IN 값 분할 대신 하루를 task
+    # 하나로 펼친다. 각 끝의 오프셋은 (값, sign)에서 도출하며 sign 이 없으면 값의 부호를 쓴다.
+    # task 마다 두 파라미터를 같은 날로 좁혀 렌더하므로 값은 언제나 절대값이 되고 부호는
+    # <name>_sign 으로 나가므로, 절대값만 허용하는 Impala interval 에 그대로 들어간다.
+    # 템플릿 stage_insert 에서만 쓰며 select 와 insert 조각이 필요하다.
     task_params: Optional[list[str]] = Field(
         default=None,
         description="날짜 fan-out: 구간의 두 끝을 담은 params 이름 2개(예: "
@@ -553,10 +554,11 @@ class CreateJobRequest(BaseModel):
     )
     username: Optional[str] = Field(default=None, description="작업을 실행한 사용자")
     write_mode: Literal["append", "overwrite_partitions"] = "append"
-    # 적재 전 파티션 선삭제(DELETE) 여부를 요청 단위로 명시 제어(현재 s3_stage Phase 2 에 적용).
-    # null(기본)이면 write_mode 를 따른다(overwrite_partitions→DELETE, append→미삭제). true 면
-    # write_mode 와 무관하게 강제로 선삭제, false 면 강제로 건너뛴다(append 인데도 멱등이 필요
-    # 없거나, overwrite_partitions 지만 대상이 이미 비어 있어 DELETE 를 생략하고 싶을 때).
+    # 적재 전 파티션 선삭제(DELETE) 여부를 요청 단위로 제어한다. 현재는 s3_stage Phase 2 에
+    # 적용된다. 기본값인 null 이면 write_mode 를 따라 overwrite_partitions 는 지우고 append 는
+    # 지우지 않는다. true 면 write_mode 와 무관하게 강제로 지우고, false 면 강제로 건너뛴다.
+    # append 인데 멱등이 필요 없거나, overwrite_partitions 지만 대상이 이미 비어 DELETE 를
+    # 생략하고 싶을 때 쓴다.
     pre_delete: Optional[bool] = Field(
         default=None,
         description="s3_stage 적재 전 파티션 DELETE 처리 여부. null=write_mode 를 따름, "
@@ -619,7 +621,7 @@ class CreateJobRequest(BaseModel):
         "값(예: trino)은 executor 설정 query.func.fetch_module 의 커스텀 API 로 읽는다 "
         "(커서 없는 소스). 적재 대상(Greenplum)과 exec_mode 는 이 값과 무관하다.",
     )
-    # ── local_stage 전용 필드 ──
+    # ── local_stage 에서만 쓰는 필드 ──
     external_columns: Optional[str] = Field(
         default=None,
         description="local_stage 모드: file:// 외부테이블 컬럼 정의(명시). CSV 컬럼 순서와 "
@@ -654,10 +656,10 @@ class CreateJobResponse(BaseModel):
 
 
 class QueryExecuteRequest(BaseModel):
-    """``POST /query-execute`` 요청 — 서버 템플릿을 params 로 렌더한 SELECT 를 실행하고
+    """``POST /query-execute`` 의 요청 스키마다. 서버 템플릿을 params 로 렌더한 SELECT 를 실행하고
     결과(상위 N행)를 동기로 돌려받는다.
 
-    ``/jobs``(Impala→Greenplum 이관)와 달리 결과가 coordinator 를 거쳐 클라이언트로
+    소스에서 Greenplum 으로 옮기는 ``/jobs`` 와 달리, 결과가 coordinator 를 거쳐 클라이언트로
     반환되는 미리보기성 실행이다. 클라이언트는 어떤 executor 가 실행하는지 모른다 —
     impala/trino 소스는 coordinator 가 부하가 가장 낮은 executor 를 골라 프록시하고,
     greenplum/history 는 coordinator 가 직접 실행한다.
@@ -679,7 +681,7 @@ class QueryExecuteRequest(BaseModel):
 
 
 class DatasourceQueryRequest(BaseModel):
-    """``POST /datasources/{name}/query`` 요청(임의 SELECT 미리보기 / 연결 테스트).
+    """``POST /datasources/{name}/query`` 의 요청 스키마다. 임의 SELECT 미리보기와 연결 테스트에 쓴다.
 
     내부 점검용이므로 임의 SQL 을 허용한다. ``executor_url`` 을 주면 해당 executor 로
     프록시한다 — coordinator 가 직접 드라이버를 갖지 않는 데이터소스(특히 Impala)를

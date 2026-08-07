@@ -50,8 +50,9 @@ _ROLES_BY_MODE: dict[str, dict[str, tuple[str, ...]]] = {
     "statement":    {"required": ("select",),                          "optional": ("wrapper",)},
     "stage_insert": {"required": ("select", "insert"),                 "optional": ("staging_ddl",)},
     "local_stage":  {"required": ("select", "insert", "external_columns"), "optional": ("staging_ddl",)},
-    # s3_stage: 외부테이블(=staging)은 executor 가 external_columns 로 생성하므로 staging_ddl 은
-    # 렌더하지 않는다(local_stage 와 달리 optional 에도 없다). select+insert+external_columns 만.
+    # s3_stage 에서는 외부테이블이 staging 을 겸하고 executor 가 external_columns 로 만들므로
+    # staging_ddl 을 렌더하지 않는다. local_stage 와 달리 optional 에도 없으며 select 와 insert,
+    # external_columns 만 쓴다.
     "s3_stage":     {"required": ("select", "insert", "external_columns"), "optional": ()},
 }
 
@@ -66,7 +67,7 @@ _SCALAR_DEFAULT_KEYS = (
 
 
 class TemplateError(Exception):
-    """템플릿 로드/검증/렌더 실패 시 발생하는 예외.
+    """템플릿을 로드하거나 검증·렌더하다 실패하면 던지는 예외다.
 
     :class:`~coordinator.parser.QueryValidationError` 와 같은 (code, message) 형태로,
     API 계층이 일관된 422 JSON(error_code 포함)으로 변환한다.
@@ -80,7 +81,7 @@ class TemplateError(Exception):
 
 @dataclass
 class ParamSpec:
-    """manifest 의 파라미터 하나에 대한 스키마(이름/타입/필수/기본값)."""
+    """manifest 의 파라미터 하나에 대한 스키마이며 이름·타입·필수 여부·기본값을 담는다."""
 
     name: str
     type: str = "string"
@@ -90,12 +91,12 @@ class ParamSpec:
 
 @dataclass
 class Manifest:
-    """``manifest.yml`` 을 파싱한 결과.
+    """``manifest.yml`` 을 파싱한 결과다.
 
     필드:
         template_id : 템플릿 식별자(디렉터리명).
         description : 사람이 읽는 설명(대시보드/문서용).
-        files       : role→상대 파일명 매핑(select/wrapper/staging_ddl/insert/external_columns).
+        files       : role 별 상대 파일명 매핑이다(select·wrapper·staging_ddl·insert·external_columns).
         params      : 파라미터 스키마 목록.
         defaults    : exec_mode·partition_column 등 스칼라 기본값(요청이 명시하면 무시됨).
         mtime       : manifest 파일 수정 시각(auto_reload 캐시 무효화 기준).
@@ -123,7 +124,7 @@ class RenderResult:
 
 
 class TemplateEngine:
-    """템플릿 로드·검증·렌더를 담당하는 엔진(create_app 에서 1개 생성해 주입).
+    """템플릿 로드와 검증, 렌더를 담당하는 엔진이다. create_app 이 하나만 만들어 주입한다.
 
     단일 워커 전제라 in-process 캐시가 안전하다. ``auto_reload`` 가 켜지면 manifest/템플릿의
     파일 수정 시각을 확인해 개발 중 변경을 반영한다(운영에선 꺼서 stat 비용을 없앤다).
@@ -133,7 +134,7 @@ class TemplateEngine:
         self._settings = settings
         self._dir = Path(settings.template_dir)
         self._auto_reload = bool(getattr(settings, "template_auto_reload", False))
-        self._lock = threading.Lock()  # 동기 핸들러가 스레드풀에서 도므로 캐시 접근 보호
+        self._lock = threading.Lock()  # 동기 핸들러가 스레드풀에서 돌기 때문에 캐시 접근을 보호한다
         self._manifests: dict[str, Manifest] = {}
         # 사용자 커스텀 함수 모듈을 먼저 로드(레지스트리 채움) 후 env 를 만든다.
         template_funcs.load_func_modules(getattr(settings, "template_func_modules", []))
@@ -155,7 +156,7 @@ class TemplateEngine:
     # ───────────────────────── manifest ─────────────────────────
 
     def _validate_id(self, template_id: str) -> None:
-        """template_id 가 안전한 이름인지 검사(경로 탈출·특수문자 차단)."""
+        """template_id 가 안전한 이름인지 검사한다. 경로 탈출과 특수문자를 막는다."""
         if not template_id or not _ID_RE.match(template_id):
             raise TemplateError(
                 "TEMPLATE_ID_INVALID",
@@ -177,7 +178,7 @@ class TemplateEngine:
                 )
             mtime = path.stat().st_mtime
             if cached is not None and cached.mtime == mtime:
-                return cached  # auto_reload 지만 변경 없음 → 캐시 재사용
+                return cached  # auto_reload 지만 바뀐 게 없으므로 캐시를 재사용한다
             manifest = self._parse_manifest(template_id, path, mtime)
             self._manifests[template_id] = manifest
             return manifest
@@ -225,9 +226,9 @@ class TemplateEngine:
     # ───────────────────────── 파라미터 ─────────────────────────
 
     def _resolve_params(self, manifest: Manifest, params: dict) -> dict:
-        """파라미터를 스키마로 검증하고(필수/타입) 기본값을 채운 렌더 컨텍스트를 만든다.
+        """파라미터를 스키마로 검증해 필수와 타입을 확인하고, 기본값을 채운 렌더 컨텍스트를 만든다.
 
-        - 선언된 param: 필수 누락 → 오류, 미제공 시 기본값 적용, 타입 강제 변환.
+        - 선언된 param 은 필수인데 없으면 오류를 내고, 주어지지 않으면 기본값을 채우며, 타입을 강제 변환한다.
         - 미선언 param: 컨텍스트에 그대로 통과(템플릿이 자유롭게 참조 가능). 오타는
           StrictUndefined 가 렌더 시점에 잡는다.
         """
@@ -256,7 +257,7 @@ class TemplateEngine:
         params: dict,
         request_scalars: Optional[dict] = None,
     ) -> RenderResult:
-        """템플릿을 렌더링해 :class:`RenderResult` 를 반환한다.
+        """템플릿을 렌더링해 :class:`RenderResult` 를 돌려준다.
 
         인자:
             template_id     : 템플릿 식별자.
@@ -266,10 +267,11 @@ class TemplateEngine:
                               렌더 컨텍스트에도 노출되어 템플릿이 참조할 수 있다.
 
         동작:
-            1) manifest 로드 → exec_mode 결정(요청 > manifest > 'copy').
-            2) 파라미터 검증/기본값 → 렌더 컨텍스트. 유효 스칼라(manifest 기본 위에 요청
-               오버라이드)도 컨텍스트에 노출한다(target_table 등을 템플릿이 참조 가능).
-            3) exec_mode 가 요구하는 조각(role)을 렌더. 필수 role 누락 시 오류.
+            1) manifest 를 로드해 exec_mode 를 정한다(요청 > manifest > 'copy' 순).
+            2) 파라미터를 검증하고 기본값을 채워 렌더 컨텍스트를 만든다. manifest 기본 위에
+               요청이 덮어쓴 유효 스칼라도 컨텍스트에 노출해 템플릿이 target_table 등을 참조할
+               수 있게 한다.
+            3) exec_mode 가 요구하는 조각(role)을 렌더한다. 필수 role 이 없으면 오류를 낸다.
             4) DDL/INSERT 조각은 옵션에 따라 단일 문 검사(다중 문 방지).
         """
         manifest = self.load_manifest(template_id)
@@ -289,7 +291,7 @@ class TemplateEngine:
         effective_scalars = {**manifest.defaults, **request_scalars}
         for k, v in effective_scalars.items():
             ctx.setdefault(k, v)
-        # 결정된 exec_mode 와 template_id 도 노출(위 스칼라에 exec_mode 가 있어도 확정값으로 덮음).
+        # 확정한 exec_mode 와 template_id 도 함께 노출한다. 위 스칼라에 exec_mode 가 있어도 확정값으로 덮어쓴다.
         ctx["exec_mode"] = exec_mode
         ctx.setdefault("template_id", template_id)
 
@@ -371,7 +373,7 @@ class TemplateEngine:
         try:
             source, _, _ = self._env.loader.get_source(self._env, rel)
             return set(jinja2_meta.find_undeclared_variables(self._env.parse(source)))
-        except Exception as exc:  # 문법 오류 등은 렌더 시점에 제대로 보고되므로 여기선 관대
+        except Exception as exc:  # 문법 오류 등은 렌더 시점에 제대로 보고되므로 여기서는 관대하게 넘어간다
             logger.debug("템플릿 '%s' 변수 추출 실패(무시): %s", rel, exc)
             return set()
 
@@ -390,13 +392,13 @@ class TemplateEngine:
             ) from exc
         except TemplateError:
             raise
-        except Exception as exc:  # 커스텀 함수가 던진 ValueError 등
+        except Exception as exc:  # 커스텀 함수가 던진 ValueError 같은 예외를 받는다
             raise TemplateError(
                 "TEMPLATE_RENDER_ERROR", f"'{rel}' 렌더 중 오류: {exc}"
             ) from exc
 
     def _assert_single_statement(self, role: str, sql: Optional[str]) -> None:
-        """SQL 조각이 단일 문인지 검사(다중 문 인젝션 방지). 파싱 실패는 통과(관대)."""
+        """SQL 조각이 단일 문인지 검사해 다중 문 인젝션을 막는다. 파싱에 실패하면 관대하게 통과시킨다."""
         if not sql or not sql.strip():
             return
         try:
@@ -443,7 +445,7 @@ def _coerce(spec: ParamSpec, value: Any) -> Any:
     t = spec.type
     try:
         if t in ("string", "str", "date", "datetime"):
-            # date/datetime 은 문자열로 보관(커스텀 date_range 가 파싱). None 은 그대로.
+            # date 와 datetime 은 문자열로 보관해 커스텀 date_range 가 파싱하게 한다. None 은 그대로 둔다.
             return value if value is None else str(value)
         if t in ("int", "integer"):
             return int(value)
@@ -457,7 +459,7 @@ def _coerce(spec: ParamSpec, value: Any) -> Any:
             if not isinstance(value, (list, tuple)):
                 raise ValueError("리스트가 아님")
             return list(value)
-        # 알 수 없는 타입은 그대로 통과(문서화된 타입 외에는 변환하지 않음)
+        # 알 수 없는 타입은 그대로 통과시킨다. 문서화한 타입 말고는 변환하지 않는다.
         return value
     except (ValueError, TypeError) as exc:
         raise TemplateError(

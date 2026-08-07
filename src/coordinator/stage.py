@@ -1,4 +1,4 @@
-"""local_stage(file:// 세그먼트 로컬 스테이징) Phase 2 SQL 조립.
+"""local_stage(file:// 세그먼트 로컬 스테이징)의 Phase 2 SQL 을 조립한다.
 
 coordinator 가 GP master 에 실행할 SQL 문자열을 **순수 함수**로 만든다(실 DB 없이 단위
 테스트 가능). file:// 외부테이블 LOCATION·``FORMAT 'CSV'`` 절, staging 적재(INSERT),
@@ -30,7 +30,7 @@ def host_of(executor_url: str | None, fallback: str = "") -> str:
 
 
 def external_table_name(job_id: str) -> str:
-    """job 별 고유 외부테이블 이름(``ext_<job_id 안전화>``). 영숫자 외 문자는 ``_`` 로 치환."""
+    """job 마다 고유한 외부테이블 이름(``ext_<job_id 안전화>``)을 만든다. 영숫자가 아닌 문자는 ``_`` 로 바꾼다."""
     safe = "".join(c if c.isalnum() else "_" for c in job_id)
     return f"ext_{safe}"
 
@@ -39,7 +39,7 @@ def _quote_ident(name: str) -> str:
     """``sql_ident`` 필터와 동일 규칙으로 식별자를 큰따옴표 인용한다.
 
     내부 ``"`` 는 ``""`` 로 이중화하고, 점(``.``)이 있으면 스키마 한정으로 보고 각 조각을
-    따로 인용한다(예: ``public.stg`` → ``"public"."stg"``). 템플릿이 렌더한 토큰과
+    따로 인용한다. 예를 들어 ``public.stg`` 는 ``"public"."stg"`` 가 된다. 템플릿이 렌더한 토큰과
     정확히 일치시키기 위해 여기서 같은 규칙을 복제한다(stage.py 는 template_funcs 에
     의존하지 않는 순수 모듈이라 import 대신 규칙만 맞춘다).
     """
@@ -64,9 +64,9 @@ def unique_staging_name(base: str, task_id: str, max_len: int = 63) -> str:
     name = f"{base}_{safe_id}"
     if len(name.encode("utf-8")) <= max_len:
         return name
-    # 상한 초과: base 를 최대한 살리고 task_id 해시로 고유성 확보.
+    # 상한을 넘으면 base 를 최대한 살리고 task_id 해시로 고유성을 확보한다.
     h = hashlib.sha1(str(task_id).encode("utf-8")).hexdigest()[:8]
-    keep = max_len - 1 - len(h)  # '_' + 해시 길이만큼 base 여유
+    keep = max_len - 1 - len(h)  # '_' 와 해시 길이만큼을 빼고 base 에 남길 여유를 구한다
     if keep < 1:
         return h[:max_len]
     return f"{base[:keep]}_{h}"
@@ -75,7 +75,7 @@ def unique_staging_name(base: str, task_id: str, max_len: int = 63) -> str:
 def rewrite_staging_name(
     sql: str | None, old_name: str, new_name: str, protect: tuple[str, ...] = ()
 ) -> str | None:
-    """``sql`` 안의 **staging 식별자만** ``old_name`` → ``new_name`` 으로 바꾼다.
+    """``sql`` 안에서 **staging 식별자만** ``old_name`` 에서 ``new_name`` 으로 바꾼다.
 
     치환 결과는 **큰따옴표로 감싸지 않은 bare 식별자**다(요청: 이름을 ``""`` 로 감싸지
     않는다). 템플릿이 ``{{ staging_table | sql_ident }}`` 로 렌더한 인용 토큰(``"old"``)이
@@ -106,14 +106,14 @@ def rewrite_staging_name(
             ph = f"\x00PROTECT{i}\x00"
             placeholders.append((ph, form))
             masked = masked.replace(form, ph)
-    # 2) staging 이름만 치환(인용 토큰 우선, 아니면 단어경계 bare).
+    # 2) staging 이름만 치환한다. 인용된 토큰을 먼저 보고, 없으면 단어 경계의 bare 식별자를 본다.
     quoted_old = _quote_ident(old_name)
     if quoted_old in masked:
         masked = masked.replace(quoted_old, new)
     else:
         pattern = r"\b" + re.escape(str(old_name)) + r"\b"
         masked = re.sub(pattern, new, masked)
-    # 3) 보호 대상 복원.
+    # 3) 보호해 둔 대상을 되돌린다.
     for ph, form in placeholders:
         masked = masked.replace(ph, form)
     return masked
@@ -193,14 +193,14 @@ def build_external_ddl(
 
 
 def build_staging_load(staging_table: str, external_table: str) -> str:
-    """외부테이블 전체를 staging 힙 테이블로 적재하는 INSERT(세그먼트 로컬 병렬 read)."""
+    """외부테이블 전체를 staging 힙 테이블로 적재하는 INSERT 를 만든다. 세그먼트가 로컬 파일을 병렬로 읽는다."""
     return f"INSERT INTO {staging_table} SELECT * FROM {external_table}"
 
 
 def build_pre_delete(
     target_table: str, partition_column: str, partition_values: list[str]
 ) -> str | None:
-    """overwrite_partitions 멱등 선삭제 DELETE. 값이 없으면 None(선삭제 없음).
+    """overwrite_partitions 의 멱등 선삭제 DELETE 를 만든다. 값이 없으면 None 을 돌려 선삭제를 건너뛴다.
 
     ``partition_values`` 는 splitter 가 이미 방언 기준으로 렌더링한 SQL 리터럴 목록이므로
     그대로 IN 절에 결합한다(sub-query 생성과 동일한 방식).
@@ -219,7 +219,7 @@ def build_cleanup(external_table: str) -> list[str]:
 def budget_capacity(
     host_segments: dict, executors_by_host: dict, max_per_host: int = 0
 ) -> int:
-    """수용 가능한 총 파일 수 = Σ 호스트별 유효 cap.
+    """수용할 수 있는 총 파일 수를 구한다. 호스트별 유효 cap 을 모두 더한 값이다.
 
     유효 cap = min(S_h, max_per_host>0 시) 이며, **그 호스트에 executor 가 하나도 없으면
     0**(파일을 쓸 주체가 없으므로 제외)이다.
@@ -238,7 +238,7 @@ def plan_file_budget(
     executors_by_host: dict,
     max_per_host: int = 0,
 ) -> list[tuple[str, str]] | None:
-    """``num_files`` 개 파일을 호스트당 예산(S_h, 또는 min(S_h, max_per_host))을 넘지 않게 배분.
+    """``num_files`` 개 파일을 호스트당 예산(S_h 또는 min(S_h, max_per_host))을 넘지 않게 배분한다.
 
     file:// 규칙("호스트당 파일 수 ≤ 그 호스트의 primary 세그먼트 수")을 그대로 구현한다.
     호스트를 라운드로빈으로 순회하며 각 호스트의 남은 예산이 있으면 파일을 하나씩 얹어, 파일을
@@ -258,20 +258,20 @@ def plan_file_budget(
     caps: dict = {}
     for host, s in host_segments.items():
         if not executors_by_host.get(host):
-            continue  # 파일을 쓸 executor 가 없는 호스트는 제외
+            continue  # 파일을 쓸 executor 가 없는 호스트는 건너뛴다
         cap = int(s) if max_per_host <= 0 else min(int(s), max_per_host)
         if cap > 0:
             caps[host] = cap
     if num_files > sum(caps.values()):
-        return None  # 용량 초과 — file:// 규칙상 배치 불가
+        return None  # 용량을 넘겨 file:// 규칙상 배치할 수 없다
 
-    hosts = sorted(caps)  # 결정적 순서
+    hosts = sorted(caps)  # 결과가 항상 같도록 순서를 고정한다
     assigned = {h: 0 for h in hosts}
-    rr = {h: 0 for h in hosts}  # 호스트 내 executor 라운드로빈 인덱스
+    rr = {h: 0 for h in hosts}  # 호스트 안에서 executor 를 도는 라운드로빈 인덱스다
     plan: list[tuple[str, str]] = []
     hi = 0
     guard = 0
-    max_iter = num_files * (len(hosts) + 1) + len(hosts) + 1  # 방어적 무한루프 차단
+    max_iter = num_files * (len(hosts) + 1) + len(hosts) + 1  # 무한루프를 막는 방어적 상한이다
     while len(plan) < num_files and guard < max_iter:
         host = hosts[hi % len(hosts)]
         if assigned[host] < caps[host]:

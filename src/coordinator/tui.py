@@ -1,4 +1,4 @@
-"""coordinator 대시보드를 터미널에서 보는 **읽기 전용** curses 모니터.
+"""coordinator 대시보드를 터미널에서 보는 **읽기 전용** curses 모니터다.
 
 coordinator 의 웹 대시보드가 쓰는 것과 동일한 JSON API 를 폴링해 클러스터/job/executor/
 이력을 텍스트 UI 로 그린다(HTML 스크래핑 아님). 개별 executor 상세(task 목록/메트릭)는
@@ -29,7 +29,7 @@ from typing import Any
 
 
 class CoordinatorApi:
-    """coordinator REST API 를 호출하는 얇은 클라이언트(읽기 전용 GET 만 사용).
+    """coordinator REST API 를 호출하는 얇은 클라이언트다. 읽기 전용 GET 만 쓴다.
 
     각 호출마다 짧은 타임아웃의 httpx 클라이언트를 열어 JSON 을 돌려준다. 폴링 주기가
     길지 않아도(수 초) 모니터 용도엔 충분하다. 오류는 호출부(UI)가 잡아 배너로 표시한다.
@@ -47,7 +47,7 @@ class CoordinatorApi:
             r.raise_for_status()
             return r.json()
 
-    # 클러스터/집계
+    # 클러스터 상태와 집계를 가져온다.
     def cluster(self) -> Any:
         return self._get("/cluster", {"refresh": "true"})
 
@@ -72,7 +72,7 @@ class CoordinatorApi:
     def history(self, limit: int = 50) -> Any:
         return self._get("/history", {"limit": limit})
 
-    # executor 상세(coordinator 프록시)
+    # executor 상세를 coordinator 프록시로 가져온다.
     def executor_metrics(self, idx: int) -> Any:
         return self._get(f"/executors/{idx}/metrics")
 
@@ -86,7 +86,7 @@ class CoordinatorApi:
 
 
 def fmt_pct(v: Any) -> str:
-    """숫자를 ``12.3%`` 형태로. 값이 없으면 ``-``."""
+    """숫자를 ``12.3%`` 형태로 만든다. 값이 없으면 ``-`` 를 돌려준다."""
     try:
         return f"{float(v):.1f}%"
     except (TypeError, ValueError):
@@ -104,7 +104,7 @@ def fmt_bar(pct: Any, width: int = 10) -> str:
 
 
 def short_id(s: Any, n: int = 10) -> str:
-    """긴 식별자를 앞 n자로 자른다(짧으면 그대로). None 은 빈 문자열."""
+    """긴 식별자를 앞 n자로 자른다. 이미 짧으면 그대로 두고, None 이면 빈 문자열을 돌려준다."""
     s = "" if s is None else str(s)
     return s if len(s) <= n else s[:n]
 
@@ -130,7 +130,7 @@ def fmt_cluster_summary(cluster: dict) -> list[str]:
 
 
 def fmt_executor_rows(cluster: dict) -> list[str]:
-    """`/cluster` 의 executor 목록을 표 행(문자열)으로. 헤더 + 각 executor 한 줄."""
+    """`/cluster` 의 executor 목록을 표 행 문자열로 만든다. 헤더 한 줄과 executor 마다 한 줄이 나온다."""
     execs = cluster.get("executors", []) or []
     assign = cluster.get("assignment_counts", {}) or {}
     rows = [f"{'#':>2}  {'executor':<26} {'health':<7} {'CPU':>6} {'MEM':>6} {'assigned':>8}"]
@@ -150,7 +150,7 @@ def fmt_executor_rows(cluster: dict) -> list[str]:
 
 
 def fmt_job_rows(jobs_body: dict) -> list[str]:
-    """`/jobs` JSON 을 표 행(문자열)으로. 헤더 + 각 job 한 줄."""
+    """`/jobs` JSON 을 표 행 문자열로 만든다. 헤더 한 줄과 job 마다 한 줄이 나온다."""
     jobs = jobs_body.get("jobs", []) or []
     rows = [f"{'job_id':<12} {'status':<10} {'prog':>5} {'rows_w':>10}  target"]
     for j in jobs:
@@ -167,7 +167,7 @@ def fmt_job_rows(jobs_body: dict) -> list[str]:
 
 
 def fmt_job_detail(job: dict) -> list[str]:
-    """단일 job(`/jobs/{id}`) 상세 줄들: 헤더 필드 + task 목록."""
+    """단일 job(`/jobs/{id}`)의 상세 줄을 만든다. 헤더 필드에 이어 task 목록이 붙는다."""
     lines = [
         f"job_id: {job.get('job_id')}   status: {job.get('status')}   "
         f"progress: {fmt_pct(job.get('progress_percent'))}",
@@ -191,7 +191,7 @@ def fmt_job_detail(job: dict) -> list[str]:
 
 
 def fmt_executor_detail(metrics: dict, tasks_body: dict) -> list[str]:
-    """executor 상세: 메트릭(+동시처리) 요약 + 보유 task 목록(coordinator 프록시 결과)."""
+    """executor 상세를 만든다. 메트릭과 동시처리 요약에 이어, coordinator 프록시로 받은 보유 task 목록이 붙는다."""
     tk = metrics.get("tasks", {}) or {}
     lines = [
         f"CPU {fmt_pct(metrics.get('cpu_percent'))}  MEM {fmt_pct(metrics.get('memory_percent'))}  "
@@ -215,7 +215,7 @@ def fmt_executor_detail(metrics: dict, tasks_body: dict) -> list[str]:
 
 
 def fmt_history_rows(history_body: dict) -> list[str]:
-    """`/history` JSON 을 표 행으로."""
+    """`/history` JSON 을 표 행으로 만든다."""
     items = history_body.get("history") or history_body.get("items") or []
     rows = [f"{'job_id':<12} {'status':<10} {'user':<10} {'rows':>10}  finished"]
     for h in items:
@@ -247,7 +247,7 @@ def fmt_info_lines(info: dict, config: dict | None) -> list[str]:
     return lines
 
 
-# 탭 정의: (라벨, 내부 키). 순서가 화면 탭 순서.
+# 탭을 (라벨, 내부 키) 로 정의한다. 여기 적힌 순서가 곧 화면의 탭 순서다.
 TABS = [
     ("Cluster", "cluster"),
     ("Jobs", "jobs"),
@@ -291,10 +291,10 @@ class DashboardTUI:
         self.row = 0
         self.top = 0
         self.detail: tuple[str, Any] | None = None  # ("job", id) | ("executor", idx)
-        self.data: Any = None            # 현재 뷰의 원본 JSON
+        self.data: Any = None            # 현재 뷰의 원본 JSON 이다
         self.error: str | None = None
-        self.lines: list[str] = []       # 현재 뷰의 렌더 줄
-        self.select_rows: list[Any] = [] # 드릴인 가능한 행의 키(job_id / executor index)
+        self.lines: list[str] = []       # 현재 뷰를 렌더한 줄들이다
+        self.select_rows: list[Any] = [] # 드릴인할 수 있는 행의 키다(job_id 나 executor index)
 
     # ── 데이터 폴링 ───────────────────────────────────────────────────────
     def refresh(self) -> None:
@@ -305,7 +305,7 @@ class DashboardTUI:
                 self._refresh_detail()
             else:
                 self._refresh_tab()
-        except Exception as e:  # 네트워크/HTTP/파싱 오류 — 배너로만 표시하고 UI 는 유지
+        except Exception as e:  # 네트워크·HTTP·파싱 오류는 배너로만 알리고 UI 는 그대로 둔다
             self.error = f"{type(e).__name__}: {e}"
 
     def _refresh_tab(self) -> None:
@@ -317,7 +317,7 @@ class DashboardTUI:
         elif key == "jobs":
             self.data = self.api.jobs()
             self.lines = fmt_job_rows(self.data)
-            # 헤더(0행) 제외한 각 job 을 드릴인 대상으로 매핑
+            # 헤더인 0행을 뺀 각 job 을 드릴인 대상으로 매핑한다.
             self.select_rows = [None] + [j.get("job_id") for j in (self.data.get("jobs") or [])]
         elif key == "executors":
             self.data = self.api.cluster()
@@ -345,7 +345,7 @@ class DashboardTUI:
 
     # ── 입력/드릴인 ───────────────────────────────────────────────────────
     def enter(self) -> None:
-        """현재 선택 행에서 상세로 진입(Jobs/Executors 탭에서만)."""
+        """현재 선택한 행에서 상세로 들어간다. Jobs 와 Executors 탭에서만 동작한다."""
         if self.detail is not None:
             return
         key = TABS[self.tab][1]
@@ -363,7 +363,7 @@ class DashboardTUI:
                 self.refresh()
 
     def back(self) -> bool:
-        """상세에서 목록으로 복귀. 상세가 아니면 False(상위에서 다른 처리)."""
+        """상세에서 목록으로 돌아간다. 상세가 아니면 False 를 돌려주어 상위가 다르게 처리하게 한다."""
         if self.detail is not None:
             self.detail = None
             self.row = self.top = 0
@@ -390,18 +390,18 @@ class DashboardTUI:
         curses.init_pair(3, curses.COLOR_RED, -1)
         curses.init_pair(4, curses.COLOR_WHITE, curses.COLOR_BLUE)
 
-        stdscr.timeout(int(self.interval * 1000))  # 이 시간마다 getch 가 -1 → 자동 새로고침
+        stdscr.timeout(int(self.interval * 1000))  # 이 시간마다 getch 가 -1 을 돌려주어 자동으로 새로고침된다
         self.refresh()
         while True:
             self._draw(stdscr, curses)
             ch = stdscr.getch()
-            if ch == -1:                      # 타임아웃 → 자동 폴링
+            if ch == -1:                      # 타임아웃이므로 자동으로 폴링한다
                 self.refresh()
-            elif ch in (ord("q"), 27) and self.detail is None:  # q/ESC 최상위 → 종료
+            elif ch in (ord("q"), 27) and self.detail is None:  # 최상위에서 q 나 ESC 를 누르면 종료한다
                 if ch == 27 and self.back():
                     continue
                 return
-            elif ch == 27:                    # ESC 상세 → 뒤로
+            elif ch == 27:                    # 상세 화면에서 ESC 를 누르면 뒤로 간다
                 self.back()
             elif ch in (curses.KEY_LEFT,):
                 if self.detail is not None:
@@ -424,7 +424,7 @@ class DashboardTUI:
         stdscr.erase()
         h, w = stdscr.getmaxyx()
 
-        # 타이틀 + 탭 바
+        # 타이틀과 탭 바를 그린다.
         title = f" Coordinator 모니터  {self.api.base_url} "
         stdscr.addstr(0, 0, title[: w - 1], curses.color_pair(1) | curses.A_BOLD)
         x = 0
@@ -436,10 +436,10 @@ class DashboardTUI:
             stdscr.addstr(1, x, seg, attr)
             x += len(seg) + 1
 
-        # 본문(스크롤). 상세 모드면 상세 줄, 아니면 탭 줄.
+        # 본문을 스크롤하며 그린다. 상세 모드면 상세 줄을, 아니면 탭 줄을 쓴다.
         body = self.lines
         list_h = h - 4
-        # 선택 가능한 목록(Jobs/Executors)만 커서 하이라이트
+        # Jobs 와 Executors 처럼 선택할 수 있는 목록에서만 커서를 하이라이트한다.
         selectable = self.detail is None and TABS[self.tab][1] in ("jobs", "executors")
         if self.row < self.top:
             self.top = self.row
@@ -457,7 +457,7 @@ class DashboardTUI:
             stdscr.addstr(y, 0, line[: w - 1], attr)
             y += 1
 
-        # 상태 줄
+        # 상태 줄을 그린다.
         if self.error:
             status = f" ⚠ {self.error} "
             stdscr.addstr(h - 1, 0, status[: w - 1], curses.color_pair(3) | curses.A_REVERSE)
@@ -478,7 +478,7 @@ def run_tui(base_url: str, interval: float = 2.0) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI 진입점. ``python -m coordinator.tui`` / ``bin/dashboard-tui.sh``."""
+    """CLI 진입점이다. ``python -m coordinator.tui`` 나 ``bin/dashboard-tui.sh`` 로 실행한다."""
     import sys
 
     parser = argparse.ArgumentParser(

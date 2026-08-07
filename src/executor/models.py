@@ -1,10 +1,10 @@
-"""Executor 측 task 모델 및 API 스키마.
+"""Executor 쪽 task 모델과 API 스키마를 정의한다.
 
 이 모듈은 두 가지를 정의한다.
 - ``Task``: executor 프로세스가 인메모리로 들고 있는 실행 단위(가변 상태). 상태 전이
-  (QUEUED→READING→WRITING→DONE/FAILED/CANCELLED)와 진행률(rows_written),
+  (QUEUED 에서 READING, WRITING 을 거쳐 DONE·FAILED·CANCELLED 로 간다)와 진행률(rows_written),
   시각(started_at/finished_at) 등 런타임 정보를 담는다.
-- ``CreateTaskRequest``: coordinator → executor 의 ``POST /tasks`` 요청 본문 검증용
+- ``CreateTaskRequest`` 는 coordinator 가 executor 에 보내는 ``POST /tasks`` 요청 본문을 검증하는
   pydantic 스키마. 외부에서 받는 값이므로 enum/Literal 로 허용값을 제한한다.
 
 상태 머신(Task.status) 개요::
@@ -30,22 +30,22 @@ logger = logging.getLogger(__name__)
 
 
 class TaskStatus(str, enum.Enum):
-    """task 의 수명주기 상태.
+    """task 의 수명주기 상태를 나타낸다.
 
     ``str`` 를 상속해 JSON 직렬화/비교 시 문자열 값("QUEUED" 등)처럼 다룰 수 있다.
     """
 
-    QUEUED = "QUEUED"      # 접수 완료, 아직 실행 시작 전(세마포어 슬롯 대기 포함)
-    READING = "READING"    # 소스(Impala)에서 결과를 읽는 중
-    WRITING = "WRITING"    # 대상(Greenplum)에 적재(COPY/INSERT)하는 중
-    DONE = "DONE"          # 정상 완료(terminal)
-    FAILED = "FAILED"      # 예외로 실패(terminal). error 에 메시지 보관
-    CANCELLED = "CANCELLED"  # 취소됨(terminal)
+    QUEUED = "QUEUED"      # 접수는 끝났고 아직 실행 전이다(세마포어 슬롯 대기도 여기에 든다)
+    READING = "READING"    # 소스에서 결과를 읽는 중이다
+    WRITING = "WRITING"    # 대상(Greenplum)에 COPY 나 INSERT 로 적재하는 중이다
+    DONE = "DONE"          # 정상적으로 끝난 터미널 상태다
+    FAILED = "FAILED"      # 예외로 실패한 터미널 상태이며 사유는 error 에 담는다
+    CANCELLED = "CANCELLED"  # 취소된 터미널 상태다
 
 
 @dataclass
 class Task:
-    """executor 가 인메모리로 관리하는 실행 단위(하나의 sub-query).
+    """executor 가 인메모리로 관리하는 실행 단위이며 sub-query 하나에 해당한다.
 
     coordinator 가 분할한 sub-query 하나에 대응한다. 앞부분 필드(task_id~insert_sql)는
     접수 시점에 요청으로부터 채워지는 불변 입력값이고, 뒷부분 필드(status~finished_at)는
@@ -60,11 +60,12 @@ class Task:
         partition_column: overwrite_partitions 시 DELETE 조건 컬럼.
         partition_values: overwrite_partitions 대상 파티션 값 목록(멱등 DELETE 의 IN 절).
         username: 요청 사용자(이력 기록용, 선택).
-        exec_mode: 실행 방식 — "copy"(Impala→Greenplum COPY) | "statement"(대상 DB에서
-            SQL 직접 실행) | "stage_insert"(staging COPY 후 staging→target INSERT).
+        exec_mode: 실행 방식이다. "copy" 는 소스에서 Greenplum 으로 COPY 하고, "statement" 는
+            대상 DB 에서 SQL 을 직접 실행하며, "stage_insert" 는 staging 에 COPY 한 뒤
+            staging 에서 target 으로 INSERT 한다.
         staging_table: stage_insert 모드의 임시 staging 테이블명.
         staging_ddl: stage_insert 모드의 CREATE TEMP TABLE DDL.
-        insert_sql: stage_insert 모드의 staging→target INSERT 문.
+        insert_sql: stage_insert 모드에서 staging 을 target 으로 넣는 INSERT 문이다.
         status: 현재 상태(TaskStatus). 기본 QUEUED.
         rows_written: 지금까지 적재된 행 수(진행률 콜백으로 갱신, 완료 시 최종값).
             stage_insert 는 최종 INSERT 영향 행수, copy 는 COPY 적재 행수.
@@ -90,14 +91,14 @@ class Task:
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
-    impala_query_options: Optional[dict] = None  # 요청별 Impala SET 옵션(전역에 병합)
+    impala_query_options: Optional[dict] = None  # 요청별 Impala SET 옵션이며 전역값 위에 병합된다
     # SELECT 를 읽을 소스 엔진. None/impala 면 built-in Impala 커서(기존 동작), 그 외 이름이면
     # 설정 query.func.fetch_module 의 커스텀 API 로 읽는다(커서 없는 소스).
     datasource: Optional[str] = None
     # local_stage 모드: Impala 결과를 떨어뜨릴 로컬 CSV 파일의 절대 경로와 CSV 방언.
     # coordinator 가 파일 경로/인덱스를 확정해 넘긴다(file:// URI 와 짝을 이룬다).
     out_path: Optional[str] = None
-    csv_options: Optional[dict] = None  # {"delimiter","null","quote"} — 외부테이블 FORMAT 과 일치
+    csv_options: Optional[dict] = None  # delimiter·null·quote 를 담으며 외부테이블 FORMAT 과 일치해야 한다
     status: TaskStatus = TaskStatus.QUEUED
     rows_written: int = 0
     rows_read: int = 0
@@ -126,12 +127,12 @@ class Task:
             phase = phase_of(self.phases, name)
             dur = phase.get("duration_ms") if phase else None
             extra = phase.get("extra") if phase else None
-            # 상세 추적(DEBUG): 단계 종료 + 소요(ms)/행수/부가지표(read/write 대기 등).
+            # DEBUG 상세 추적이다. 단계 종료와 함께 소요 시간(ms)·행수·부가지표(read/write 대기 등)를 남긴다.
             logger.debug("단계 종료 %s (소요=%sms, 행수=%s, 지표=%s)",
                          name, dur, rows, extra)
 
     def impala_done_at(self) -> Optional[str]:
-        """Impala 조회가 완료된 시각(STREAM_COPY 단계 종료 시각). 없으면 None."""
+        """소스 조회가 완료된 시각이다(STREAM_COPY 단계가 끝난 시점). 없으면 None 이다."""
         phase = phase_of(self.phases, "STREAM_COPY")
         return phase["finished_at"] if phase else None
 
@@ -160,7 +161,7 @@ class Task:
         }
 
     def detail(self) -> dict:
-        """``view()`` 에 실행 SQL 전문(sub_query/staging/insert)을 더한 상세 dict.
+        """``view()`` 에 실행 SQL 전문(sub_query·staging·insert)을 더한 상세 dict 를 만든다.
 
         목록 응답을 가볍게 유지하려고 ``view()`` 에서 뺀 원문 SQL 을 단건 상세
         조회(``GET /tasks/{id}/detail``)에서만 노출한다. 대시보드 처리중 탭의
@@ -176,7 +177,7 @@ class Task:
 
 
 class CreateTaskRequest(BaseModel):
-    """``POST /tasks`` 요청 본문 스키마(coordinator → executor).
+    """coordinator 가 executor 에 보내는 ``POST /tasks`` 요청 본문 스키마다.
 
     외부 입력이므로 ``write_mode``/``exec_mode`` 는 Literal 로 허용값을 제한해 잘못된
     값이 들어오면 FastAPI 가 422 로 거절하도록 한다. 필드 의미는 ``Task`` 와 동일하다.
@@ -206,7 +207,7 @@ class CreateTaskRequest(BaseModel):
 
 
 class DatasourceQueryRequest(BaseModel):
-    """``POST /datasources/{name}/query`` 요청 본문(임의 SELECT 미리보기/연결 테스트).
+    """``POST /datasources/{name}/query`` 의 요청 본문이다. 임의 SELECT 미리보기와 연결 테스트에 쓴다.
 
     내부 점검용이므로 임의 SQL 을 허용한다. 반환 행수는 limit 으로 잘린다(상한은
     서버측 ``MAX_PREVIEW_ROWS``). 기본 SQL 은 연결만 빠르게 확인하는 ``SELECT 1``.
@@ -217,7 +218,7 @@ class DatasourceQueryRequest(BaseModel):
 
 
 class QueryRunRequest(BaseModel):
-    """``POST /query-run`` 요청 본문(coordinator → executor, query-execute 위임).
+    """coordinator 가 executor 에 query-execute 를 위임할 때 쓰는 ``POST /query-run`` 요청 본문이다.
 
     coordinator 가 템플릿을 렌더·검증한 SELECT 를 그대로 넘긴다. executor 는 설정
     (``query.func.module`` + ``query.func.config.*``)으로 지정한 커스텀 함수에 이 SQL 을

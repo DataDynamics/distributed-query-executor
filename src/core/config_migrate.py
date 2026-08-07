@@ -1,4 +1,4 @@
-"""업그레이드 시 운영자 자산(설정·템플릿·커스텀 쿼리 함수)을 새 버전으로 마이그레이션한다.
+"""업그레이드할 때 운영자 자산(설정·템플릿·커스텀 쿼리 함수)을 새 버전에 맞춰 반영한다.
 
 새 버전을 배포하면 저장소의 기본값(``config/``·``templates/``·``customs/``)이 갱신되지만,
 설치 경로(``/data1/distributed-query-executor``)에는 운영자가 손으로 고친 설정·직접 추가한
@@ -16,9 +16,9 @@
   사이트 템플릿은 보존**(삭제하지 않음).
 * **customs/**(커스텀 쿼리 함수) — 예제(``trino_runner`` 등)를 반영, **운영자 모듈은 보존**.
 
-공통 원칙: 소스에만 있는 파일 → 신규 복사, 양쪽에 있고 다르면 → 교체/병합(+``.bak``), 같으면 →
-그대로, **설치 트리에만 있는 파일(운영자 자산) → 보존**(절대 삭제하지 않음). ``__pycache__``·
-``*.pyc``·``*.bak`` 은 건너뛴다.
+공통 원칙은 이렇다. 소스에만 있는 파일은 새로 복사하고, 양쪽에 있으면서 다르면 교체하거나
+병합한 뒤 ``.bak`` 을 남기며, 같으면 그대로 둔다. **설치 트리에만 있는 파일은 운영자 자산이므로
+절대 삭제하지 않고 보존한다.** 순회할 때 ``__pycache__``·``*.pyc``·``*.bak`` 은 건너뛴다.
 
 ## properties 병합 규칙(config.properties)
 
@@ -51,13 +51,13 @@ from pathlib import Path
 from core.config_loader import load_properties
 from core.config_tui import _is_secret, merge_properties_lines
 
-# 기본 설치 트리의 설정 디렉터리(환경변수 미설정 시)와 그 부모(트리 루트).
+# 환경변수가 없을 때 쓸 기본 설치 트리의 설정 디렉터리와 그 부모인 트리 루트다.
 _DEFAULT_INSTALL_CONF = Path("/data1/distributed-query-executor/config")
 
 # 트리 순회 시 건너뛸 디렉터리/확장자(파이썬 캐시·컴파일·백업).
 _SKIP_DIR_PARTS = {"__pycache__"}
 _SKIP_SUFFIXES = {".pyc", ".pyo", ".bak"}
-# 멀티 타깃 모드에서 반영할 (트리이름, properties 병합 대상 파일명) 목록.
+# 멀티 타깃 모드에서 반영할 목록이며 (트리 이름, properties 병합 대상 파일명) 쌍으로 적는다.
 _TREES = (
     ("config", frozenset({"config.properties"})),
     ("templates", frozenset()),
@@ -66,14 +66,14 @@ _TREES = (
 
 
 def _default_old_path() -> Path:
-    """기존(운영) config.properties 의 기본 위치를 정한다: 환경변수 → 설치 트리."""
+    """기존 운영 config.properties 의 기본 위치를 정한다. 환경변수를 먼저 보고 없으면 설치 트리를 쓴다."""
     env = os.getenv("QUERY_EXECUTOR_CONFIG_DIR")
     base = Path(env) if env else _DEFAULT_INSTALL_CONF
     return base / "config.properties"
 
 
 def _default_new_path() -> Path:
-    """새 기본 config.properties 의 기본 위치: 이 패키지가 속한 트리의 ``config/``.
+    """새 기본 config.properties 의 위치를 정한다. 이 패키지가 속한 트리의 ``config/`` 를 쓴다.
 
     src 레이아웃이므로 ``src/core/config_migrate.py`` 기준 두 단계 위가 트리 루트다.
     업그레이드 시엔 새로 받은 (새 버전) 소스 트리에서 이 도구를 실행해 그 트리의
@@ -87,14 +87,14 @@ def _default_new_path() -> Path:
 class MigrationPlan:
     """비교 결과 요약. 보고 출력과 테스트가 이 구조를 공유한다."""
 
-    changed: dict[str, str] = field(default_factory=dict)  # 새 기본값과 값이 다른 키 → 기존 값
-    added: dict[str, str] = field(default_factory=dict)    # 새 파일에 없는 사용자 추가 키 → 기존 값
-    same: list[str] = field(default_factory=list)          # 기존 값 == 새 기본값(적용 불필요)
-    new_keys: list[str] = field(default_factory=list)      # 새 버전에서 새로 생긴 키(참고용)
+    changed: dict[str, str] = field(default_factory=dict)  # 새 기본값과 값이 다른 키를 기존 값과 함께 담는다
+    added: dict[str, str] = field(default_factory=dict)    # 새 파일에 없는 사용자 추가 키를 기존 값과 함께 담는다
+    same: list[str] = field(default_factory=list)          # 기존 값이 새 기본값과 같아 적용할 필요가 없는 키다
+    new_keys: list[str] = field(default_factory=list)      # 새 버전에서 새로 생긴 키이며 참고용이다
 
     @property
     def to_apply(self) -> dict[str, str]:
-        """병합 시 실제로 얹을 값들(변경 유지 + 사용자 추가)."""
+        """병합할 때 실제로 얹을 값들이다. 운영자가 바꾼 값과 직접 추가한 키를 합친다."""
         return {**self.changed, **self.added}
 
 
@@ -149,7 +149,7 @@ def _print_report(plan: MigrationPlan, new_props: dict[str, str]) -> None:
 
 
 def migrate(old_path: Path, new_path: Path, out_path: Path, dry_run: bool = False) -> MigrationPlan:
-    """비교 → 보고 → (dry-run 이 아니면) ``out_path`` 에 병합 결과를 기록한다.
+    """두 파일을 비교해 보고하고, dry-run 이 아니면 ``out_path`` 에 병합 결과를 기록한다.
 
     ``out_path`` 에 기존 파일이 있으면 ``.bak`` 으로 백업한 뒤 덮어쓴다.
     """
@@ -168,10 +168,10 @@ def migrate(old_path: Path, new_path: Path, out_path: Path, dry_run: bool = Fals
     return plan
 
 
-# ── 디렉터리 트리 마이그레이션(config/templates/customs 공통) ────────────────
+# ── 디렉터리 트리 마이그레이션(config·templates·customs 공통) ────────────────
 
 def _iter_rel_files(root: Path) -> set[str]:
-    """``root`` 아래 모든 파일의 상대 경로 문자열 집합(캐시·컴파일·백업 제외)."""
+    """``root`` 아래 모든 파일의 상대 경로를 문자열 집합으로 모은다. 캐시와 컴파일 산출물, 백업은 뺀다."""
     if not root.is_dir():
         return set()
     out: set[str] = set()
@@ -202,15 +202,15 @@ def _copy_file(src: Path, dst: Path) -> None:
 
 @dataclass
 class TreeReport:
-    """디렉터리 트리 하나의 마이그레이션 결과 요약."""
+    """디렉터리 트리 하나의 마이그레이션 결과 요약이다."""
 
     label: str
-    new: list[str] = field(default_factory=list)          # 소스에만 있어 신규 복사
-    updated: list[str] = field(default_factory=list)      # 내용이 달라 새 버전으로 교체(.bak)
-    merged: list[str] = field(default_factory=list)       # properties 병합(운영자 변경분 보존, .bak)
+    new: list[str] = field(default_factory=list)          # 소스에만 있어 새로 복사한 파일이다
+    updated: list[str] = field(default_factory=list)      # 내용이 달라 새 버전으로 교체한 파일이다(.bak 을 남긴다)
+    merged: list[str] = field(default_factory=list)       # properties 를 병합한 파일이다(운영자 변경분을 보존하고 .bak 을 남긴다)
     unchanged: list[str] = field(default_factory=list)    # 양쪽 동일 — 손대지 않음
-    operator_only: list[str] = field(default_factory=list)  # 설치 트리에만 있음 — 보존
-    plans: dict = field(default_factory=dict)             # rel → MigrationPlan(properties 파일)
+    operator_only: list[str] = field(default_factory=list)  # 설치 트리에만 있어 그대로 보존한 파일이다
+    plans: dict = field(default_factory=dict)             # properties 파일의 상대경로별 MigrationPlan 이다
 
     @property
     def change_count(self) -> int:
@@ -220,20 +220,20 @@ class TreeReport:
 def migrate_tree(
     new_dir: Path, old_dir: Path, *, merge_props: frozenset[str] = frozenset(), dry_run: bool = False
 ) -> TreeReport:
-    """새 소스 트리(``new_dir``)를 설치 트리(``old_dir``)에 반영한다(순수 재조정, 삭제 없음).
+    """새 소스 트리(``new_dir``)를 설치 트리(``old_dir``)에 반영한다. 재조정만 하고 삭제는 하지 않는다.
 
     파일별 전략:
-      - 설치 트리에 없음 → **신규 복사**.
-      - 파일명이 ``merge_props`` 에 있음(config.properties) → **properties 병합**(운영자 변경분
+      - 설치 트리에 없으면 **새로 복사**한다.
+      - 파일명이 ``merge_props`` 에 있으면(config.properties) **properties 를 병합**한다(운영자 변경분을
         보존, 결과가 기존과 다르면 ``.bak`` 백업 후 기록).
-      - 그 외 내용이 다름 → **새 버전으로 교체**(``.bak`` 백업).
-      - 내용이 같음 → **그대로**.
+      - 그 밖에 내용이 다르면 **새 버전으로 교체**하고 ``.bak`` 을 남긴다.
+      - 내용이 같으면 **그대로** 둔다.
     설치 트리에만 있는 파일(운영자 자산)은 ``operator_only`` 로 보고만 하고 **보존한다**.
     ``dry_run`` 이면 파일을 쓰지 않고 분류만 한다.
     """
     report = TreeReport(label=old_dir.name)
     if not new_dir.is_dir():
-        return report  # 소스에 없는 트리는 건너뜀(예: 이 버전엔 customs 미포함)
+        return report  # 소스에 없는 트리는 건너뛴다(예를 들어 이 버전에 customs 가 없을 수 있다)
     new_files = _iter_rel_files(new_dir)
     old_files = _iter_rel_files(old_dir)
     for rel in sorted(new_files):
@@ -244,7 +244,7 @@ def migrate_tree(
                 _copy_file(src, dst)
             report.new.append(rel)
         elif Path(rel).name in merge_props:
-            # properties 병합: old=설치(운영자), new=소스(기본값).
+            # properties 를 병합한다. old 는 설치 트리(운영자 값)이고 new 는 소스 트리(기본값)다.
             plan, merged = merge_files(dst, src)
             merged_text = "\n".join(merged) + "\n"
             if merged_text == dst.read_text(encoding="utf-8"):
@@ -253,7 +253,7 @@ def migrate_tree(
                 if not dry_run:
                     _backup_file(dst)
                     dst.write_text(merged_text, encoding="utf-8")
-                # 운영자 변경분이 있으면 '병합', 없으면 단순 '새 버전 반영'.
+                # 운영자 변경분이 있으면 병합으로 보고, 없으면 단순히 새 버전을 반영한 것으로 본다.
                 (report.merged if plan.to_apply else report.updated).append(rel)
                 report.plans[rel] = plan
         elif src.read_bytes() == dst.read_bytes():
@@ -307,19 +307,19 @@ def _print_tree_report(new_dir: Path, old_dir: Path, report: TreeReport) -> None
 
 
 def _default_deploy_base() -> Path:
-    """설치 트리 루트: ``$QUERY_EXECUTOR_CONFIG_DIR`` 의 부모(미설정 시 기본 설치 트리)."""
+    """설치 트리 루트를 정한다. ``$QUERY_EXECUTOR_CONFIG_DIR`` 의 부모를 쓰고, 미설정이면 기본 설치 트리를 쓴다."""
     env = os.getenv("QUERY_EXECUTOR_CONFIG_DIR")
     config_dir = Path(env) if env else _DEFAULT_INSTALL_CONF
     return config_dir.parent
 
 
 def _default_source_base() -> Path:
-    """소스 트리 루트: 이 도구가 속한 트리(src/core/config_migrate.py 기준 두 단계 위)."""
+    """소스 트리 루트를 정한다. 이 도구가 속한 트리이며 src/core/config_migrate.py 에서 두 단계 위다."""
     return Path(__file__).resolve().parents[2]
 
 
 def _run_single_file(old_path: Path, new_path: Path, out_path: Path, dry_run: bool) -> int:
-    """하위 호환: config.properties 한 파일만 병합하는 레거시 경로(--old/--new/--out)."""
+    """하위 호환을 위해 config.properties 한 파일만 병합하는 레거시 경로다(--old·--new·--out)."""
     for label, p in (("기존 설정", old_path), ("새 기본 설정", new_path)):
         if not p.is_file():
             print(f"오류: {label} 파일이 없습니다: {p}", file=sys.stderr)
@@ -340,13 +340,13 @@ def main(argv: list[str] | None = None) -> int:
         description="업그레이드 시 설정·템플릿·커스텀 함수를 새 버전으로 반영한다"
                     "(운영자 변경분·추가 파일 보존).",
     )
-    # 신규(기본) 멀티 타깃 모드: 트리 루트 지정.
+    # 기본값인 멀티 타깃 모드에서는 트리 루트를 지정한다.
     parser.add_argument("--deploy-base", type=Path, default=None,
                         help="설치 트리 루트(기본: $QUERY_EXECUTOR_CONFIG_DIR 의 부모 "
                              "또는 /data1/distributed-query-executor)")
     parser.add_argument("--source-base", type=Path, default=None,
                         help="새 버전 소스 트리 루트(기본: 이 도구가 속한 트리 루트)")
-    # 레거시(하위 호환) 단일 파일 모드: config.properties 만 병합.
+    # 하위 호환용 레거시 단일 파일 모드에서는 config.properties 만 병합한다.
     parser.add_argument("--old", type=Path, default=None,
                         help="[단일 파일 모드] 기존(운영) config.properties")
     parser.add_argument("--new", type=Path, default=None,
@@ -356,14 +356,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="보고만 하고 기록하지 않는다")
     args = parser.parse_args(argv)
 
-    # --old/--new/--out 중 하나라도 주어지면 레거시 단일 파일 모드.
+    # --old·--new·--out 중 하나라도 주어지면 레거시 단일 파일 모드로 동작한다.
     if args.old or args.new or args.out:
         old_path = args.old or _default_old_path()
         new_path = args.new or _default_new_path()
         out_path = args.out or old_path
         return _run_single_file(old_path, new_path, out_path, args.dry_run)
 
-    # 기본: config + templates + customs 전체 반영.
+    # 기본 동작은 config 와 templates, customs 를 모두 반영하는 것이다.
     deploy_base = args.deploy_base or _default_deploy_base()
     source_base = args.source_base or _default_source_base()
     if deploy_base.resolve() == source_base.resolve():
@@ -385,5 +385,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover - 진입점
+if __name__ == "__main__":  # pragma: no cover - 스크립트 진입점이다
     raise SystemExit(main())
