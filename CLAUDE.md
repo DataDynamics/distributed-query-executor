@@ -166,6 +166,14 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   `GET /datasources` + `POST /datasources/{name}/query` 엔드포인트가 이를 호출한다.
   executor 는 소스들을 직접 접속하고, coordinator 는 history/greenplum 만 직접·impala 는
   요청 본문 `executor_url` 로 executor 에 프록시한다(coordinator 에는 소스 드라이버가 없음).
+  **정형 함수 `_shape` 는 커스텀 실행 함수의 공용 도구**다(`customs/query_funcs/*` 가 import).
+  커서 결과(`fetchmany(limit+1)` 튜플 목록)뿐 아니라 **pandas DataFrame** 도 받는다(사내
+  게이트웨이가 DataFrame 을 주는 경우 — `_is_dataframe` 덕타이핑이라 pandas 는 의존성이 아니다).
+  DataFrame 은 `limit+1` 행만 잘라 변환하고 컬럼명/truncated 를 자동 추출한다. `_json_safe` 는
+  numpy 스칼라를 `tolist()` 로 낮추고(안 하면 `np.int64` 가 문자열로 샌다 — `np.float64` 는
+  float 하위형이라 우연히 통과해 타입별로 결과가 갈린다) NaN/NaT/`pd.NA`/inf 를 `null` 로 떨군다
+  (표준 JSON 에 표현이 없다). executor `/query-run` 은 함수가 DataFrame 을 그대로 반환해도 같은
+  규칙으로 정형한다.
 - `src/core/config_tui.py` — **config.properties 편집용 curses 설정 TUI**(`python -m
   core.config_tui`, `bin/config-tui.sh`). `config.yml` 을 파싱해 항목·기본값·설명·enum 을 자동
   추출(스키마 하드코딩 없음)하고, 바꾼 값만 주석·순서를 보존해 diff-write 한다(저장 전 `.bak`

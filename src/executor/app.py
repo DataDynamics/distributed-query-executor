@@ -30,7 +30,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from core.config import is_custom_source, settings
-from core.dbprobe import QueryResult, clamp_limit, run_impala_select, run_postgres_select
+from core.dbprobe import (
+    QueryResult,
+    _is_dataframe,
+    _shape,
+    clamp_limit,
+    run_impala_select,
+    run_postgres_select,
+)
 from core.http_logging import install_http_logging
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
@@ -695,7 +702,16 @@ def create_app(
             logger.warning("커스텀 실행 함수(%s) 실패: %s", module, e, exc_info=True)
             raise HTTPException(status_code=502, detail=f"커스텀 실행 함수 실패: {e}")
         # 반환은 QueryResult 또는 {columns, rows, row_count, truncated, elapsed_ms} dict 를 허용한다.
-        body = result.to_dict() if isinstance(result, QueryResult) else dict(result)
+        # pandas DataFrame 을 그대로 돌려주는 함수도 받아 준다 — 사내 게이트웨이/래퍼가 커서
+        # 대신 DataFrame 을 주는 경우가 흔한데, 이때 dict(df) 는 {컬럼: Series} 라는 엉뚱한
+        # 모양이 되어 직렬화 단계에서 깨진다. 여기서 _shape 로 정형해 그 실패를 없앤다
+        # (elapsed_ms 는 함수 안 실행시간을 알 수 없으므로 이 정형 시점 기준이다).
+        if isinstance(result, QueryResult):
+            body = result.to_dict()
+        elif _is_dataframe(result):
+            body = _shape(None, result, limit, time.perf_counter()).to_dict()
+        else:
+            body = dict(result)
         return {"limit": limit, **body}
 
     # 대시보드 활성화 시에만 UI 및 보조 조회 엔드포인트(/, /history, /config, /info)를 등록.

@@ -853,6 +853,38 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
 함수 책임이다(예제는 `fetchmany(limit+1)`). 참조 구현은 `customs/query_funcs/trino_runner.py` 에
 있다(표준 `dbprobe._shape` 로 정형).
 
+#### 결과가 pandas DataFrame 인 경우
+
+사내 게이트웨이/래퍼가 커서 대신 **DataFrame** 을 돌려주는 경우가 흔하다. `_shape` 에 그대로
+넘기면 된다:
+
+```python
+from core.dbprobe import _shape
+
+def run(sql, *, config, limit):
+    started = time.perf_counter()
+    df = my_gateway.query(sql)          # -> pandas.DataFrame
+    return _shape(None, df, limit, started)
+```
+
+`_shape` 가 처리하는 것:
+
+| 입력 | 결과 |
+|---|---|
+| DataFrame(`raw_rows` 또는 `columns` 자리 어디든) | 컬럼명·행·`truncated` 자동 추출 |
+| `np.int64`·`np.bool_`·`np.ndarray` | 파이썬 `int`/`bool`/`list` (문자열로 새지 않는다) |
+| `NaN` · `NaT` · `pd.NA` · `inf` | `null` (표준 JSON 에 표현이 없다) |
+| 컬럼명이 정수 등 | 문자열로 정규화 |
+
+상위 `limit+1` 행만 잘라 변환하므로 큰 DataFrame 이 와도 정형 비용은 미리보기 크기에 비례한다.
+pandas 는 이 프로젝트의 의존성이 아니라 **덕타이핑**으로 인식하므로, 쓰는 배포에만 설치돼 있으면
+된다(설치돼 있지 않아도 기존 커서 경로는 그대로 동작).
+
+함수가 `_shape` 를 거치지 않고 DataFrame 을 **그대로 반환**해도 executor 의 `/query-run` 이
+같은 규칙으로 정형한다(이 처리가 없으면 `dict(df)` 가 `{컬럼: Series}` 가 되어 직렬화에서
+깨진다). 다만 `elapsed_ms` 는 함수 안 실행시간을 알 수 없어 정형 시점 기준이 되므로,
+정확한 소요시간이 필요하면 함수 안에서 `_shape` 를 직접 호출한다.
+
 ```python
 # customs/query_funcs/trino_runner.py (발췌)
 from core.dbprobe import QueryResult, _shape
