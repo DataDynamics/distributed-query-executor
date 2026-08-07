@@ -1,7 +1,7 @@
 flowchart TB
     LB["로드밸런서 / VIP"] --> CA["Coordinator A"]
     LB --> CB["Coordinator B"]
-    CA <--> PG[("공유 PostgreSQL<br/>jobs · *_history<br/>executor_status<br/>executor_reservation<br/>coordinator_status")]
+    CA <--> PG[("공유 PostgreSQL<br/>jobs · *_history<br/>executor_status<br/>executor_reservation<br/>executor_health_metrics<br/>coordinator_status")]
     CB <--> PG
     EX1["Executor 1"] -- "self-report (heartbeat)" --> PG
     EX2["Executor 2"] -- "self-report (heartbeat)" --> PG

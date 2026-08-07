@@ -3,9 +3,14 @@ flowchart LR
     Coord -- "POST /tasks (제어)" --> E1["Executor 1"]
     Coord -- "POST /tasks (제어)" --> E2["Executor 2"]
     Coord -- "POST /tasks (제어)" --> EN["Executor N"]
-    Impala[("소스<br/>Impala 커서 | 커스텀 API")] -. "읽기 (데이터)" .-> E1
-    Impala -. "읽기 (데이터)" .-> E2
-    Impala -. "읽기 (데이터)" .-> EN
-    E1 == "적재 (데이터)" ==> GP[("Greenplum<br/>target")]
-    E2 == "적재 (데이터)" ==> GP
-    EN == "적재 (데이터)" ==> GP
+    Src[("소스<br/>Impala 커서 | 커스텀 API")] -. "읽기 (데이터)" .-> E1
+    Src -. "읽기 (데이터)" .-> E2
+    Src -. "읽기 (데이터)" .-> EN
+    E1 == "적재 (데이터)<br/>copy · statement · stage_insert" ==> GP[("Greenplum<br/>target")]
+    E2 ==> GP
+    EN ==> GP
+    E1 == "CSV 쓰기 (데이터)<br/>local_stage · s3_stage" ==> Stage[("스테이지<br/>세그먼트 로컬 file:// · S3")]
+    E2 ==> Stage
+    EN ==> Stage
+    Stage == "외부테이블 세그먼트 병렬 read (데이터)" ==> GP
+    Coord -. "Phase 2 외부테이블 DDL + target INSERT (제어)<br/>SQL 만 보내고 행은 지나가지 않음" .-> GP

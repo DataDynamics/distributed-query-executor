@@ -13,17 +13,23 @@
 
 ## 0. 큰 그림 — 데이터 평면과 제어 평면 분리
 
-성능을 이해하는 출발점은 하나입니다. **데이터가 coordinator 를 거치지 않는다.** Impala 에서
-읽은 실제 행은 각 executor 가 직접 Greenplum 으로 흘려보냅니다(데이터 평면). coordinator 에게는
-진행 상태와 처리한 행 수(row count)만 오갑니다(제어 평면).
+성능을 이해하는 출발점은 하나입니다. **데이터가 coordinator 를 거치지 않는다.** 소스(Impala
+커서 또는 커서 없는 커스텀 API)에서 읽은 실제 행은 각 executor 가 흘려보내고, coordinator 에게는
+진행 상태와 처리한 행 수(row count)만 옵니다(제어 평면).
+
+행이 Greenplum 으로 들어가는 경로는 `exec_mode` 에 따라 둘로 갈립니다. `copy`·`statement`·
+`stage_insert` 는 executor 가 GP 에 직접 붙어 적재하고, `local_stage`·`s3_stage` 는 executor 가
+스테이지(세그먼트 로컬 파일 또는 S3)에 CSV 만 떨어뜨린 뒤 **coordinator 가 외부테이블 DDL 과
+target INSERT 를 중앙에서 실행**합니다. 후자에서도 행 자체는 스테이지에서 GP 세그먼트로 직접
+병렬 유입되며 coordinator 는 SQL 만 보냅니다 — 데이터 평면은 여전히 coordinator 를 비껴갑니다.
 
 데이터가 coordinator 를 통과하지 않으므로 처리량 천장은 coordinator 가 아니라 executor 의 수와 그
 뒤의 Impala·Greenplum 용량으로 정해집니다. coordinator 를 아무리 키워도 처리량은 늘지 않습니다.
 
 ![0. 큰 그림 — 데이터 평면과 제어 평면 분리](images/performance-01.svg)
 
-읽기(점선)와 적재(굵은 화살표)가 모두 executor 와 DB 사이에서만 오가고 coordinator 를 비껴갑니다.
-결론은 둘입니다. 처리량을 늘리려면 executor 수 또는 executor 당 동시 task 수를 늘리고(Scale Out),
+`(데이터)` 로 표시한 선은 모두 소스·executor·스테이지·Greenplum 사이에서만 오가고, coordinator
+에 걸린 선은 전부 `(제어)` — task 디스패치와 Phase 2 SQL 뿐입니다. 결론은 둘입니다. 처리량을 늘리려면 executor 수 또는 executor 당 동시 task 수를 늘리고(Scale Out),
 coordinator 는 처리량이 아니라 가용성을 위해 늘립니다(HA).
 
 ---
