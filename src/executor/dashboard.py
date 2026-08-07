@@ -47,6 +47,10 @@ def masked_config(settings) -> list[dict]:
          "이 executor 가 동시에 실행하는 task 수(0=무제한)"),
         ("executor", "shutdown_drain_timeout_s", settings.executor_shutdown_drain_timeout_s,
          "종료(SIGTERM) 시 진행 중 task 완료를 기다리는 최대 시간(초)"),
+        ("executor", "gp_hostname",
+         getattr(settings, "executor_gp_hostname", "") or "(미설정→hostname 사용)",
+         "local_stage: 이 executor 의 GP 세그먼트 호스트명(file:// URI 조립). "
+         "gp_segment_configuration.hostname 과 일치해야 함"),
         ("history", "db_dsn", mask_dsn(settings.history_db_dsn),
          "task 이력/공유 상태 DB DSN(미설정 시 이력 비활성)"),
         ("history", "task_table", settings.task_history_table, "task 실행 이력 테이블"),
@@ -80,6 +84,25 @@ def masked_config(settings) -> list[dict]:
          "파이프라인 큐 크기(배치 개수). 메모리 ≈ queue_size × batch_size 행"),
         ("greenplum", "copy_format", getattr(settings, "copy_format", "text"),
          "COPY 포맷 text|binary. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백)"),
+        # local_stage(file:// 세그먼트 로컬 스테이징). executor 는 Phase 1(Impala→로컬 CSV write)
+        # 을 맡고, 나머지 값(호스트 검증·파일 예산)은 coordinator 의 Phase 2 용이지만 설정을
+        # 공유하므로 함께 보인다. CSV 방언은 write 와 외부테이블 FORMAT 이 반드시 일치해야 한다.
+        ("stage", "local_dir", getattr(settings, "stage_local_dir", ""),
+         "local_stage 로컬 CSV 저장 루트(GP 세그먼트가 file:// 로 읽는 경로, job_id 하위 격리)"),
+        ("stage", "csv_delimiter", getattr(settings, "stage_csv_delimiter", "`"),
+         "CSV 컬럼 구분자. 이 write 방언이 외부테이블 FORMAT 과 일치해야 함(s3_stage 도 동일)"),
+        ("stage", "csv_null", getattr(settings, "stage_csv_null", "") or "(빈 문자열)",
+         "CSV NULL 표현"),
+        ("stage", "csv_quote", getattr(settings, "stage_csv_quote", '"'), "CSV 인용문자"),
+        ("stage", "cleanup", getattr(settings, "stage_cleanup", True),
+         "Phase 3 에서 이 호스트의 로컬 CSV 디렉터리를 정리할지 여부"),
+        ("stage", "validate_hosts", getattr(settings, "stage_validate_hosts", True),
+         "coordinator 가 Phase 2 전 file:// 호스트를 gp_segment_configuration 과 대조 검증"),
+        ("stage", "max_files_per_host", getattr(settings, "stage_max_files_per_host", 0),
+         "호스트당 최대 파일 수(0=호스트별 primary 세그먼트 수 S_h)"),
+        ("stage", "impala_convert_types",
+         getattr(settings, "stage_impala_convert_types", False),
+         "export fetch 형변환(false=끔: timestamp/date/decimal 을 wire 문자열 그대로 CSV write)"),
         # s3_stage(2-phase). executor 는 Phase 1(Impala→로컬 CSV→S3 업로드)과 Phase 3(정리)에서
         # 이 값들을 쓴다. PXF 관련 값은 coordinator 의 Phase 2 용이지만 설정을 공유하므로 함께 보인다.
         ("s3", "bucket", getattr(settings, "s3_bucket", "") or "(미설정→s3_stage 비활성)",

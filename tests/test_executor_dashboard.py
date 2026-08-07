@@ -86,6 +86,18 @@ async def test_config_endpoint_exposes_s3_stage_section():
         assert ("s3", key) in keys, key
 
 
+async def test_config_endpoint_exposes_stage_section():
+    """executor 환경설정 탭에 local_stage 설정(stage.*)과 gp_hostname 이 보여야 한다."""
+    app = create_executor_app()
+    async with _client(app) as c:
+        rows = (await c.get("/config")).json()["config"]
+    keys = {(r["section"], r["key"]) for r in rows}
+    for key in ("local_dir", "csv_delimiter", "csv_null", "csv_quote", "cleanup",
+                "validate_hosts", "max_files_per_host", "impala_convert_types"):
+        assert ("stage", key) in keys, key
+    assert ("executor", "gp_hostname") in keys
+
+
 async def test_dashboard_has_cancel_action():
     """처리중 탭의 task 취소 버튼(JS 핸들러)이 HTML 에 포함돼야 한다."""
     app = create_executor_app()

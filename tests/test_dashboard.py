@@ -48,6 +48,23 @@ def test_masked_config_masks_s3_credentials(monkeypatch):
     assert by_key["external_schema"] == "dwtemp"
 
 
+def test_masked_config_exposes_stage_and_template_sections():
+    """local_stage(stage.*)·템플릿 엔진(template.*) 설정도 환경설정 탭에 보여야 한다."""
+    rows = masked_config(core_settings)
+    keys = {(r["section"], r["key"]) for r in rows}
+    for key in ("local_dir", "csv_delimiter", "csv_null", "csv_quote", "cleanup",
+                "validate_hosts", "max_files_per_host", "impala_convert_types"):
+        assert ("stage", key) in keys, key
+    for key in ("enabled", "dir", "auto_reload", "func_modules",
+                "validate_ddl_single_stmt"):
+        assert ("template", key) in keys, key
+    # stage_insert 의 staging 고유화 스위치(coordinator 설정)도 함께 보인다.
+    assert ("coordinator", "stage_unique_staging") in keys
+    by_key = {r["key"]: r["value"] for r in rows if r["section"] == "stage"}
+    # 빈 문자열이 기본인 값은 빈칸 대신 안내로 표시한다(설정 누락과 구분).
+    assert by_key["csv_null"] == "(빈 문자열)"
+
+
 def test_dashboard_html_served(client):
     r = client.get("/")
     assert r.status_code == 200
