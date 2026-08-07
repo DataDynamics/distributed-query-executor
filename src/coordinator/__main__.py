@@ -1,4 +1,4 @@
-"""Coordinator 실행 진입점: 설정 기반으로 로깅 구성 후 uvicorn 기동.
+"""Coordinator 실행 진입점이다. 설정을 보고 로깅을 구성한 뒤 uvicorn 을 기동한다.
 
 'python -m coordinator' 로 패키지를 실행하면 이 모듈의 main() 이 호출된다. main() 은
 core.logging 으로 애플리케이션 로깅을 먼저 구성한 뒤, coordinator.app:app(FastAPI/ASGI 앱)을
@@ -21,7 +21,7 @@ from core.version import version_string
 
 def main() -> None:
     """로깅을 구성하고 uvicorn 으로 coordinator ASGI 앱을 기동한다(블로킹)."""
-    # `--version`: 버전만 출력하고 종료(기동하지 않음).
+    # `--version` 이면 버전만 출력하고 기동하지 않은 채 종료한다.
     if "--version" in sys.argv[1:]:
         print(f"query-executor {version_string()}")
         return
@@ -46,8 +46,8 @@ def main() -> None:
         "coordinator.app:app",
         host=settings.coordinator_host,
         port=settings.coordinator_port,
-        workers=1,  # 인메모리 Job 저장소 → 단일 워커
-        log_config=None,  # 로깅은 core.logging 에서 구성
+        workers=1,  # 인메모리 Job 저장소를 쓰므로 단일 워커로 돈다
+        log_config=None,  # 로깅은 core.logging 이 구성한다
     )
 
 

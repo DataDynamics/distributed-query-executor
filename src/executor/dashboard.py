@@ -1,4 +1,4 @@
-"""executor 모니터링 대시보드(인라인 HTML + vanilla JS, npm/빌드 불필요).
+"""executor 모니터링 대시보드다. 인라인 HTML 과 vanilla JS 로 되어 있어 npm 이나 빌드가 필요 없다.
 
 remote mode 에서 각 executor 프로세스가 자신의 / 에 단일 HTML 을 서빙하고,
 브라우저가 /tasks·/metrics·/history·/config·/info 를 폴링해 탭을 갱신한다.
@@ -84,9 +84,10 @@ def masked_config(settings) -> list[dict]:
          "파이프라인 큐 크기(배치 개수). 메모리 ≈ queue_size × batch_size 행"),
         ("greenplum", "copy_format", getattr(settings, "copy_format", "text"),
          "COPY 포맷 text|binary. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백)"),
-        # local_stage(file:// 세그먼트 로컬 스테이징). executor 는 Phase 1(Impala→로컬 CSV write)
-        # 을 맡고, 나머지 값(호스트 검증·파일 예산)은 coordinator 의 Phase 2 용이지만 설정을
-        # 공유하므로 함께 보인다. CSV 방언은 write 와 외부테이블 FORMAT 이 반드시 일치해야 한다.
+        # local_stage(file:// 세그먼트 로컬 스테이징) 설정이다. executor 는 소스 결과를 로컬 CSV 로
+        # 쓰는 Phase 1 을 맡고, 호스트 검증과 파일 예산 같은 나머지 값은 coordinator 의 Phase 2
+        # 용이지만 설정을 공유하므로 함께 보인다. CSV 방언은 write 와 외부테이블 FORMAT 이
+        # 반드시 일치해야 한다.
         ("stage", "local_dir", getattr(settings, "stage_local_dir", ""),
          "local_stage 로컬 CSV 저장 루트(GP 세그먼트가 file:// 로 읽는 경로, job_id 하위 격리)"),
         ("stage", "csv_delimiter", getattr(settings, "stage_csv_delimiter", "`"),
@@ -103,8 +104,9 @@ def masked_config(settings) -> list[dict]:
         ("stage", "impala_convert_types",
          getattr(settings, "stage_impala_convert_types", False),
          "export fetch 형변환(false=끔: timestamp/date/decimal 을 wire 문자열 그대로 CSV write)"),
-        # s3_stage(2-phase). executor 는 Phase 1(Impala→로컬 CSV→S3 업로드)과 Phase 3(정리)에서
-        # 이 값들을 쓴다. PXF 관련 값은 coordinator 의 Phase 2 용이지만 설정을 공유하므로 함께 보인다.
+        # 2-phase 로 도는 s3_stage 설정이다. executor 는 소스 결과를 로컬 CSV 로 내려 S3 에 올리는
+        # Phase 1 과 정리하는 Phase 3 에서 이 값들을 쓴다. PXF 관련 값은 coordinator 의 Phase 2
+        # 용이지만 설정을 공유하므로 함께 보인다.
         ("s3", "bucket", getattr(settings, "s3_bucket", "") or "(미설정→s3_stage 비활성)",
          "s3_stage 스테이징 버킷. 비우면 s3_stage 요청 시에만 실패(다른 모드 무영향)"),
         ("s3", "prefix", getattr(settings, "s3_prefix", "dqe-stage"),

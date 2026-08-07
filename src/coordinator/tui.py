@@ -296,7 +296,7 @@ class DashboardTUI:
         self.lines: list[str] = []       # 현재 뷰를 렌더한 줄들이다
         self.select_rows: list[Any] = [] # 드릴인할 수 있는 행의 키다(job_id 나 executor index)
 
-    # ── 데이터 폴링 ───────────────────────────────────────────────────────
+    # ── 데이터 폴링 ──
     def refresh(self) -> None:
         """현재 뷰(탭 또는 상세)의 데이터를 다시 가져와 렌더 줄을 만든다."""
         self.error = None
@@ -343,7 +343,7 @@ class DashboardTUI:
             tasks = self.api.executor_tasks(key)
             self.lines = fmt_executor_detail(metrics, tasks)
 
-    # ── 입력/드릴인 ───────────────────────────────────────────────────────
+    # ── 입력과 드릴인 ──
     def enter(self) -> None:
         """현재 선택한 행에서 상세로 들어간다. Jobs 와 Executors 탭에서만 동작한다."""
         if self.detail is not None:
@@ -377,7 +377,7 @@ class DashboardTUI:
         self.row = self.top = 0
         self.refresh()
 
-    # ── 렌더 루프 ─────────────────────────────────────────────────────────
+    # ── 렌더 루프 ──
     def run(self, stdscr: Any) -> None:
         import curses
 

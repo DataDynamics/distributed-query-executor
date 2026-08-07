@@ -1,4 +1,4 @@
-"""coordinator 모니터링 대시보드(인라인 HTML + vanilla JS, npm/빌드 불필요).
+"""coordinator 모니터링 대시보드다. 인라인 HTML 과 vanilla JS 로 되어 있어 npm 이나 빌드가 필요 없다.
 
 이 모듈은 별도 프런트엔드 빌드 없이 단일 HTML 문자열(DASHBOARD_HTML)로 모니터링 UI 를
 제공한다. 서버는 '/' 경로에서 이 HTML 을 그대로 서빙하고, 브라우저의 vanilla JS 가
@@ -24,7 +24,7 @@ def masked_config(settings) -> list[dict]:
 
     현재 설정값을 섹션별로 평탄화한 행 리스트로 변환한다. DSN/비밀번호처럼 민감한 값은
     mask_dsn() 또는 '***' 로 가려 노출하지 않는다. 미설정 항목은 사람이 읽기 좋은 안내
-    문자열('(없음)', '(미설정→Mock)' 등)로 대체한다.
+    문자열('(없음)' 이나 '(미설정, Mock 사용)' 등)로 대체한다.
 
     Args:
         settings: 노출할 설정 속성을 담은 설정 객체.
@@ -158,9 +158,9 @@ def masked_config(settings) -> list[dict]:
         ("stage", "impala_convert_types",
          getattr(settings, "stage_impala_convert_types", False),
          "export fetch 형변환(false=끔: timestamp/date/decimal 을 wire 문자열 그대로 CSV write)"),
-        # s3_stage(2-phase). coordinator 는 Phase 2(PXF 외부테이블 생성 → target INSERT)와
-        # Phase 3(정리)에서 이 값들을 쓴다. 업로드 자격증명은 executor 쪽에서 쓰이지만
-        # 설정은 coordinator·executor 가 공유하므로 존재 여부만 마스킹해 함께 보인다.
+        # 2-phase 로 도는 s3_stage 설정이다. coordinator 는 Phase 2 에서 PXF 외부테이블을 만들어
+        # target 으로 INSERT 하고 Phase 3 에서 정리할 때 이 값들을 쓴다. 업로드 자격증명은
+        # executor 가 쓰지만 설정을 coordinator 와 공유하므로 존재 여부만 마스킹해 함께 보인다.
         ("s3", "bucket", getattr(settings, "s3_bucket", "") or "(미설정→s3_stage 비활성)",
          "s3_stage 스테이징 버킷. 비우면 s3_stage 요청 시에만 실패(다른 모드 무영향)"),
         ("s3", "prefix", getattr(settings, "s3_prefix", "dqe-stage"),
@@ -187,7 +187,7 @@ def masked_config(settings) -> list[dict]:
          "고급: LOCATION raw override({bucket}/{key}/{profile}/{server} 치환)"),
         ("s3", "delete_on_cleanup", getattr(settings, "s3_delete_on_cleanup", True),
          "Phase 3 에서 S3 스테이징 객체를 지울지 여부(false 면 수명주기 정책에 위임)"),
-        # 쿼리 템플릿 엔진(coordinator 전용 — /jobs·/query-execute 처리 초입에서 렌더).
+        # coordinator 전용 쿼리 템플릿 엔진 설정이다. /jobs 와 /query-execute 처리 초입에서 렌더한다.
         ("template", "enabled", getattr(settings, "template_enabled", True),
          "template_id 로 서버 템플릿을 렌더할지 여부(false 면 raw SQL 요청만 허용)"),
         ("template", "dir", getattr(settings, "template_dir", ""),

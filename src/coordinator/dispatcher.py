@@ -599,7 +599,7 @@ class _DispatcherBase:
         """Job 한 건의 전체 수명주기를 구동하고 job_id 를 반환한다.
 
         상태 흐름:
-            PENDING → (슬롯 대기/큐잉) → RUNNING → (_execute) → 종료(finalize)
+            PENDING 에서 슬롯을 기다리며 큐잉되다가 RUNNING 으로 올라가고, _execute 를 거쳐 finalize 로 끝난다.
 
         세부 동작:
             1. 우선 PENDING 으로 표시하고 저장한다. 실행 슬롯이 차 있으면 ``admission.slot()``

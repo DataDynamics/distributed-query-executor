@@ -1,4 +1,4 @@
-"""Coordinator 설정 진입점(공용 코어 설정의 재노출).
+"""Coordinator 설정의 진입점이며 공용 코어 설정을 다시 노출한다.
 
 coordinator 패키지는 별도 설정 구현을 두지 않고 공용 코어(core.config)에서 정의·로드한
 Settings 클래스와 그 싱글턴 인스턴스 settings 를 그대로 가져와 다시 export 한다. 이렇게
@@ -11,5 +11,5 @@ Settings 클래스와 그 싱글턴 인스턴스 settings 를 그대로 가져�
 
 from core.config import Settings, settings
 
-# 패키지 외부에 공개할 심볼: 설정 클래스(Settings)와 로드된 싱글턴 인스턴스(settings).
+# 패키지 외부에 공개할 심볼이다. 설정 클래스인 Settings 와 로드된 싱글턴 settings 를 내보낸다.
 __all__ = ["Settings", "settings"]

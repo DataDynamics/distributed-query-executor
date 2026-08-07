@@ -1,4 +1,4 @@
-"""s3_stage(S3 경유 스테이징) SQL/키 조립 — 순수 함수.
+"""s3_stage(S3 를 거치는 스테이징)의 SQL 과 객체 키를 조립하는 순수 함수 모음이다.
 
 ``s3_stage`` exec_mode 는 ``local_stage`` 와 같은 2-phase 다: Phase 1 에서 executor 가 Impala
 SELECT 결과를 로컬 CSV 로 떨어뜨린 뒤 **S3 버킷에 업로드**하고(``export_to_s3``), 배리어 후
@@ -29,7 +29,7 @@ def s3_object_key(prefix: str, job_id: str, task_id: str) -> str:
 
 
 def s3_job_prefix(prefix: str, job_id: str) -> str:
-    """job 의 모든 task 객체가 모이는 S3 디렉터리 프리픽스(``<prefix>/<job_id>/``).
+    """job 의 모든 task 객체가 모이는 S3 디렉터리 프리픽스(``<prefix>/<job_id>/``)를 만든다.
 
     Phase 2 에서 coordinator 가 PXF 외부테이블 LOCATION 으로 이 디렉터리를 가리키면
     PXF 가 그 아래 모든 task CSV(``<task_id>.csv``)를 읽는다. 끝에 ``/`` 를 붙여 디렉터리임을
@@ -54,7 +54,7 @@ def sanitize_schema(schema: str) -> str:
 
 
 def external_table_name(job_id: str, schema: str = "") -> str:
-    """job 별 고유 외부테이블 이름(``[<schema>.]s3ext_<job_id 안전화>``). 영숫자 외 문자는 ``_`` 로 치환.
+    """job 마다 고유한 외부테이블 이름(``[<schema>.]s3ext_<job_id 안전화>``)을 만든다. 영숫자가 아닌 문자는 ``_`` 로 바꾼다.
 
     외부테이블은 GP 카탈로그 전역이라 job 마다 고유해야 동시 실행 job 간 충돌이 없다.
     coordinator(Phase 2)가 이 이름으로 외부테이블을 만들고, insert_sql 의 staging 참조를
@@ -136,7 +136,7 @@ def build_s3_external_ddl(
 def build_pre_delete(
     target_table: str, partition_column: str, partition_values: list[str]
 ) -> str | None:
-    """overwrite_partitions 멱등 선삭제 DELETE. 값이 없으면 None(선삭제 없음).
+    """overwrite_partitions 의 멱등 선삭제 DELETE 를 만든다. 값이 없으면 None 을 돌려 선삭제를 건너뛴다.
 
     ``partition_values`` 는 splitter/fan-out 이 이미 방언 기준으로 렌더링한 SQL 리터럴
     목록이므로 그대로 IN 절에 결합한다(``coordinator/stage.py`` 와 동일 규칙).

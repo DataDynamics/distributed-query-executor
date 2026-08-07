@@ -1,4 +1,4 @@
-"""애플리케이션 전역 설정 모듈.
+"""애플리케이션의 전역 설정을 담당하는 모듈이다.
 
 이 모듈은 분산 쿼리 실행기(coordinator·executor)가 공유하는 모든 설정값을
 한곳에 모아 ``Settings`` 객체로 노출한다. 설정은 설정 디렉터리
@@ -156,7 +156,7 @@ def _kv_dict(value) -> dict[str, str]:
 
 
 class Settings:
-    """config.yml + config.properties 에서 로드한 전역 애플리케이션 설정 컨테이너.
+    """config.yml 과 config.properties 에서 로드한 전역 애플리케이션 설정 컨테이너다.
 
     생성자에서 ``_raw`` dict 의 각 값을 읽어 **타입이 확정된 인스턴스 속성**으로
     펼쳐 둔다. 이렇게 미리 변환해 두면 사용처에서는 dict 탐색이나 타입 캐스팅

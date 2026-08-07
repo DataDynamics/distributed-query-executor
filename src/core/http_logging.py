@@ -126,7 +126,7 @@ def format_headers(
 class HttpLoggingMiddleware:
     """DEBUG 레벨일 때만 HTTP 요청과 응답을 ``core.http`` 로거로 남기는 ASGI 미들웨어다.
 
-    요청이 도착하자마자 메서드·경로·쿼리·client 를 담은 ``→`` 한 줄을 남겨, 요청 유입과 행(hang)을
+    요청이 도착하자마자 메서드·경로·쿼리·client 를 담은 도착 표시 한 줄을 남겨, 요청 유입과 행(hang)을
     바로 볼 수 있게 하고, 처리가 끝나면 ``←`` 한 줄(상태·소요시간)을 남긴다. 두 줄은
     짧은 요청 id(``rid``)로 상관된다. 본문 로깅이 켜져 있으면 요청/응답 본문을 별도 줄로
     남긴다(마스킹·절단).
@@ -177,7 +177,7 @@ class HttpLoggingMiddleware:
         if self.log_headers:
             logger.debug("  [%s] req-headers %s", rid, format_headers(headers_in))
 
-        # ── receive 를 감싸 요청 본문 청크를 max_body 까지만 복사한다. 원본은 그대로 전달한다 ──
+        # receive 를 감싸 요청 본문 청크를 max_body 까지만 복사한다. 원본은 그대로 전달한다.
         req_body = bytearray()
         req_over = False
 
@@ -194,7 +194,7 @@ class HttpLoggingMiddleware:
                         req_over = True
             return message
 
-        # ── send 를 감싸 응답의 status·headers 와 본문 청크를 max_body 까지 복사한다 ──
+        # send 를 감싸 응답의 status·headers 와 본문 청크를 max_body 까지 복사한다.
         resp = {"status": None, "headers": None}
         resp_body = bytearray()
         resp_over = False

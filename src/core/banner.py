@@ -1,4 +1,4 @@
-"""기동 배너(Spring Boot 스타일) — coordinator·executor 가 뜰 때 ASCII 아트 + 버전 표시.
+"""Spring Boot 스타일의 기동 배너다. coordinator 와 executor 가 뜰 때 ASCII 아트와 버전을 보여 준다.
 
 Spring Boot 가 시작 시 콘솔에 ASCII 배너와 버전을 찍는 것을 흉내 낸다. 애플리케이션이
 어떤 버전으로, 어떤 역할(coordinator/executor)로, 어느 포트에서 떴는지를 로그 파일을
@@ -34,7 +34,7 @@ _ART = r"""
 
 
 def _config_dir() -> Path:
-    """배너 오버라이드(banner.txt)를 찾을 설정 디렉터리."""
+    """배너 오버라이드 파일(banner.txt)을 찾을 설정 디렉터리를 돌려준다."""
     return Path(os.getenv("QUERY_EXECUTOR_CONFIG_DIR", "/data1/distributed-query-executor/config"))
 
 
@@ -67,7 +67,7 @@ def render_banner(role: str, port: int | None = None, *, config_dir: Path | None
     if override.is_file():
         return _substitute(override.read_text(encoding="utf-8"), mapping).rstrip("\n") + "\n"
 
-    # 내장 배너: 아트 + 정보 두 줄(Spring Boot 처럼 버전을 아트 하단에 표기).
+    # 내장 배너다. ASCII 아트 아래에 정보 두 줄을 붙여 Spring Boot 처럼 버전을 아트 하단에 표기한다.
     info = (
         f" Distributed Query Executor  (v{version})\n"
         f" :: {where} ::   Python {python}\n"

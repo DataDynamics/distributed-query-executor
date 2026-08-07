@@ -1,4 +1,4 @@
-"""공유 예약(Phase 3-B): 여러 coordinator 가 실시간 전역 부하를 공유하기 위한 예약.
+"""Phase 3-B 의 공유 예약이다. 여러 coordinator 가 실시간 전역 부하를 공유하려고 예약을 남긴다.
 
 HA 에서 P2C/least_loaded 만으로는 heartbeat 간격 동안 여러 coordinator 가 같은 한가한
 노드로 몰릴 수 있다(분산 스탬피드). 이를 더 강하게 막으려면, 각 coordinator 가 dispatch 중인
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def merge_reservations(view: dict, reserved: dict) -> dict:
-    """부하 뷰(url→load)의 ``active_tasks`` 에 예약수(url→n)를 합산한 새 뷰를 만든다.
+    """URL 별 부하 뷰의 ``active_tasks`` 에 URL 별 예약 수를 더한 새 뷰를 만든다.
 
     예약이 없으면 원본을 그대로 돌려준다(불필요한 복사 회피). 뷰에 없는 url 의 예약은
     무시한다(헬스 정보가 없으면 어차피 선택 대상이 아님).
@@ -54,7 +54,7 @@ class ReservationRepository:
         self.table = table
 
     def _conn(self):
-        import psycopg  # 지연 임포트
+        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
         return psycopg.connect(self.dsn)
 
     def reserve(self, url: str) -> None:

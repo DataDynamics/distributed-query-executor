@@ -621,7 +621,7 @@ class CreateJobRequest(BaseModel):
         "값(예: trino)은 executor 설정 query.func.fetch_module 의 커스텀 API 로 읽는다 "
         "(커서 없는 소스). 적재 대상(Greenplum)과 exec_mode 는 이 값과 무관하다.",
     )
-    # ── local_stage 에서만 쓰는 필드 ──
+    # ── local_stage 에서만 쓰는 필드들이다 ──
     external_columns: Optional[str] = Field(
         default=None,
         description="local_stage 모드: file:// 외부테이블 컬럼 정의(명시). CSV 컬럼 순서와 "
@@ -656,7 +656,7 @@ class CreateJobResponse(BaseModel):
 
 
 class QueryExecuteRequest(BaseModel):
-    """``POST /query-execute`` 의 요청 스키마다. 서버 템플릿을 params 로 렌더한 SELECT 를 실행하고
+    """``POST /query-execute`` 의 요청 스키마다. 서버 템플릿을 params 로 렌더한 SELECT 를 실행해
     결과(상위 N행)를 동기로 돌려받는다.
 
     소스에서 Greenplum 으로 옮기는 ``/jobs`` 와 달리, 결과가 coordinator 를 거쳐 클라이언트로

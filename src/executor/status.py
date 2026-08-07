@@ -1,4 +1,4 @@
-"""executor 가 자기 상태(CPU/메모리/디스크/heartbeat)를 공유 DB에 self-report.
+"""executor 가 자기 상태(CPU·메모리·디스크·heartbeat)를 공유 DB 에 스스로 보고한다.
 
 멀티 coordinator 환경에서 각 coordinator가 executor를 중복 폴링/기록하지 않도록,
 상태의 '기록 주인'을 executor 로 둔다. coordinator 는 이 테이블을 읽기만 한다.
@@ -86,7 +86,7 @@ class ExecutorStatusReporter:
                 pass
 
     async def _loop(self) -> None:
-        """interval 초 간격으로 self-report 를 반복 수행하는 루프.
+        """interval 초 간격으로 self-report 를 반복하는 루프다.
 
         한 번의 보고 실패가 루프를 멈추지 않도록 예외를 잡아 로깅만 하고 계속 진행한다.
         블로킹 DB 작업(``_report_once``)은 ``to_thread`` 로 스레드에서 실행해 이벤트 루프를
@@ -104,7 +104,7 @@ class ExecutorStatusReporter:
 
         테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         """
-        import psycopg  # 지연 임포트
+        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         m = collect_system_metrics(self.disk_path)
         mem, disk = m["memory"], m["disk"]

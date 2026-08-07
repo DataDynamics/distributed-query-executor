@@ -1,4 +1,4 @@
-"""시각 생성·표기 헬퍼 — 전 구간 KST(Asia/Seoul) 기준, 타임존 없는 naive 값.
+"""시각을 만들고 표기하는 헬퍼다. 전 구간이 KST(Asia/Seoul) 기준이며 타임존 없는 naive 값을 쓴다.
 
 이 시스템은 한국 단일 리전 환경이라 UTC·타임존이 필요 없다. 그래서 앱이 만드는 모든
 시각은 **타임존 정보가 없는 KST 벽시계(naive)** 로 생성·저장·표기한다.
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-# 한국 표준시(UTC+9). 표기·환산 기준이 되는 단일 타임존.
+# 한국 표준시(UTC+9)다. 표기와 환산의 기준이 되는 단일 타임존이다.
 KST = timezone(timedelta(hours=9), name="KST")
 
 

@@ -225,7 +225,7 @@ def _validate_sign_contract(engine: TemplateEngine, template_id: str, names: lis
 
     이게 없으면 조용히 틀린다: task 마다 값이 절대값으로 들어가므로, 부호가 SQL 에 고정된
     ``BETWEEN today - interval {{from}} AND today + interval {{to}}`` 템플릿은 ``d=-3``
-    task 에서 ``BETWEEN today-3 AND today+3`` (7일치)을 읽는다 → 모든 task 가 겹쳐 append
+    task 에서 ``BETWEEN today-3 AND today+3`` 처럼 7일치를 읽게 되고, 그러면 모든 task 가 겹쳐 append
     적재가 중복된다. 오류 없이 데이터만 틀리는 실패라 접수 시점에 막는다.
 
     파라미터를 아예 참조하지 않는 템플릿(예: ``task_date`` 로 하루를 고르는 방식)은
@@ -297,7 +297,7 @@ def _build_fanout(
     _validate_sign_contract(engine, req.template_id, names)
 
     def _ctx(pair: tuple[int, int]) -> dict:
-        """task 하나(구간 두 끝)의 렌더 컨텍스트 — 값은 절대값, 부호는 <name>_sign 으로."""
+        """task 하나(구간의 두 끝)에 쓸 렌더 컨텍스트를 만든다. 값은 절대값으로, 부호는 <name>_sign 으로 넘긴다."""
         ctx = _render_params(values, signs)
         for name, offset in zip(names, pair):
             magnitude, sign = _offset_value_sign(offset)
@@ -441,7 +441,7 @@ def create_app(
     store: Optional[JobStore] = None,
     settings: Optional[Settings] = None,
 ) -> FastAPI:
-    """FastAPI 앱을 조립하여 반환하는 팩토리.
+    """FastAPI 앱을 조립해 돌려주는 팩토리다.
 
     의존성을 인자로 주입받아 라우트를 등록한 `FastAPI` 인스턴스를 만든다. 인자를
     생략하면 기본 설정(`default_settings`)을 바탕으로 store와 runner를 자동 구성하므로,
@@ -641,7 +641,7 @@ def create_app(
 
     def _create_job(req: CreateJobRequest, background: BackgroundTasks, job_id: str,
                     idempotency_key: Optional[str] = None):
-        """작업 생성 본체: 검증 → 분할 → (dry-run 분기) → admission → 디스패치.
+        """작업 생성의 본체다. 검증하고 분할한 뒤 dry-run 이면 갈라지고, 아니면 admission 을 거쳐 디스패치한다.
 
         흐름 요약:
         1. SQL을 동기로 검증·파싱하고 parallelism 만큼 sub-query로 분할한다. 이때의

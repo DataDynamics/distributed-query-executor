@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import re
 
-# 자유 텍스트(요청/응답 본문·헤더)에서 흔한 자격증명 패턴을 가리기 위한 정규식.
-# 1) DSN/URL 의 userinfo 비밀번호: scheme://user:pass@host → user:***@host
+# 요청·응답 본문이나 헤더 같은 자유 텍스트에서 흔한 자격증명 패턴을 가리는 정규식이다.
+# 1) DSN 이나 URL 의 userinfo 비밀번호를 가린다. scheme://user:pass@host 는 user:***@host 가 된다.
 _DSN_CRED_RE = re.compile(r"://([^:/@\s]+):([^@\s]+)@")
 # 2) key=value / "key": "value" 형태의 비밀 필드(대소문자 무시). JSON·폼·properties 공통.
 #    값은 따옴표 안이거나(쉼표·중괄호·따옴표 전까지) 공백/구분자 전까지로 본다.
@@ -21,14 +21,14 @@ _SECRET_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 
-# 값 전체를 통째로 가릴 민감 HTTP 헤더(이름 소문자 기준).
+# 값을 통째로 가릴 민감 HTTP 헤더 목록이며 이름은 소문자를 기준으로 본다.
 SENSITIVE_HEADERS = frozenset(
     {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"}
 )
 
 
 def mask_dsn(dsn: str | None) -> str:
-    """DSN 의 비밀번호를 마스킹한다: ``scheme://user:pass@host`` → ``scheme://user:***@host``.
+    """DSN 의 비밀번호를 마스킹한다. ``scheme://user:pass@host`` 는 ``scheme://user:***@host`` 가 된다.
 
     ``user:password@`` 패턴의 비밀번호 부분만 ``***`` 로 치환한다. 사용자명/호스트 등
     나머지는 그대로 둔다. 값이 비어 있으면 빈 문자열을 돌려준다.
@@ -51,7 +51,7 @@ def mask_text(text: str | None) -> str:
     않도록, 아래 두 패턴을 치환한다. 구조 파싱이 아니라 정규식 기반이라 완벽하진 않지만,
     운영에서 흔한 노출(접속 DSN·`password`/`token` 필드)을 줄이는 것이 목적이다.
 
-    1. DSN/URL userinfo 비밀번호(``user:pass@`` → ``user:***@``).
+    1. DSN 과 URL 의 userinfo 비밀번호를 가린다(``user:pass@`` 가 ``user:***@`` 가 된다).
     2. ``password``/``token``/``secret``/``api_key`` 등 키의 값(따옴표 유무 무관).
 
     Args:

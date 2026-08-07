@@ -29,7 +29,7 @@ class S3Client:
         self.config = dict(config or {})
         self.bucket = self.config.get("bucket") or ""
         self._client = None
-        self._lock = threading.Lock()  # 지연 생성 경합 방지(여러 task 스레드가 동시 첫 사용)
+        self._lock = threading.Lock()  # 여러 task 스레드가 동시에 처음 쓸 때 지연 생성이 경합하지 않게 한다
 
     def _get_client(self):
         """boto3 S3 클라이언트를 지연 생성해 재사용한다(스레드 안전)."""
@@ -38,7 +38,7 @@ class S3Client:
         with self._lock:
             if self._client is not None:
                 return self._client
-            import boto3  # 지연 임포트(옵션 의존성 — requirements-executor.txt)
+            import boto3  # requirements-executor.txt 의 선택 의존성이라 지연 임포트한다
 
             kwargs: dict = {}
             if self.config.get("endpoint_url"):
@@ -74,7 +74,7 @@ class S3Client:
         self._get_client().delete_object(Bucket=self.bucket, Key=key)
 
     def delete_prefix(self, prefix: str) -> int:
-        """``s3://<bucket>/<prefix>`` 아래 모든 객체를 삭제한다(Phase 3 job 정리). 삭제 수 반환.
+        """``s3://<bucket>/<prefix>`` 아래 모든 객체를 지워 Phase 3 의 job 정리를 수행하고 삭제 수를 돌려준다.
 
         list_objects_v2 로 프리픽스 아래를 페이지 단위로 훑어 delete_objects(최대 1000개/요청)로
         지운다. job 하위 폴더(``<prefix>/<job_id>/``)만 대상이므로 다른 job 객체는 건드리지 않는다.
@@ -101,7 +101,7 @@ class S3Client:
 
 
 def build_s3_client(config: dict | None):
-    """설정에서 S3 클라이언트를 만든다. ``bucket`` 이 비어 있으면 None(=s3_stage 미구성)."""
+    """설정을 보고 S3 클라이언트를 만든다. ``bucket`` 이 비어 있으면 s3_stage 를 구성하지 않은 것이므로 None 을 돌려준다."""
     if not (config and config.get("bucket")):
         return None
     return S3Client(config)

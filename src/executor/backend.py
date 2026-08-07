@@ -1,4 +1,4 @@
-"""소스에서 읽어 Greenplum 에 적재하는 백엔드.
+"""소스에서 읽어 Greenplum 에 적재하는 백엔드 모듈이다.
 
 실제 백엔드는 impyla + psycopg 를 사용하며, coordinator 테스트(및 로컬 개발)에서 DB
 드라이버가 필요 없도록 지연 임포트(lazy import)한다. 라이브 클러스터 없이 개발/통합
@@ -376,7 +376,7 @@ class Backend(Protocol):
         query_options=None,
         on_stage=None,
     ) -> int:
-        """[stage_insert 모드] 소스 결과를 Greenplum staging 테이블에 COPY 로 적재한 뒤,
+        """[stage_insert 모드] 소스 결과를 Greenplum staging 테이블에 COPY 로 적재한 다음,
         staging 을 소스로 하는 INSERT 를 실행하고 그 영향 행 수를 돌려준다."""
         ...
 
@@ -1150,12 +1150,12 @@ class ImpalaToGreenplumBackend:
 
     def load_external_s3(self, external_ddl, pre_delete_sql, insert_sql, cleanup_sqls=None,
                          on_stage=None) -> int:
-        """s3_stage Phase 2: PXF 외부테이블 생성 → (선삭제) → target INSERT(coordinator 실행).
+        """s3_stage Phase 2 다. PXF 외부테이블을 만들고 필요하면 선삭제한 뒤 target 으로 INSERT 한다(coordinator 가 실행한다).
 
         coordinator 가 조립한 SQL 을 한 GP 트랜잭션으로 실행한다:
-          external_ddl → (pre_delete_sql?) → insert_sql
+          external_ddl, pre_delete_sql(선택), insert_sql 순이다.
         외부테이블이 staging 을 겸하므로(S3 객체를 세그먼트가 직접 병렬 read) staging heap 없이
-        external→target 으로 곧장 INSERT 한다(local_stage 의 external→staging→target 2단계와
+        external 에서 target 으로 곧장 INSERT 한다(local_stage 가 external, staging, target 을 거치는 2단계와
         다름). 커밋 뒤 cleanup_sqls(외부테이블 DROP)를 별도 트랜잭션에서 best-effort 로 수행한다.
         반환: INSERT 영향 행 수. Impala 는 관여하지 않으므로 impala_dsn 이 없어도 동작한다.
         """
@@ -1206,7 +1206,7 @@ class ImpalaToGreenplumBackend:
         return self._get_s3_client().delete_prefix(prefix)
 
     def segment_host_counts(self) -> dict:
-        """gp_segment_configuration 에서 호스트별 primary(content>=0) 세그먼트 수 {host: S_h} 조회.
+        """gp_segment_configuration 에서 호스트별 primary(content>=0) 세그먼트 수를 {host: S_h} 로 조회한다.
 
         coordinator 가 file:// "호스트당 파일 수 ≤ S_h" 규칙으로 파일을 호스트에 배분하고,
         호스트 존재 검증에도 쓴다. 조회 실패는 상위에서 배분/검증 생략으로 폴백하도록 예외를
@@ -1224,7 +1224,7 @@ class ImpalaToGreenplumBackend:
                 return counts
 
     def segment_hosts(self) -> set:
-        """gp_segment_configuration 의 primary 세그먼트 호스트명 집합(호스트별 카운트 키에서 파생)."""
+        """gp_segment_configuration 의 primary 세그먼트 호스트명 집합을 돌려준다. 호스트별 카운트의 키에서 파생한다."""
         return set(self.segment_host_counts())
 
     def move(self, sub_query, target_table, write_mode, partition_column, partition_values, on_progress=None, query_options=None, on_stage=None) -> int:
