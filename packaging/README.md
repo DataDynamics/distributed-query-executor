@@ -17,7 +17,6 @@
 |---|---|
 | `bin/start-coordinator.sh` / `stop-…` / `restart-…` / `status-…` | **coordinator 만** 제어(nohup + PID) |
 | `bin/start-executor.sh` / `stop-…` / `restart-…` / `status-…` | **executor 만** 제어(포트 인자 선택, 생략 시 전체) |
-| `bin/status.sh` | 전체(coordinator + executor) 상태를 한 번에 조회 |
 | `bin/gp-shell` / `impala-shell` / `s3-ops` | 운영자용 CLI(SQL 셸, S3 조작) |
 | `bin/systemd/` | systemd 유닛(`coordinator.service`·`executor@.service`)과 `install-systemd.sh` |
 | `bin/check-prereqs.sh` | **사전 점검**: OS 패키지(rpm) + 파이썬 휠(.venv) 설치 여부 확인(설치는 안 함) |
@@ -52,7 +51,8 @@ sudo vi /data1/distributed-query-executor/config/config.properties   # executors
 # 3) 서비스 기동 (executor 를 먼저, 그다음 coordinator)
 sudo -u gpadmin /data1/distributed-query-executor/bin/start-executor.sh
 sudo -u gpadmin /data1/distributed-query-executor/bin/start-coordinator.sh
-sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
+sudo -u gpadmin /data1/distributed-query-executor/bin/status-coordinator.sh
+sudo -u gpadmin /data1/distributed-query-executor/bin/status-executor.sh
 ```
 
 0번은 최초 한 번만 하는 준비로 RHEL 9.2 기본 Python 3.9 와 rsync 를 설치한다. 1번이 핵심이라 저장소 루트에서 `install.sh` 를 실행하면 설치가 한 번에 끝난다. 외부 네트워크가 막힌 **에어갭**이라면 미리 받아 둔 휠 묶음 경로를 `WHEELHOUSE` 로 알려 주고, executor 드라이버까지 함께 설치하려면 `INSTALL_EXECUTOR=1` 을 붙인다(자세히는 아래 "오프라인 설치"). 2번에서 설정을 우리 환경에 맞게 고치고, 3번에서 서비스를 띄우고 상태를 확인하면 끝난다.
@@ -66,30 +66,34 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
 - TLS 자리표시 파일 `config/impala-ca.pem` 을 만든다.
 - 런처 스크립트를 `bin/` 에 배치하고 소유권과 권한을 설정한다.
 
-> **업그레이드 시 자산 반영**: `config/`·`templates/`·`customs/` 는 모두 운영자가 편집·추가하는 자산이라 rsync 에서 제외되고 "없을 때만" 시딩된다. 그래서 재설치해도 운영자 편집·인증서·직접 추가한 템플릿·커스텀 함수는 보존되지만, **새 버전이 추가·변경한 기본값·설정 구조·예제도 자동으로 반영되지 않는다.** 이때 `bin/migrate-config.sh` 가 세 트리를 파일별 전략으로 반영한다:
+> **업그레이드 시 자산 반영**: `config/`·`templates/`·`customs/` 는 모두 운영자가 편집·추가하는 자산이라 rsync 에서 제외되고 "없을 때만" 시딩된다. 그래서 재설치해도 운영자 편집·인증서·직접 추가한 템플릿·커스텀 함수는 보존되지만, **새 버전이 추가·변경한 기본값·설정 구조·예제도 자동으로 반영되지 않는다.** 새 버전으로 올릴 때는 아래 절차로 직접 반영한다.
 >
-> | 대상 | 전략 |
+> | 대상 | 어떻게 |
 > |---|---|
-> | `config/config.properties` | 운영자 변경분만 새 기본값 위에 **병합**(값·주석·순서 보존, `.bak`) |
-> | `config/config.yml`·스키마(`*.sql`) | **새 버전으로 교체**(`.bak` 백업) |
-> | `templates/`·`customs/` | 예제는 새 버전 반영(바뀐 파일 `.bak`), **운영자 추가 파일은 보존** |
+> | `config/config.properties` | 새 버전 파일과 diff 를 떠서 **새로 생긴 키만** 설치 트리에 옮긴다. 운영자가 채운 값은 그대로 둔다 |
+> | `config/config.yml`·스키마(`*.sql`) | **새 버전 파일로 교체**한다(교체 전 `.bak` 으로 복사) |
+> | `templates/`·`customs/` | 예제 파일만 새 버전으로 덮고, 운영자가 추가한 파일은 건드리지 않는다 |
 >
-> `config.yml` 을 교체하는 이유가 중요하다 — config.yml 은 값이 아니라 `${변수:기본값}` **구조**라, 새 버전이 추가한 설정은 config.yml 에 자리(placeholder)가 생겨야 실제로 읽힌다(운영자 값은 properties 에 있으므로 안전, config.yml 을 직접 고쳤다면 `.bak` 에서 확인·복원).
->
-> **어디서 실행하나**: 설치 트리에는 "새 버전 원본"이 없으므로 **새로 내려받은 소스 트리에서** 실행해, 그 트리를 새 버전 기준(`--source-base`)으로 삼고 설치 트리(`--deploy-base`)에 반영한다. 기본값은 소스 트리 = 이 도구가 속한 트리, 설치 트리 = `$QUERY_EXECUTOR_CONFIG_DIR` 의 부모(미설정 시 `/data1/distributed-query-executor`)라, 보통은 환경변수만 지정하면 된다.
+> `config.yml` 을 반드시 교체해야 하는 이유가 있다. config.yml 은 값이 아니라 `${변수:기본값}` **구조**라, 새 버전이 추가한 설정은 config.yml 에 자리(placeholder)가 생겨야 실제로 읽힌다. 이걸 빠뜨리면 properties 에 값을 적어도 조용히 무시된다. 운영자 값은 properties 에 있으므로 교체해도 안전하고, config.yml 을 직접 고쳤다면 `.bak` 에서 확인해 옮긴다.
 >
 > ```bash
-> # 새 버전 소스 트리로 이동해서 실행(install.sh 재실행으로 코드는 이미 갱신된 뒤).
-> cd <새-버전-소스-트리>
-> # 1) 무엇이 반영될지 먼저 확인(비밀값은 마스킹, 파일은 안 씀)
-> QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config \
->   bin/migrate-config.sh --dry-run
-> # 2) 실제 반영(config+templates+customs 제자리, 바뀐 파일은 .bak 백업)
-> QUERY_EXECUTOR_CONFIG_DIR=/data1/distributed-query-executor/config \
->   bin/migrate-config.sh
+> NEW=<새-버전-소스-트리>
+> CONF=/data1/distributed-query-executor/config
+>
+> # 1) 무엇이 달라졌는지 먼저 본다(새로 생긴 설정 키 확인)
+> diff -u "$CONF/config.properties" "$NEW/config/config.properties"
+> diff -u "$CONF/config.yml"        "$NEW/config/config.yml"
+>
+> # 2) config.yml 과 스키마는 새 버전으로 교체(백업 후)
+> sudo -u gpadmin cp -a "$CONF/config.yml" "$CONF/config.yml.bak"
+> sudo -u gpadmin cp -a "$NEW/config/config.yml" "$CONF/config.yml"
+> sudo -u gpadmin cp -a "$NEW/config/"*.sql "$CONF/"
+>
+> # 3) 1번 diff 에서 확인한 새 키만 config.properties 에 손으로 추가한다
+> sudo -u gpadmin vi "$CONF/config.properties"
 > ```
 >
-> 트리 루트를 직접 지정하려면 `--deploy-base`(설치)·`--source-base`(새 소스)를 쓴다. config.properties 한 파일만 병합하던 예전 방식(`--old`/`--new`/`--out`)도 하위 호환으로 남아 있다. 반영 후 서비스를 재기동하면 적용된다.
+> 반영 후 서비스를 재기동하면 적용된다. 설정 항목은 `bin/config-tui.sh` 로도 확인할 수 있다 — 항목·기본값·설명을 `config.yml` 에서 자동으로 읽어 보여 주므로, 교체한 config.yml 에 새 항목이 실제로 들어왔는지 눈으로 확인하기 좋다.
 
 ## 오프라인 설치 (에어갭 휠 번들)
 
@@ -265,8 +269,7 @@ psql "$PG" -f /data1/distributed-query-executor/config/postgresql.sql
 
 ```bash
 B=/data1/distributed-query-executor/bin
-# 상태(프로세스 + health) — 전체 / 역할별
-sudo -u gpadmin $B/status.sh
+# 상태(프로세스 + health)
 sudo -u gpadmin $B/status-coordinator.sh
 sudo -u gpadmin $B/status-executor.sh
 

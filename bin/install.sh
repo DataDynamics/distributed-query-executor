@@ -79,7 +79,8 @@ fi
 echo "==> 설정·템플릿·커스텀 함수 배치(최초 1회 시딩) -> $APP_HOME"
 # config/·templates/·customs/ 는 모두 운영자 소유 자산이다(설정 편집·사이트 템플릿·커스텀 쿼리
 # 함수 추가). 그래서 위 rsync 에서 세 디렉터리를 제외하고, 최초 설치 때만 소스에서 통째로 시딩한다.
-# 업그레이드 시 새 버전 반영은 migrate-config.sh 가 담당한다(운영자 변경분·추가 파일 보존, .bak 백업).
+# 업그레이드 때 새 버전이 바꾼 기본값·설정 구조는 자동으로 들어오지 않는다. 운영자가 새 소스
+# 트리의 config/ 와 비교해 필요한 항목만 직접 옮긴다(packaging/README.md 의 업그레이드 절 참고).
 mkdir -p "$CONF_DIR" "$LOG_DIR" "$RUN_DIR" "$BIN_DIR"
 if [[ ! -f "$CONF_DIR/config.yml" ]]; then
     cp -a "$SRC_DIR/config/." "$CONF_DIR/"       # properties·yml·스키마
@@ -112,10 +113,7 @@ cat <<EOF
   - 설정:        $CONF_DIR/config.properties , $CONF_DIR/config.yml
   - Impala TLS:  $CONF_DIR/impala-ca.pem        (실제 CA 인증서로 교체)
 
-상태(전체):
-  sudo -u $APP_USER $BIN_DIR/status.sh
-
-기동/중지/재기동(역할별). executor 를 먼저 띄우고 coordinator 를 띄운다:
+기동/중지/재기동/상태(역할별). executor 를 먼저 띄우고 coordinator 를 띄운다:
   sudo -u $APP_USER $BIN_DIR/start-coordinator.sh
   sudo -u $APP_USER $BIN_DIR/start-executor.sh   [PORT...]   # 포트 생략 시 EXECUTOR_PORTS 전체
   sudo -u $APP_USER $BIN_DIR/stop-coordinator.sh

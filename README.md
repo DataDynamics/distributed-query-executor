@@ -88,7 +88,7 @@ src/
   coordinator/   # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/      # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
   tools/         # 운영자용 CLI(gp-shell·impala-shell·s3-ops)
-bin/             # 런처·설치 스크립트(install·start/stop/status·env·check-prereqs·*-tui·migrate-config)
+bin/             # 런처·설치 스크립트(install·start/stop/restart/status·env·check-prereqs·*-tui)
                  #  + 운영자 CLI 래퍼(gp-shell·impala-shell·s3-ops)
 config/          # config.properties + config.yml 기본값 + templates/ + 스키마(*.sql)
 templates/       # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2)
@@ -373,19 +373,19 @@ sudo ./bin/install.sh                                    # 에어갭: WHEELHOUSE
 B=/data1/distributed-query-executor/bin
 sudo -u gpadmin $B/start-executor.sh        # executor 를 먼저 띄웁니다(포트 생략 시 전체)
 sudo -u gpadmin $B/start-coordinator.sh     # 그다음 coordinator
-sudo -u gpadmin $B/status.sh                # 상태(프로세스 + health)
+sudo -u gpadmin $B/status-coordinator.sh    # 상태(프로세스 + health)
 sudo -u gpadmin $B/restart-executor.sh      # 재기동(중지 → 종료 대기 → 기동)
 sudo -u gpadmin $B/stop-coordinator.sh
 ```
 
 런처는 역할별로 나뉩니다. `start-coordinator.sh` 와 `start-executor.sh [PORT...]`, 그리고 같은
-짝의 `stop-*`·`restart-*`·`status-*` 가 있고, 전체 상태만 한 번에 보는 `status.sh` 가 있습니다.
-기동은 executor 를 먼저, 중지는 coordinator 를 먼저 하는 것이 안전합니다. 재기동은 중지 → 종료
-대기 → 기동 순이며, executor 는 graceful drain(기본 25초)으로 진행 중 task 를 정리한 뒤
-교체됩니다. systemd 로 관리하려면 `bin/systemd/` 의 유닛과 `install-systemd.sh` 를 씁니다.
+짝의 `stop-*`·`restart-*`·`status-*` 가 있습니다. 기동은 executor 를 먼저, 중지는 coordinator 를
+먼저 하는 것이 안전합니다. 재기동은 중지 → 종료 대기 → 기동 순이며, executor 는 graceful
+drain(기본 25초)으로 진행 중 task 를 정리한 뒤 교체됩니다. systemd 로 관리하려면 `bin/systemd/`
+의 유닛과 `install-systemd.sh` 를 씁니다.
 
 업그레이드 시 운영자 소유 자산(`config/`·`templates/`·`customs/`)은 rsync 에서 제외되고 없을 때만
-시딩되므로 편집·추가한 내용이 유지됩니다. 새 버전이 추가한 기본값·설정 구조는 새 소스 트리에서
-`bin/migrate-config.sh` 로 반영합니다(운영자 변경분만 병합, `.bak` 백업, `--dry-run` 지원). 에어갭
-설치는 `packaging/wheels/`(py39·py311) 휠 번들로 `--no-index` 설치합니다. 배포 절차 전체는
-[`packaging/README.md`](packaging/README.md) 를 참고하세요.
+시딩되므로 편집·추가한 내용이 유지됩니다. 다만 새 버전이 추가한 기본값·설정 구조는 자동으로
+들어오지 않으므로, 새 소스 트리와 `diff` 를 떠서 `config.yml`·스키마는 교체하고 새로 생긴
+properties 키만 옮깁니다(절차는 [`packaging/README.md`](packaging/README.md) 의 업그레이드 절).
+에어갭 설치는 `packaging/wheels/`(py39·py311) 휠 번들로 `--no-index` 설치합니다.

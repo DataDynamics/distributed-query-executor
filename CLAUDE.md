@@ -18,7 +18,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 637개(+pandas 미설치 시 5 skip).
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 626개(+pandas 미설치 시 5 skip).
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -262,15 +262,12 @@ executor 를 설정 목록의 index 로만 지정하는 allowlist 방식이라 S
 프록시와 같은 관례). 두 TUI 모두 순수 로직이 curses 와 무관해 테스트할 수 있고, 에어갭을 고려해
 표준 라이브러리 curses 만 쓴다.
 
-**`core/config_migrate.py`** 는 업그레이드할 때 운영자 자산을 새 버전에 맞춰 반영한다(`python -m
-core.config_migrate`, `bin/migrate-config.sh`). 대상은 config/·templates/·customs/ 세 트리인데,
-이들은 install.sh 의 rsync 에서 제외되고 최초 1회만 시딩되므로 재설치만으로는 새 버전의 변경이
-들어가지 않는다. `config.properties` 는 운영자가 바꾼 값만 새 기본값 위에 병합하고
-(`merge_properties_lines` — 주석과 순서를 보존하며 없는 키는 마커 아래에 추가), `config.yml` 과
-스키마·예제는 새 버전으로 교체한다(`.bak` 백업). 설치 트리에만 있는 파일(운영자가 추가한
-템플릿·커스텀 함수·인증서)은 지우지 않는다. **`config.yml` 을 교체해야 새 버전이 추가한 설정
-구조가 반영된다** — 이걸 빠뜨려 새 설정이 조용히 무시되던 버그를 이 도구로 해결했다. `--dry-run`
-으로 보고만 받을 수 있고 비밀값은 마스킹한다.
+업그레이드 때 설정을 반영하는 자동화는 두지 않는다. config/·templates/·customs/ 는 install.sh 의
+rsync 에서 제외되고 최초 1회만 시딩되므로 재설치만으로는 새 버전의 변경이 들어가지 않는데, 이를
+`diff` 로 확인해 운영자가 직접 옮긴다(절차는 packaging/README.md). 여기서 놓치기 쉬운 것이
+**`config.yml` 을 교체해야 새 버전이 추가한 설정 구조가 반영된다**는 점이다. config.yml 은 값이
+아니라 `${변수:기본값}` 자리를 담은 구조라, 자리가 없으면 properties 에 값을 적어도 조용히
+무시된다.
 
 ### 운영자 CLI(`src/tools/`)
 

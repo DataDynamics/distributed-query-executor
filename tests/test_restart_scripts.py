@@ -47,9 +47,15 @@ def test_restart_scripts_는_env_와_stop_start_를_엮는다():
 
 
 def test_전체_제어_스크립트는_남아_있지_않다():
-    """start/stop/restart.sh 를 지운 뒤 문서나 설치 스크립트에 참조가 남지 않게 한다."""
-    for name in ("start.sh", "stop.sh", "restart.sh"):
+    """전체를 한 번에 다루던 스크립트를 지운 뒤 다시 흘러들어오지 않게 막는다.
+
+    제어는 역할별(start/stop/restart/status-{coordinator,executor})로만 한다.
+    설정 마이그레이션 자동화도 없앴으므로 그 래퍼와 모듈이 되살아나지 않는지 함께 본다.
+    """
+    for name in ("start.sh", "stop.sh", "restart.sh", "status.sh", "migrate-config.sh"):
         assert not (BIN / name).exists(), f"{name} 이 아직 남아 있다"
+    src_core = Path(__file__).resolve().parent.parent / "src" / "core"
+    assert not (src_core / "config_migrate.py").exists()
 
 
 def test_systemd_자산은_bin_systemd_아래에_모여_있다():
