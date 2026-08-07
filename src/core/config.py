@@ -56,6 +56,36 @@ def _collect_prefix(prefix: str) -> dict:
     return {k[len(prefix):]: v for k, v in _props.items() if k.startswith(prefix)}
 
 
+def _collect_query_funcs() -> dict:
+    """``query.func.<name>.module`` / ``query.func.<name>.config.*`` 를 소스 이름별로 모은다.
+
+    query-execute 의 소스 실행을 **데이터소스마다 다른 함수**에 위임하기 위한 설정이다::
+
+        query.func.trino.module=customs.query_funcs.trino_runner:run
+        query.func.trino.config.host=trino.example.com
+        query.func.impala.module=customs.query_funcs.impala_runner:run
+
+    반환은 ``{"trino": {"module": ..., "config": {...}}, ...}``. 이름 없는 단일 형태
+    (``query.func.module``)는 여기 포함되지 않고 ``query_func_module`` 로 따로 읽혀
+    **소스별 항목이 없을 때의 폴백**이 된다(기존 배포 무변경).
+    """
+    out: dict[str, dict] = {}
+    head, tail = "query.func.", ".module"
+    for key, val in _props.items():
+        if not (key.startswith(head) and key.endswith(tail)):
+            continue
+        name = key[len(head):-len(tail)].strip().lower()
+        # 이름이 비면 단일 형태(query.func.module)이고, 점이 남아 있으면 더 깊은 키다.
+        # 'config' 는 config.* 프리픽스와 충돌하므로 소스 이름으로 쓰지 않는다.
+        if not name or "." in name or name == "config":
+            continue
+        out[name] = {
+            "module": str(val).strip(),
+            "config": _collect_prefix(f"{head}{name}.config."),
+        }
+    return out
+
+
 def _get(section: str, key: str, default=None):
     """최상위 ``section`` 아래의 ``key`` 값을 읽는다.
 
@@ -417,6 +447,10 @@ class Settings:
         # YAML 스키마가 아니라 raw properties 를 직접 읽어 키를 자유롭게 추가할 수 있게 한다.
         self.query_func_module: str = str(_props.get("query.func.module", "")).strip()
         self.query_func_config: dict = _collect_prefix("query.func.config.")
+        # 데이터소스별 실행 함수: query.func.<name>.module + query.func.<name>.config.*.
+        # coordinator 가 /query-run 에 datasource 를 실어 보내면 executor 가 이 표에서 함수를
+        # 고른다(항목이 없으면 위의 단일 query.func.module 로 폴백 — 기존 배포 무변경).
+        self.query_func_by_source: dict = _collect_query_funcs()
         # Greenplum (target) — 읽어온 데이터를 적재할 대상 DB 접속 DSN.
         self.greenplum_dsn: str = _get_nested("executor", "greenplum", "dsn", "")
         # source→target 복사 시 한 번에 처리할 행 수. 메모리 사용량과 처리량의 균형값.

@@ -751,6 +751,42 @@ query.func.config.statement_timeout_s=60
 정리하면 이관 SELECT(`/jobs`)는 `source.type=impala`+`impala.*`, 이관 INSERT 는 `greenplum.dsn`,
 query-execute 는 요청 `datasource:"trino"` + `query.func.module` + `query.func.config.*` 를 쓴다.
 
+### 템플릿마다 다른 엔진 쓰기 (manifest `datasource`)
+
+요청마다 `datasource` 를 적는 대신 **템플릿이 자기 실행 엔진을 선언**할 수 있다. 결정 순서는
+**요청 > manifest > `source.type`** 이다.
+
+```yaml
+# templates/order_search/manifest.yml
+datasource: trino          # 이 템플릿의 SELECT 는 Trino 에서 실행
+```
+
+엔진마다 실행 함수를 다르게 두려면 소스별 설정을 쓴다. coordinator 가 `/query-run` 에
+`datasource` 를 실어 보내고 executor 가 여기서 함수를 고른다:
+
+```properties
+query.func.trino.module=customs.query_funcs.trino_runner:run
+query.func.trino.config.host=trino.example.com
+query.func.trino.config.catalog=hive
+query.func.impala.module=customs.query_funcs.impala_runner:run
+query.func.impala.config.host=impala.example.com
+```
+
+그 이름의 항목이 없으면 **단일 `query.func.module` 로 폴백**하므로, 소스별 설정을 안 쓰는
+기존 배포는 그대로 동작한다. 현재 어느 함수가 뜨는지는 executor 대시보드 환경설정 탭의
+`query.func.module` / `query.func.by_source` 행에서 확인한다.
+
+> **`datasource` 와 `sql_dialect` 는 다른 축이다.** 전자는 *실행 엔진*, 후자는 *sqlglot 파서*다.
+> `sql_dialect` 를 생략하면 datasource 에서 유도되지만(trino→trino, greenplum/history→postgres),
+> **impala 는 유도하지 않는다** — sqlglot 에 impala 방언이 없고 Impala 문법이 한 방언으로 덮이지
+> 않기 때문이다(백틱 식별자는 hive 만, `trunc(current_date() - interval 7 day)` 는 trino 만 읽는다).
+> 그래서 impala 는 전역 `query.sql_dialect`(기본 hive)를 따르고, hive 가 못 읽는 문법을 쓰는
+> 템플릿만 manifest 에 `sql_dialect` 를 직접 적는다(`templates/daily_sales_interval` 이 그 예).
+
+**이관(`/jobs`)에서는 impala 외 `datasource` 를 거부한다**(`422 TEMPLATE_DATASOURCE_UNSUPPORTED`).
+이관의 소스는 Impala 전용이라, 선언을 무시하면 Trino 로 도는 줄 알면서 Impala 로 실행되기 때문이다.
+결과 반환이 목적이면 `/query-execute` 를 쓴다.
+
 ### 커스텀 실행 함수
 
 query-execute 의 `datasource:"trino"` 요청은 executor 가 `query.func.module` 로 지정한 외부

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator.parser import QueryValidationError, validate_and_parse
+from coordinator.parser import (
+    DIALECT,
+    QueryValidationError,
+    resolve_dialect,
+    validate_and_parse,
+)
 
 PCOL = "dt"
 
@@ -105,3 +110,41 @@ def test_missing_partition_column_arg():
     with pytest.raises(QueryValidationError) as exc:
         validate_and_parse("SELECT a FROM t WHERE dt IN ('1')", "")
     assert exc.value.code == "MISSING_PARTITION_COLUMN"
+
+
+# ----------------------- datasource → 방언 유도(resolve_dialect) -----------------------
+
+
+def test_resolve_dialect_explicit_wins():
+    # 명시값(요청 sql_dialect > manifest sql_dialect)이 항상 이긴다.
+    assert resolve_dialect("hive", "trino", "postgres") == "hive"
+    assert resolve_dialect("  trino  ", "impala") == "trino"
+
+
+def test_resolve_dialect_derives_from_datasource():
+    assert resolve_dialect(None, "trino") == "trino"
+    assert resolve_dialect(None, "greenplum") == "postgres"
+    assert resolve_dialect(None, "history") == "postgres"
+    assert resolve_dialect(None, "TRINO") == "trino"  # 대소문자 무관
+
+
+def test_resolve_dialect_impala_falls_back_to_global_default():
+    """impala 는 sqlglot 방언이 없어 유도하지 않는다 — 전역 기본을 그대로 따른다."""
+    assert resolve_dialect(None, "impala") == DIALECT          # 기본 hive
+    assert resolve_dialect(None, "impala", "trino") == "trino"  # 전역 설정을 덮어쓰지 않는다
+    assert resolve_dialect(None, None) == DIALECT
+    assert resolve_dialect(None, "unknown_engine", "hive") == "hive"
+
+
+def test_impala_syntax_needs_dialect_override():
+    """impala 를 유도하지 않는 이유의 근거 — 한 방언으로 Impala 문법이 다 덮이지 않는다."""
+    import sqlglot
+
+    backticks = "SELECT `dt` FROM `db`.`sales` WHERE `dt` IN ('2026-08-07')"
+    trunc_interval = "SELECT 1 FROM t WHERE dt BETWEEN trunc(current_date() - interval 7 day) AND trunc(current_date())"
+    sqlglot.parse_one(backticks, read="hive")          # hive 는 백틱을 읽고
+    with pytest.raises(Exception):
+        sqlglot.parse_one(backticks, read="trino")     # trino 는 못 읽는다
+    sqlglot.parse_one(trunc_interval, read="trino")    # trino 는 1-인자 trunc 를 읽고
+    with pytest.raises(Exception):
+        sqlglot.parse_one(trunc_interval, read="hive")  # hive 는 못 읽는다

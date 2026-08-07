@@ -64,9 +64,9 @@ from .models import (
 )
 from .monitor import HealthMonitor
 from .parser import (
-    DIALECT,
     QueryValidationError,
     is_row_returning,
+    resolve_dialect,
     validate_and_parse,
     validate_select_query,
 )
@@ -351,6 +351,29 @@ def _build_fanout(
         sub_queries.append(SubQuery(sql=select_sql, partition_values=marks))
     req.sql = sub_queries[0].sql  # original_sql 기록/필수필드 검증용 대표값
     return sub_queries
+
+
+# /jobs(이관)가 소스로 받아들이는 datasource. executor backend 가 Impala 전용이므로
+# 그 외 값을 선언한 템플릿은 이관 경로에서 거부한다(query-execute 는 제한 없음).
+_JOB_SOURCE_DATASOURCES = ("impala", "source")
+
+
+def _reject_unsupported_datasource(template_id: str, engine: TemplateEngine) -> None:
+    """manifest 의 ``datasource`` 가 이관 경로에서 실행 불가하면 422 로 막는다.
+
+    ``datasource`` 는 query-execute 가 실행 엔진을 고르는 스칼라다. 이관(``/jobs``)의 소스는
+    executor backend 가 Impala 로 고정돼 있어(``_source_connect``) 다른 값을 실행할 수단이
+    없다. 선언을 조용히 무시하면 "Trino 로 도는 줄 알았는데 Impala 로 돌았다" 는 오실행이
+    되므로, 여기서 명시적으로 실패시킨다. 미선언(대부분의 이관 템플릿)은 그대로 통과한다.
+    """
+    ds = str(engine.load_manifest(template_id).defaults.get("datasource") or "").strip().lower()
+    if ds and ds not in _JOB_SOURCE_DATASOURCES:
+        raise QueryValidationError(
+            "TEMPLATE_DATASOURCE_UNSUPPORTED",
+            f"템플릿 {template_id} 의 datasource={ds} 는 이관(/jobs)에서 실행할 수 없습니다. "
+            f"이관의 소스는 Impala 전용입니다(허용: {', '.join(_JOB_SOURCE_DATASOURCES)}). "
+            "결과 반환 실행이 목적이면 POST /query-execute 를 쓰세요.",
+        )
 
 
 def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
@@ -674,6 +697,11 @@ def create_app(
         # 날짜 fan-out 모드: task_params 가 있으면 IN 값 분할 대신 '하루 1 task' 로 펼친다
         # (_build_fanout 이 구간 도출 + task 별 SELECT 렌더 + req 필드 주입까지 끝낸다).
         fanout = bool(req.task_params)
+        # 템플릿이 impala 아닌 datasource 를 선언했으면 이관 경로에서는 거부한다. /jobs 의
+        # 소스는 Impala 전용이라(executor backend), 선언만 받고 무시하면 사용자가 Trino 로
+        # 도는 줄 아는 사이 Impala 로 실행되는 조용한 오실행이 된다.
+        if req.template_id and template_engine is not None:
+            _reject_unsupported_datasource(req.template_id, template_engine)
         if fanout:
             sub_queries = _build_fanout(
                 req, template_engine, now_dt().date(),
@@ -1510,7 +1538,12 @@ def create_app(
             for url in order:
                 target = url.rstrip("/") + "/query-run"
                 try:
-                    resp = await http.post(target, json={"sql": sql, "limit": limit})
+                    # datasource 를 함께 보내면 executor 가 query.func.<name>.module 로 함수를
+                    # 고른다(미설정이면 단일 query.func.module 폴백). 구버전 executor 는 이
+                    # 필드를 무시하므로 하위 호환.
+                    resp = await http.post(
+                        target, json={"sql": sql, "limit": limit, "datasource": name}
+                    )
                 except httpx.HTTPError as e:
                     last_err = e
                     logger.warning("query-execute 프록시 실패, 다음 executor 로 failover: %s (%s)", url, e)
@@ -1549,13 +1582,29 @@ def create_app(
         limit = clamp_limit(req.limit)
         params = _query_params_to_dict(req.params)
 
+        # manifest 의 스칼라 기본값(datasource/sql_dialect). load_manifest 는 캐시되므로
+        # 렌더 경로가 다시 읽어도 파일 I/O 가 늘지 않는다.
+        tpl_defaults = template_engine.load_manifest(req.template_id).defaults
+
         # 1) 템플릿에서 select 조각만 렌더(TemplateError → 422 핸들러).
         sql = template_engine.render_query(req.template_id, params)
-        # 2) 경량 검증: 단일 행 반환 SELECT 인지(다중 문/비-SELECT 차단, QueryValidationError → 422).
-        validate_select_query(sql, dialect=req.sql_dialect or DIALECT)
 
-        # 3) 데이터소스 결정(요청 > 서버 source.type).
-        datasource = (req.datasource or getattr(settings, "source_type", "impala") or "impala").lower()
+        # 2) 데이터소스 결정(요청 > manifest > 서버 source.type). 검증 방언이 여기서
+        #    유도되므로 렌더 검증보다 먼저 정한다.
+        datasource = (
+            req.datasource
+            or tpl_defaults.get("datasource")
+            or getattr(settings, "source_type", "impala")
+            or "impala"
+        ).strip().lower()
+        # 3) 경량 검증: 단일 행 반환 SELECT 인지(다중 문/비-SELECT 차단, QueryValidationError → 422).
+        #    방언은 요청 > manifest > datasource 유도(trino→trino 등) > 전역 기본 순.
+        dialect = resolve_dialect(
+            req.sql_dialect or tpl_defaults.get("sql_dialect"),
+            datasource,
+            settings.query_default_dialect,
+        )
+        validate_select_query(sql, dialect=dialect)
 
         # 4) 실행 라우팅(2갈래로 통일):
         #    - greenplum/history: 메타/타깃 DB → coordinator 가 직접 실행(psycopg).

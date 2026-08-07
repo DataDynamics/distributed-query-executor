@@ -56,10 +56,13 @@ _ROLES_BY_MODE: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 # manifest 가 기본값을 줄 수 있는 스칼라 필드(요청이 명시하면 요청이 이긴다). app.py 병합 대상.
+# ``datasource`` 는 **query-execute 전용**이다 — 그 템플릿의 SELECT 를 어느 엔진에서 실행할지
+# (impala|trino|greenplum|history) 선언한다. /jobs(이관)의 소스는 Impala 전용이라 이관 경로가
+# impala 아닌 값을 만나면 조용히 Impala 로 도는 대신 422 로 거부한다(app.py ``_reject_...``).
 _SCALAR_DEFAULT_KEYS = (
     "exec_mode", "partition_column", "target_table", "staging_table",
     "write_mode", "split_strategy", "failure_policy", "parallelism",
-    "sql_dialect", "strict_validation", "task_bound",
+    "sql_dialect", "strict_validation", "task_bound", "datasource",
 )
 
 

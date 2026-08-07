@@ -367,3 +367,118 @@ def test_query_execute_unconfigured_greenplum_400(qe_client, monkeypatch):
         "datasource": "greenplum",
     })
     assert resp.status_code == 400
+
+
+# ───────────── manifest datasource + 방언 유도(요청 > manifest > source.type) ─────────────
+
+
+def _recording_client_factory(recorder: list):
+    """`/query-run` 호출의 (url, 본문)을 기록하는 가짜 httpx.AsyncClient.
+
+    `_fake_client_factory` 는 URL 만 모으므로, datasource 가 executor 까지 실려 가는지
+    확인하려면 본문이 필요해 따로 둔다.
+    """
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            recorder.append((url, json))
+            return _Resp(payload={"limit": 100, "columns": ["a"], "rows": [[1]],
+                                  "row_count": 1, "truncated": False, "elapsed_ms": 1.0})
+
+    return _FakeClient
+
+
+def _tpl(tmp_path, name: str, header: str, select: str = "SELECT a FROM t") -> None:
+    """테스트용 최소 템플릿(manifest + select 조각)을 만든다."""
+    d = tmp_path / name
+    d.mkdir()
+    (d / "manifest.yml").write_text(
+        f"id: {name}\nexec_mode: copy\npartition_column: dt\ntarget_table: public.t\n"
+        f"strict_validation: false\n{header}files: {{select: s.j2}}\n",
+        encoding="utf-8",
+    )
+    (d / "s.j2").write_text(select + "\n", encoding="utf-8")
+
+
+def test_manifest_datasource_selects_engine_and_is_sent_to_executor(qe_client, monkeypatch, tmp_path):
+    """manifest 의 datasource 가 실행 엔진을 정하고, executor 까지 실려 간다."""
+    from coordinator.config import settings
+    import coordinator.app as ca
+    _tpl(tmp_path, "ds_trino", "datasource: trino\n")
+    monkeypatch.setattr(settings, "template_dir", str(tmp_path), raising=False)
+    monkeypatch.setattr(core_config.settings, "source_type", "impala", raising=False)
+    calls: list = []
+    monkeypatch.setattr(ca.httpx, "AsyncClient", _recording_client_factory(calls))
+    client = qe_client(executors=["http://exec1:8001"])
+    resp = client.post("/query-execute", json={"template_id": "ds_trino", "params": []})
+    assert resp.status_code == 200, resp.text
+    # source.type=impala 인데도 manifest 의 trino 가 이겼다.
+    assert resp.json()["datasource"] == "trino"
+    url, body = calls[0]
+    assert url.endswith("/query-run") and body["datasource"] == "trino"
+
+
+def test_request_datasource_beats_manifest(qe_client, monkeypatch, tmp_path):
+    """요청의 datasource 는 manifest 기본값을 이긴다."""
+    from coordinator.config import settings
+    import coordinator.app as ca
+    _tpl(tmp_path, "ds_trino2", "datasource: trino\n")
+    monkeypatch.setattr(settings, "template_dir", str(tmp_path), raising=False)
+    calls: list = []
+    monkeypatch.setattr(ca.httpx, "AsyncClient", _recording_client_factory(calls))
+    client = qe_client(executors=["http://exec1:8001"])
+    resp = client.post("/query-execute", json={
+        "template_id": "ds_trino2", "params": [], "datasource": "impala",
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["datasource"] == "impala"
+    assert calls[0][1]["datasource"] == "impala"
+
+
+def test_datasource_derives_dialect_for_trino_only_syntax(qe_client, monkeypatch, tmp_path):
+    """datasource=trino 면 sql_dialect 생략에도 trino 로 파싱된다(hive 면 파싱 실패할 SQL)."""
+    from coordinator.config import settings
+    import coordinator.app as ca
+    # trunc(date) 1-인자 + interval 은 hive 파서가 거부하고 trino 파서만 읽는다.
+    # 1-인자 trunc(date) + 따옴표 없는 interval — Impala 관용 문법. trino 파서만 읽고 hive 는 거부한다.
+    sql = ("SELECT a FROM t WHERE dt BETWEEN trunc(current_date() - interval 7 day) "
+           "AND trunc(current_date())")
+    _tpl(tmp_path, "ds_dialect", "datasource: trino\n", select=sql)
+    _tpl(tmp_path, "ds_dialect_hive", "datasource: impala\n", select=sql)
+    monkeypatch.setattr(settings, "template_dir", str(tmp_path), raising=False)
+    monkeypatch.setattr(core_config.settings, "query_default_dialect", "hive", raising=False)
+    calls: list = []
+    monkeypatch.setattr(ca.httpx, "AsyncClient", _recording_client_factory(calls))
+    client = qe_client(executors=["http://exec1:8001"])
+    # trino 유도 → 통과
+    assert client.post("/query-execute", json={
+        "template_id": "ds_dialect", "params": []}).status_code == 200
+    # impala 는 유도하지 않으므로 전역 기본(hive)으로 파싱 → 같은 SQL 이 422
+    bad = client.post("/query-execute", json={"template_id": "ds_dialect_hive", "params": []})
+    assert bad.status_code == 422, bad.text
+
+
+def test_manifest_sql_dialect_beats_datasource_derivation(qe_client, monkeypatch, tmp_path):
+    """manifest 의 sql_dialect 는 datasource 유도를 이긴다(Impala 실행 + trino 파싱 조합)."""
+    from coordinator.config import settings
+    import coordinator.app as ca
+    # 1-인자 trunc(date) + 따옴표 없는 interval — Impala 관용 문법. trino 파서만 읽고 hive 는 거부한다.
+    sql = ("SELECT a FROM t WHERE dt BETWEEN trunc(current_date() - interval 7 day) "
+           "AND trunc(current_date())")
+    _tpl(tmp_path, "ds_override", "datasource: impala\nsql_dialect: trino\n", select=sql)
+    monkeypatch.setattr(settings, "template_dir", str(tmp_path), raising=False)
+    monkeypatch.setattr(core_config.settings, "query_default_dialect", "hive", raising=False)
+    calls: list = []
+    monkeypatch.setattr(ca.httpx, "AsyncClient", _recording_client_factory(calls))
+    client = qe_client(executors=["http://exec1:8001"])
+    resp = client.post("/query-execute", json={"template_id": "ds_override", "params": []})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["datasource"] == "impala"

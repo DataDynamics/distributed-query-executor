@@ -216,7 +216,12 @@ class QueryRunRequest(BaseModel):
     coordinator 가 템플릿을 렌더·검증한 SELECT 를 그대로 넘긴다. executor 는 설정
     (``query.func.module`` + ``query.func.config.*``)으로 지정한 커스텀 함수에 이 SQL 을
     실행 위임한다 — executor 는 Trino 등 백엔드를 직접 알지 않는다.
+
+    ``datasource`` 가 오면 **그 이름의 함수**(``query.func.<name>.module``)를 고른다. 없으면
+    단일 ``query.func.module`` 로 폴백하므로, 이 필드를 안 보내는 구버전 coordinator 와도
+    호환된다(필드 미지정 = 기존 동작).
     """
 
     sql: str
     limit: int = 100
+    datasource: Optional[str] = None
