@@ -266,3 +266,67 @@ async def test_s3_stage_job_without_datasource_keeps_impala_path(monkeypatch):
                 break
             await asyncio.sleep(0.01)
     assert st["status"] == "DONE", st
+
+
+# ─────────────── 예제 템플릿(sales_migration_s3_trino) ───────────────
+
+
+def _repo_tpl_client(runner, store, monkeypatch):
+    """저장소의 예제 템플릿 디렉터리를 쓰는 coordinator 클라이언트."""
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from coordinator.app import create_app
+    from coordinator.config import settings
+
+    monkeypatch.setattr(settings, "template_enabled", True, raising=False)
+    monkeypatch.setattr(
+        settings, "template_dir",
+        str(Path(__file__).resolve().parent.parent / "templates"), raising=False,
+    )
+    monkeypatch.setattr(settings, "template_auto_reload", False, raising=False)
+    monkeypatch.setattr(settings, "template_func_modules", [], raising=False)
+    return TestClient(create_app(runner=runner, store=store))
+
+
+def test_example_trino_s3_template_plans_correctly(runner, store, monkeypatch):
+    """예제 템플릿이 Trino 소스 + s3_stage 로 계획된다(렌더·방언·분할·필수필드).
+
+    Trino 방언 SELECT 는 hive 파서로는 파싱되지 않으므로, 이 계획이 성립한다는 것 자체가
+    datasource=trino → trino 방언 유도가 동작한다는 증거다.
+    """
+    client = _repo_tpl_client(runner, store, monkeypatch)
+    resp = client.post("/jobs", json={
+        "template_id": "sales_migration_s3_trino",
+        "params": [{"name": "start_dt", "value": "2026-07-01"},
+                   {"name": "end_dt", "value": "2026-07-03"}],
+        "parallelism": 3, "dry_run": True,
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["exec_mode"] == "s3_stage"
+    assert body["datasource"] == "trino"      # manifest 선언이 계획에 반영됐다
+    assert body["task_count"] == 3            # 날짜 3개 → 3 task 로 분할
+    task = body["tasks"][0]
+    # Trino 3단 테이블 이름과 DATE 리터럴이 살아 있다(varchar→date 암묵 변환 없음 대응).
+    assert "hive.default.sales" in task["sub_query"]
+    assert "AS DATE)" in task["sub_query"]
+    # s3_stage 필수 3종이 모두 렌더됐다.
+    assert task["staging_table"] and task["external_columns"] and task["insert_sql"]
+    # Phase 2(GP INSERT)는 소스 엔진과 무관하게 그대로다.
+    assert "INSERT INTO public.sales" in task["insert_sql"]
+
+
+def test_example_trino_s3_template_partition_values_are_gp_compatible(runner, store, monkeypatch):
+    """파티션 값은 GP 선삭제 DELETE 에도 그대로 쓰이므로 표준 SQL 리터럴이어야 한다."""
+    client = _repo_tpl_client(runner, store, monkeypatch)
+    body = client.post("/jobs", json={
+        "template_id": "sales_migration_s3_trino",
+        "params": [{"name": "start_dt", "value": "2026-07-01"},
+                   {"name": "end_dt", "value": "2026-07-01"}],
+        "dry_run": True,
+    }).json()
+    values = body["tasks"][0]["partition_values"]
+    # CAST('...' AS DATE) 는 Trino·PostgreSQL/Greenplum 양쪽에서 유효한 표준 표기다.
+    assert values == ["CAST('2026-07-01' AS DATE)"]

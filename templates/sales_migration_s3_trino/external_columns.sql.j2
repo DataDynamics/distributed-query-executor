@@ -1,0 +1,5 @@
+{# PXF S3 외부테이블의 컬럼 정의(sales_migration_s3 과 동일 — Phase 2 는 소스 엔진과 무관).
+   coordinator 가 Phase 2 에 CREATE EXTERNAL TABLE [<schema>.]s3ext_<job_id> (...) 에 그대로 쓴다.
+   SELECT 출력 컬럼 순서/타입과 일치해야 하며(CSV 위치 기반 매핑), CSV 로 직렬화되므로
+   GP 쪽 타입으로 선언한다. #}
+user_id bigint, amount numeric, region text, dt date

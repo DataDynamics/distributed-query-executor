@@ -1,0 +1,6 @@
+{# 외부테이블(=staging) → target 적재 INSERT. Phase 2 는 Greenplum 에서 도는 SQL 이므로
+   소스가 Trino 든 Impala 든 완전히 동일하다(GP 방언). staging_table 이름은 coordinator 가
+   job 고유 외부테이블 이름([<schema>.]s3ext_<job_id>)으로 치환한다. #}
+INSERT INTO {{ target_table }} (user_id, amount, region, dt)
+SELECT user_id, amount, region, dt
+FROM {{ staging_table }}

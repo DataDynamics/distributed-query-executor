@@ -858,6 +858,9 @@ def create_app(
                 content={
                     "dry_run": True,
                     "exec_mode": req.exec_mode,
+                    # 확정된 소스 엔진. 제출 전에 "어느 엔진이 SELECT 를 읽는지" 를
+                    # 계획 단계에서 확인할 수 있어야 오실행을 미리 잡는다.
+                    "datasource": job_datasource,
                     "partition_column": req.partition_column,
                     "target_table": req.target_table,
                     "task_count": len(plan),

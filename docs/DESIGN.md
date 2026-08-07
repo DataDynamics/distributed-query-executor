@@ -545,7 +545,7 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **DELETE 선삭제 명시 제어(`pre_delete`)**: 요청 필드 `pre_delete`(`Optional[bool]`)로 Phase 2 선삭제를 오버라이드한다 — `null`(기본)이면 `write_mode`를 따르고(`overwrite_partitions`→DELETE), `true`/`false`면 `write_mode`와 무관하게 강제/생략. `_run_s3_load`에서 `do_delete = job.pre_delete if not None else (write_mode=="overwrite_partitions")`로 결정한다.
 - **fan-out 연동**: 날짜 fan-out(§18.8)도 `s3_stage`를 지원한다(하루=1 task 업로드 → coordinator가 job 프리픽스로 한 번에 적재, append).
 - **SQL 조립**: `src/core/s3_stage.py`(순수 함수 — 객체 키·job 프리픽스·외부테이블 이름·PXF LOCATION·외부테이블 DDL·선삭제·정리 DDL). 업로더는 `src/executor/s3_client.py`(boto3 지연 임포트, `delete_prefix` 포함).
-- **예제/설정**: `templates/sales_migration_s3/`, `config.yml`의 `executor.s3.*`(bucket/prefix/endpoint_url/자격증명/pxf_server/pxf_profile/external_schema). coordinator·executor가 같은 `settings`를 공유하므로 양쪽에서 `s3.*`를 읽는다(coordinator는 Phase 2 LOCATION·프리픽스, executor는 업로드). 배포 시 GP 세그먼트에 PXF SERVER를 구성해야 한다(packaging/README).
+- **예제/설정**: `templates/sales_migration_s3/`(Impala 소스)·`templates/sales_migration_s3_trino/`(같은 이관을 **Trino 소스**로 — §17.2), `config.yml`의 `executor.s3.*`(bucket/prefix/endpoint_url/자격증명/pxf_server/pxf_profile/external_schema). coordinator·executor가 같은 `settings`를 공유하므로 양쪽에서 `s3.*`를 읽는다(coordinator는 Phase 2 LOCATION·프리픽스, executor는 업로드). 배포 시 GP 세그먼트에 PXF SERVER를 구성해야 한다(packaging/README).
 - **테스트**: `tests/test_s3_stage.py` — s3_stage.py 순수 함수, 가짜 S3/GP로 backend Phase 1/2/3(업로드+로컬 삭제·external→INSERT→cleanup·overwrite 선삭제·프리픽스 삭제·bucket 미설정 오류), executor 라우팅·`/s3/{job}/cleanup` 엔드포인트, coordinator 검증/dry-run, LocalDispatcher 2-phase e2e, 템플릿 렌더 + 날짜 fan-out. `tests/test_s3_stage_integration.py` + `tests/helpers.py`의 **`MockS3StageBackend`** — GP·S3 없이 **인메모리 S3로 "S3 루프 닫힘"**을 검증한다(`local_stage`의 `MockLocalStageBackend`에 대응): Phase 1이 인메모리 S3에 올린 객체를 Phase 2가 coordinator 조립 external_ddl의 프리픽스로 파싱·read해 target에 집계하고, `POST /jobs`→split→out_path(S3 키)→export→배리어→`_run_s3_load`(외부테이블/INSERT 치환)→load→cleanup→finalize 전 경로를 통과시킨다(루프 닫힘·overwrite 선삭제·업로드 실패 시 Phase 2 skip·cleanup 비활성).
 
 ### 17.2 이관 소스 엔진 선택 (`datasource` — Impala | 커스텀 함수)
@@ -569,7 +569,8 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **거부 대상**: `greenplum`/`history` 는 적재 대상·메타 DB 라 이관 소스로 지정하면 접수 단계에서 `422 JOB_DATASOURCE_UNSUPPORTED`. 그 밖의 이름은 executor 설정에 달렸고 coordinator 는 알 수 없으므로 통과시키고, 미설정이면 위 규칙대로 task 가 실패한다.
 - **참조 구현**: `customs/query_funcs/trino_runner.py` 의 `connect()`. 기존 `run()` 이 인라인으로 하던 접속 kwargs 조립·비대화형 login 처리를 `connect()` 로 뽑고 `run()` 이 그것을 쓰도록 바꿨다 — 접속 로직과 설정이 두 경로에 하나만 존재한다.
 - **적용 범위**: 소스를 읽는 모든 exec_mode(`copy`·`stage_insert`·`local_stage`·`s3_stage`). `statement` 는 소스 읽기가 없어 무관하다.
-- **테스트**: `tests/test_custom_source.py` — 가짜 DB-API 연결로 스트리밍(2500행 > 미리보기 상한) 검증, built-in 이름(None/""/impala/source)이 커스텀 경로를 타지 않음, `configuration=` 미전달, 미설정 시 명확한 실패, task 본문 배선, `CreateTaskRequest` 하위 호환.
+- **예제**: `templates/sales_migration_s3_trino/` — `sales_migration_s3` 과 같은 이관을 소스만 Trino 로. 바뀌는 것은 manifest 의 `datasource: trino` 와 select 조각의 방언(3단 테이블 이름, `DATE '...'` 리터럴 — Trino 는 varchar→date 암묵 변환을 하지 않는다)뿐이고 insert/external_columns/Phase 2 는 동일하다.
+- **테스트**: `tests/test_custom_source.py` — 가짜 DB-API 연결로 스트리밍(2500행 > 미리보기 상한) 검증, built-in 이름(None/""/impala/source)이 커스텀 경로를 타지 않음, `configuration=` 미전달, 미설정 시 명확한 실패, task 본문 배선, `CreateTaskRequest` 하위 호환, s3_stage+trino e2e, 예제 템플릿 계획 검증.
 
 ---
 

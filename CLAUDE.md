@@ -107,7 +107,9 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   전용)은 Impala 에만 넘긴다. 미설정이면 Impala 폴백이 아니라 **명확한 실패**. 하위 호환 핵심:
   impala/미지정이면 backend 호출에 `datasource` kwarg 를 **아예 붙이지 않아**(`src_kw` 조건부 확장)
   기존 백엔드·테스트 더블이 무변경으로 동작한다. `greenplum`/`history` 는 이관 소스로 422
-  (`JOB_DATASOURCE_UNSUPPORTED`). 참조 구현 `customs/query_funcs/trino_runner.py:connect`.
+  (`JOB_DATASOURCE_UNSUPPORTED`). 참조 구현 `customs/query_funcs/trino_runner.py:connect`,
+  예제 템플릿 `templates/sales_migration_s3_trino/`(sales_migration_s3 과 소스 엔진·select 방언만
+  다르고 insert/external_columns/Phase 2 는 동일).
 - `src/coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
   **날짜 fan-out**(DESIGN §18.8): `/jobs` 에 `task_params`(구간의 두 끝을 담은 params 이름 2개)를
   주면 IN 분할 대신 **하루=1 task** 로 펼친다(`app.py` `_build_fanout`/`_compute_task_offsets`,
