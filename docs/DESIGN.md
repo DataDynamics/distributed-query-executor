@@ -521,7 +521,7 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **coordinator(Phase 2·3)**: 디스패처 `run()`의 배리어(`_execute` 반환) 뒤 `_run_stage_load()`가 GP master에 외부테이블 DDL→staging 적재→(멱등 선삭제)→target INSERT를 한 트랜잭션으로 실행하고 `_cleanup_stage()`로 로컬 파일 정리. URI·`FORMAT 'CSV'(...)`·파일 인덱스 조립은 `src/coordinator/stage.py`(순수 함수)가 담당. `finalize_job`은 local_stage를 원자 적재로 보아 실패 시 정책 무관 FAILED.
 - **테스트**: `tests/test_local_stage.py` — stage.py 순수 함수, executor 라우팅/cleanup/metrics, LocalDispatcher 2-phase e2e, gp_hostname 매핑·검증까지 실 DB·실 디스크 없이 검증.
 
-### 17.1 S3 경유 스테이징 파이프라인 (`s3_stage`, PXF/S3 기반)
+### 17.10 S3 경유 스테이징 파이프라인 (`s3_stage`, PXF/S3 기반)
 
 `local_stage`와 **완전히 같은 2-phase 구조**(executor Phase 1 → 배리어 → coordinator Phase 2 → Phase 3 정리)이고, 스테이징 매체만 세그먼트 로컬 파일(`file://`)이 아니라 **S3 객체**다. S3 객체는 세그먼트 로컬이 아니라 모든 세그먼트에서 위치 무관하게 읽히므로, `local_stage`가 겪는 배치 제약 — executor를 GP 세그먼트 호스트에 **co-locate**하고 파일 예산(호스트당 ≤ S_h)을 배분하는 것 — 이 **사라진다**. **외부테이블 생성과 target INSERT는 `local_stage`와 똑같이 coordinator가 GP master에서 중앙 수행**하고, executor는 Impala 읽기와 S3 업로드까지만 한다(GP를 건드리지 않는다).
 
@@ -547,6 +547,35 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **SQL 조립**: `src/core/s3_stage.py`(순수 함수 — 객체 키·job 프리픽스·외부테이블 이름·PXF LOCATION·외부테이블 DDL·선삭제·정리 DDL). 업로더는 `src/executor/s3_client.py`(boto3 지연 임포트, `delete_prefix` 포함).
 - **예제/설정**: `templates/sales_migration_s3/`, `config.yml`의 `executor.s3.*`(bucket/prefix/endpoint_url/자격증명/pxf_server/pxf_profile/external_schema). coordinator·executor가 같은 `settings`를 공유하므로 양쪽에서 `s3.*`를 읽는다(coordinator는 Phase 2 LOCATION·프리픽스, executor는 업로드). 배포 시 GP 세그먼트에 PXF SERVER를 구성해야 한다(packaging/README).
 - **테스트**: `tests/test_s3_stage.py` — s3_stage.py 순수 함수, 가짜 S3/GP로 backend Phase 1/2/3(업로드+로컬 삭제·external→INSERT→cleanup·overwrite 선삭제·프리픽스 삭제·bucket 미설정 오류), executor 라우팅·`/s3/{job}/cleanup` 엔드포인트, coordinator 검증/dry-run, LocalDispatcher 2-phase e2e, 템플릿 렌더 + 날짜 fan-out. `tests/test_s3_stage_integration.py` + `tests/helpers.py`의 **`MockS3StageBackend`** — GP·S3 없이 **인메모리 S3로 "S3 루프 닫힘"**을 검증한다(`local_stage`의 `MockLocalStageBackend`에 대응): Phase 1이 인메모리 S3에 올린 객체를 Phase 2가 coordinator 조립 external_ddl의 프리픽스로 파싱·read해 target에 집계하고, `POST /jobs`→split→out_path(S3 키)→export→배리어→`_run_s3_load`(외부테이블/INSERT 치환)→load→cleanup→finalize 전 경로를 통과시킨다(루프 닫힘·overwrite 선삭제·업로드 실패 시 Phase 2 skip·cleanup 비활성).
+
+### 17.11 이관 소스 엔진 선택 (`datasource` — Impala 커서 | 커서 없는 커스텀 API)
+
+이관의 SELECT(소스 읽기)는 오랫동안 Impala 고정이었다(`backend._source_connect` 가 impyla 를 직접 import). 같은 템플릿을 Trino 등 다른 엔진에서 읽을 방법이 없었다. 그래서 **소스 접속 계층만** 갈아끼울 수 있게 하고, template manifest 의 `datasource` 로 고르게 했다. **적재(Greenplum)·`exec_mode`·분할·fan-out·Phase 2/3 는 전혀 바뀌지 않는다** — 바뀌는 것은 "행을 어디서 얻는가" 하나다.
+
+**전제가 핵심이다**: 운영에서 Trino는 DB-API 커서를 쓸 수 없고 "SQL을 주면 JSON/DataFrame을 돌려주는" 사내 API만 있는 경우가 많다. 그래서 `connect() -> DB-API Connection` 이 아니라 **커서 없는 계약**을 1급으로 지원한다.
+
+- **결정 순서**: 요청 `datasource` > manifest `datasource` > 서버 `source.type`(기본 impala). coordinator가 `Job.datasource`로 확정해 모든 task 본문에 실어 보낸다.
+- **built-in vs 위임**: `core.config.is_custom_source()` 한 곳이 판정한다. 빈 값·`impala`·`source`는 **기존 impyla 커서 경로**이고, 그 외 이름만 `query.func.fetch_module`로 위임한다.
+- **계약 분리**(혼동하면 데이터가 잘린다):
+
+  | 설정 키 | 계약 | 쓰는 곳 |
+  |---|---|---|
+  | `query.func.module` | `run(sql, config, limit) -> QueryResult` | query-execute(미리보기, **limit으로 자름**) |
+  | `query.func.fetch_module` | `fetch(sql, config) -> 결과` | **이관 소스 읽기(전량, limit 없음)** |
+  | `query.func.config.*` | 자유 설정 dict | 둘이 공유 |
+
+  `run()`을 이관에 재사용할 수 없는 이유가 설계의 출발점이다 — `clamp_limit`(≤10000)으로 자르고 전 셀을 `_json_safe`로 변환하는 **미리보기 API**라서, 그대로 쓰면 **잘린 결과가 조용히 적재**된다.
+
+- **어댑터 — 읽기 루프 무변경이 핵심**: `export_to_local_csv`가 소스에 요구하는 것은 `description`(컬럼명)·`fetchmany`(행 배치)·`close` **셋뿐**이다. 그래서 커스텀 API 결과를 그 셋만 제공하는 `_FunctionCursor`/`_FunctionConnection`으로 감싼다. 덕분에 CSV export 루프는 물론 **`_open_source_cursor`·`_source_execute`까지 손대지 않는다** — 어댑터의 `cursor(**kwargs)`/`execute(sql, **kwargs)`가 impyla 전용 인자(`convert_types`·`configuration`)를 삼키기 때문이다. 실행은 `cursor()`가 아니라 `execute()` 시점에 일어나 Impala 커서와 단계 경계(`IMPALA_SUBMIT`)도 그대로 맞는다.
+- **받아들이는 반환 형태**(`_normalize_fetch_result`): pandas DataFrame / records(`[{컬럼: 값}, ...]`) / `{"columns": [...], "rows": [...]}`(`data` 키 허용) / `(columns, rows)` / **그 형태의 청크를 yield하는 이터러블**. 사내 API 응답을 가공 없이 그대로 넘길 수 있게 흔한 형태를 모두 받는다. 컬럼명은 첫 청크에서 확정한다.
+- **결측값 정규화**: `_clean_row`가 `NaN`/`NaT`/`pd.NA`를 `None`으로 바꾼다. 그대로 CSV writer에 넘기면 NULL 마커 대신 문자열 `"nan"`이 기록되어 외부테이블이 그 컬럼을 NULL로 읽지 못한다(Impala 커서 경로엔 없던 위험). 값 자체는 건드리지 않는다 — CSV로 쓸 것이라 미리보기용 `_json_safe` 변환은 하지 않는다.
+- **조용한 폴백 금지**: `datasource`가 impala가 아닌데 `query.func.fetch_module`이 없으면 Impala로 폴백하지 않고 **명확한 `ValueError`로 task를 실패**시킨다. 폴백하면 Trino를 읽는 줄 알면서 Impala를 읽어 엉뚱한 데이터를 적재하게 된다.
+- **하위 호환(중요)**: `datasource`가 impala/미지정이면 **backend 호출에 `datasource` kwarg를 아예 붙이지 않는다**(`_src_kw` 조건부 확장, coordinator dispatcher·executor app 양쪽). 호출 시그니처가 예전과 바이트 단위로 같아서, 새 kwarg를 모르는 백엔드 구현·테스트 더블이 그대로 동작한다. task 본문의 `datasource`도 선택 필드라 이를 안 보내는 구버전 coordinator와 호환된다.
+- **적용 범위**: `export_to_local_csv` 한 메서드(= `s3_stage` + `local_stage`). `export_to_s3`가 이를 위임 호출하므로 둘이 함께 덮인다. `copy`/`stage_insert`는 GP COPY 파이프라인과 얽혀 있어 이번 범위에서 제외했다(필요하면 같은 어댑터를 그대로 재사용하면 된다).
+- **`sql_dialect`와는 다른 축**: 전자는 *실행 엔진*, 후자는 *sqlglot 파서*(검증 + splitter 재직렬화)다. `sql_dialect`는 이미 manifest 스칼라라 코드 변경이 없고, 자동 유도도 하지 않는다 — Trino 템플릿은 **둘 다** 적는다.
+- **메모리 특성**(Impala 커서와 다른 점): 청크를 yield하지 않으면 task 하나의 결과가 executor 메모리에 통째로 올라간다. Impala 커서 경로는 `fetchmany`로 진짜 스트리밍이라 이 제약이 없다. 완화책은 `parallelism`을 늘려 task당 파티션을 잘게 쪼개는 것이고, 근본 해결은 사내 API에 페이징을 넣어 청크를 흘리는 것이다(어댑터가 이미 청크 형태를 받으므로 프레임워크 수정 불필요).
+- **예제·참조**: `templates/sales_migration_s3_trino/`(같은 이관을 소스만 Trino로 — manifest 2줄과 select 방언만 다르다), `customs/query_funcs/trino_runner.py`의 `fetch_all`.
+- **테스트**: `tests/test_custom_source.py` — 반환 형태 5종·청크 스트리밍·결측 정규화(CSV NULL 마커)·built-in 이름 5케이스가 커스텀 경로를 타지 않음·미설정 시 명확한 실패·task 본문 배선·manifest 우선순위·s3_stage e2e·**kwarg를 모르는 백엔드 더블로 기존 job이 도는 하위 호환**까지 실 DB 없이 검증.
 
 ---
 
@@ -618,7 +647,8 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **요청**: `template_id` + `params`(이름-값 항목 **배열** `[{name, value}, ...]`) + `datasource`(선택, 미지정 시 `source.type`) + `limit`(1~10000). 배열은 내부에서 `{name: value}` dict로 접혀 기존 렌더 경로(`ParamSpec` 검증·`sql_in` 이스케이프)를 탄다. 같은 이름이 두 번 오면 `422 DUPLICATE_PARAM`.
 - **렌더**: `TemplateEngine.render_query()`가 **`select` 조각만** 렌더한다(이관용 `render()`와 달리 insert/staging 조각을 요구하지 않아 어떤 템플릿이든 동작). 렌더된 SELECT는 `validate_select_query()`로 단일 행 반환 SELECT인지 검증(다중 문·비-SELECT 차단; 구조 방어 한 겹 추가).
 - **실행 라우팅 — 클라이언트는 executor를 지정하지 않는다(2갈래)**: `greenplum`/`history`(메타/타깃 DB)는 coordinator가 직접(psycopg) 실행하고, **그 외 소스(`impala`/`trino`/`source`)는 종류와 무관하게 executor의 `POST /query-run` 하나로 통일 위임**한다. 대상 executor는 coordinator가 `/jobs` 디스패치와 동일한 선택 정책(`coordinator.executor_select`)으로 고른다. 연결 실패 시 다음 executor로 failover하며 (SELECT는 멱등), executor가 도달 후 돌려준 4xx/5xx(SQL 오류·함수 미설정)는 확정 응답이라 failover 없이 그대로 전달한다. 실제 실행 executor는 응답 `executed_by`로 관측(직접 실행이면 null).
-- **소스 실행 = 커스텀 함수 위임(`/query-run`)**: executor가 소스(Trino 등)를 직접 접속하지 않고, 설정 지정 외부 Python 함수에 위임한다. `POST /query-run`이 `query.func.module`(dotted path, `importlib` 로딩·캐시)로 함수를 찾아 `run(sql, config=<query.func.config.* dict>, limit)`를 호출하고 반환된 `QueryResult`(또는 동일 키 dict)를 그대로 응답한다. **설정은 config.properties에서 자유 정의** — `query.func.config.<키>=<값>`을 프리픽스로 모아(코드/`config.yml` 수정 없이) dict로 넘긴다(값은 문자열, 형변환은 함수 책임; `src/core/config.py`의 `_collect_prefix`). 미설정 시 400, 로드/실행 실패 시 502. 참조 구현: `customs/query_funcs/trino_runner.py`. (임의 SQL 미리보기 `/datasources/{name}/query`와 이관 `_source_connect`의 소스 접속은 별개로 built-in 유지.)
+- **소스 실행 = 커스텀 함수 위임(`/query-run`)**: executor가 소스(Trino 등)를 직접 접속하지 않고, 설정 지정 외부 Python 함수에 위임한다. `POST /query-run`이 `query.func.module`(dotted path, `importlib` 로딩·캐시)로 함수를 찾아 `run(sql, config=<query.func.config.* dict>, limit)`를 호출하고 반환된 `QueryResult`(또는 동일 키 dict)를 그대로 응답한다. **설정은 config.properties에서 자유 정의** — `query.func.config.<키>=<값>`을 프리픽스로 모아(코드/`config.yml` 수정 없이) dict로 넘긴다(값은 문자열, 형변환은 함수 책임; `src/core/config.py`의 `_collect_prefix`). 미설정 시 400, 로드/실행 실패 시 502. 참조 구현: `customs/query_funcs/trino_runner.py`. (임의 SQL 미리보기 `/datasources/{name}/query`는 별개로 built-in 유지. 이관의 소스 접속은 §17.11 참고 — 기본은 built-in Impala 커서이고, job 의 `datasource` 로 커스텀 API 위임을 고를 수 있다. **같은 소스라도 계약이 다르다**: 미리보기는 `run(limit)`, 이관은 `fetch`(전량).)
+- **결과 정형(`dbprobe._shape`)** — 커스텀 함수의 공용 도구다. 커서 결과(`fetchmany(limit+1)` 튜플 목록)뿐 아니라 **pandas DataFrame**도 받는다(사내 API가 DataFrame을 주는 경우). DataFrame은 `iloc[:limit+1]`로 잘라 `itertuples(index=False)`로 변환하고(`.values`는 혼합 dtype을 업캐스트해 int가 float가 된다) 컬럼명·`truncated`를 자동 추출한다. pandas는 의존성이 아니라 **덕타이핑**(`_is_dataframe`)으로 인식하므로 쓰는 배포에만 설치하면 된다. 값 정규화도 함께 한다 — `_json_safe`가 numpy 스칼라를 `tolist()`로 낮추고(안 하면 `np.int64`→`'7'`, `np.bool_`→`'True'`로 새는데 `np.float64`는 float 하위형이라 우연히 통과해 **컬럼 dtype별로 결과 타입이 갈린다**), `NaN`/`NaT`/`pd.NA`/`inf`를 `null`로 떨군다(표준 JSON에 표현이 없어 `json.dumps`가 내는 `NaN`/`Infinity` 리터럴을 엄격한 파서가 거부한다 — 모든 데이터소스 경로에 적용).
 - **응답**: `{template_id, datasource, sql, columns, rows, row_count, truncated, limit, elapsed_ms, executed_by}` — `columns`/`rows`/…는 `dbprobe.QueryResult` shape과 동일. `datasource`는 coordinator가 확정값으로 싣는다(`/query-run` 응답엔 없어 보정).
 - **이관 소스와의 분리**: `datasource`를 생략하면 전역 `source.type`을 쓰지만, 명시하면 그 소스로 라우팅된다. `source.type=impala`로 두고 query-execute에 `datasource:"trino"`를 명시하면 "이관은 Impala, query-execute는 Trino"처럼 기능별로 소스를 나눌 수 있다.
 - **경계**: 결과가 coordinator 메모리를 거치므로 `limit`(≤10000)으로 응답 크기를 강제하는 **미리보기 규모 전용**이다. 대량 이관은 계속 `/jobs`. executor의 `/query-run`·`/datasources/{name}/query`는 task 세마포어를 거치지 않으므로 무거운 사용이 예상되면 별도 동시성 가드를 후속 고려한다.

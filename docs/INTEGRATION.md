@@ -127,7 +127,13 @@ SQL 전문을 직접 담는 대신 **서버에 보관된 쿼리 템플릿**을 �
 ```
 
 그다음 `template_id` 와 `params` 만 담아 `/jobs` 로 제출합니다. `exec_mode`·`partition_column`·
-`target_table` 등은 템플릿(manifest) 기본값이 쓰이고, 요청에 명시하면 그 값이 우선합니다.
+`target_table`·`datasource` 등은 템플릿(manifest) 기본값이 쓰이고, 요청에 명시하면 그 값이 우선합니다.
+
+`datasource` 는 **SELECT 를 어느 엔진에서 읽을지**를 정합니다(생략하면 서버 기본값 `impala`).
+Trino 처럼 사내 커스텀 API 로 읽는 소스는 템플릿 manifest 에 `datasource: trino` 가 적혀 있으므로
+C# 쪽에서는 **아무것도 하지 않아도 됩니다**. 특정 job 만 소스를 바꿔 실행하고 싶을 때만 요청에
+`"datasource": "impala"` 처럼 명시하세요. 적재 대상(Greenplum)·`exec_mode`·분할 동작은 이 값과
+무관하게 동일하며, 응답·폴링 방식도 그대로입니다.
 
 ```json
 {
@@ -344,6 +350,9 @@ public class CreateJobRequest
     // 값 타입은 null 이 없어 항상 직렬화되므로 서버 기본값과 같은 값을 둔다.
     [JsonProperty("parallelism")] public int Parallelism { get; set; } = 4;
     [JsonProperty("exec_mode")] public string ExecMode { get; set; } = "stage_insert";
+    // SELECT 를 읽을 소스 엔진(선택). null 이면 템플릿 manifest → 서버 기본값(impala) 순으로 정해진다.
+    [JsonProperty("datasource", NullValueHandling = NullValueHandling.Ignore)]
+    public string Datasource { get; set; }
     // stage_insert: staging_table·wrapper_query 는 필수, staging_ddl 은 선택.
     [JsonProperty("staging_table")] public string StagingTable { get; set; }
     [JsonProperty("staging_ddl")] public string StagingDdl { get; set; }

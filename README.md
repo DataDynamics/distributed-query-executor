@@ -113,6 +113,10 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
   `impala.auth_mechanism=LDAP`/`impala.user`/`impala.password`). 인증은 원본 Impala 에만 적용되고,
   적재 대상 Greenplum 은 TLS/인증 없는 일반 `postgresql://` DSN 을 씁니다
 - `greenplum.dsn` — 적재 대상 접속 / `copy.batch_size` — 한 번에 보낼 행 수
+- `s3.*` — `s3_stage` 스테이징(`s3.bucket`/`s3.prefix`/자격증명/`s3.pxf_server`). `s3.external_schema`
+  를 주면 Phase 2 외부테이블이 스키마 한정(`dwtemp.s3ext_<job_id>`)으로 만들어집니다(비우면 `search_path`)
+- `query.func.module` — `/query-execute` 소스 실행 위임 함수(미리보기, `limit` 적용) /
+  `query.func.fetch_module` — **이관** 소스 읽기 위임 함수(전량). 접속 설정은 `query.func.config.*` 공유
 
 `impala.host` 와 `greenplum.dsn` 이 모두 채워져 있으면 실제 `ImpalaToGreenplumBackend` 가 동작하고,
 둘 중 하나라도 비면 실입출력 없이 API 만 확인할 수 있는 `MockBackend` 로 자동 대체됩니다. 로깅은
@@ -150,11 +154,36 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 | `statement` | wrapper SQL(예: `INSERT ... SELECT`)을 대상 DB 에서 그대로 실행 | 한 DB(Greenplum) 안에서 INSERT 로 적재. 컬럼 매핑은 INSERT/SELECT 가 담당 |
 | `stage_insert` | Impala SELECT 결과를 Greenplum/WarehousePG staging(TEMP) 에 COPY → staging 을 FROM 으로 INSERT | SELECT 는 Impala, INSERT 는 Greenplum/WarehousePG 처럼 서로 다른 엔진 |
 | `local_stage` | executor 가 세그먼트 로컬 CSV 로 export → Greenplum 이 `file://` 외부테이블로 세그먼트별 병렬 read → target INSERT (2-phase) | executor 를 GP 세그먼트 호스트에 co-locate 한 대량 이관. 단일 COPY 소켓 병목을 세그먼트 병렬로 대체 |
+| `s3_stage` | executor 가 로컬 CSV → **S3 업로드** → coordinator 가 GP PXF 외부테이블로 읽어 target INSERT (2-phase) | `local_stage` 의 형제. S3 객체는 위치 무관이라 **세그먼트 co-locate 가 불필요**하다 |
 
 `stage_insert` 는 `staging_table`+`wrapper_query`(staging 을 FROM 으로 하는 INSERT)가 필수이고
-`staging_ddl` 은 선택입니다. `local_stage` 는 `staging_table`+`external_columns`+`insert_sql` 이
-필수입니다. 각 모드의 필드 규약과 사용 예시는 [`docs/GUIDE.md`](docs/GUIDE.md), local_stage 설계는
-[`docs/DESIGN.md`](docs/DESIGN.md) §17 을 참고하세요.
+`staging_ddl` 은 선택입니다. `local_stage`·`s3_stage` 는 `staging_table`+`external_columns`+
+`insert_sql` 이 필수입니다(`s3_stage` 는 `staging_ddl` 을 쓰지 않습니다 — 외부테이블이 staging 을
+겸합니다). 각 모드의 필드 규약과 사용 예시는 [`docs/GUIDE.md`](docs/GUIDE.md), 설계는
+[`docs/DESIGN.md`](docs/DESIGN.md) §17(local_stage)·§17.10(s3_stage) 을 참고하세요.
+
+### 소스 엔진 선택 (`datasource`)
+
+SELECT(소스 읽기)를 어느 엔진에서 실행할지는 `datasource` 로 고릅니다. 템플릿 manifest 에 적거나
+요청에서 덮어쓸 수 있습니다(**요청 > manifest > `source.type`**).
+
+| `datasource` | 읽기 경로 |
+|---|---|
+| `impala` · 미지정 (기본) | **impyla 커서** — `fetchmany` 스트리밍 |
+| 그 외 (예: `trino`) | `query.func.fetch_module` **커스텀 API** — 운영에서 DB-API 커서를 쓸 수 없는 사내 API 용 |
+
+```yaml
+# templates/<id>/manifest.yml
+exec_mode: s3_stage
+datasource: trino        # 이 SELECT 는 커스텀 API 가 읽는다
+sql_dialect: trino       # 파서(다른 축) — 함께 적습니다
+```
+
+커스텀 API 는 `fetch(sql, *, config)` 로 **행수 제한 없이 전량**을 돌려주면 되고, 반환은
+DataFrame · `[{컬럼: 값}, ...]` · `{"columns": [...], "rows": [...]}` · `(columns, rows)` ·
+그 형태의 청크 이터러블을 모두 받습니다. 적재(Greenplum)·`exec_mode`·분할은 소스 엔진과 무관하게
+그대로입니다. 설정이 없으면 Impala 로 조용히 폴백하지 않고 명확한 오류로 실패합니다.
+자세히는 [`docs/GUIDE.md`](docs/GUIDE.md)·[`docs/DESIGN.md`](docs/DESIGN.md) §17.11 을 보세요.
 
 ### 템플릿 엔진
 
