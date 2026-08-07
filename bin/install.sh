@@ -17,7 +17,7 @@ VENV="$APP_HOME/.venv"
 
 # RHEL 9.2 기본 Python 은 3.9 이다. 별도 설치 없이 시스템 python3.9 를 그대로 쓴다.
 # Python 3.11(dnf install python3.11)로 배포하려면 PYTHON=python3.11 로 지정하고,
-# 에어갭이면 WHEELHOUSE 도 packaging/wheels/py311 쪽을 가리킨다.
+# 에어갭이면 WHEELHOUSE 로 그 파이썬용 휠 묶음 디렉터리를 가리킨다.
 PYTHON="${PYTHON:-python3.9}"
 # 에어갭(인터넷 차단) 설치: WHEELHOUSE 에 미리 받아 둔 wheel 디렉터리를 지정하면
 # PyPI 대신 그 디렉터리에서만(--no-index) 설치한다. 비우면 pip 기본 인덱스(Nexus 등) 사용.
@@ -64,7 +64,7 @@ else
 fi
 if [[ -n "$WHEELHOUSE" ]]; then
     # WHEELHOUSE 는 콜론(:)으로 여러 디렉터리 지정 가능 → 다중 --find-links
-    # 예) packaging/wheels/py39 (버전별 단일 디렉터리에 전체 휠이 들어 있다)
+    # 예) /srv/wheels/py39 (한 디렉터리에 필요한 휠이 전부 들어 있어야 한다)
     echo "    (에어갭 모드) wheelhouse=$WHEELHOUSE"
     FIND_LINKS=()
     IFS=':' read -ra _WHS <<< "$WHEELHOUSE"
@@ -80,7 +80,7 @@ echo "==> 설정·템플릿·커스텀 함수 배치(최초 1회 시딩) -> $APP
 # config/·templates/·customs/ 는 모두 운영자 소유 자산이다(설정 편집·사이트 템플릿·커스텀 쿼리
 # 함수 추가). 그래서 위 rsync 에서 세 디렉터리를 제외하고, 최초 설치 때만 소스에서 통째로 시딩한다.
 # 업그레이드 때 새 버전이 바꾼 기본값·설정 구조는 자동으로 들어오지 않는다. 운영자가 새 소스
-# 트리의 config/ 와 비교해 필요한 항목만 직접 옮긴다(packaging/README.md 의 업그레이드 절 참고).
+# 트리의 config/ 와 비교해 필요한 항목만 직접 옮긴다(docs/DEPLOY.md 의 업그레이드 절 참고).
 mkdir -p "$CONF_DIR" "$LOG_DIR" "$RUN_DIR" "$BIN_DIR"
 if [[ ! -f "$CONF_DIR/config.yml" ]]; then
     cp -a "$SRC_DIR/config/." "$CONF_DIR/"       # properties·yml·스키마

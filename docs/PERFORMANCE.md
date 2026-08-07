@@ -3,7 +3,7 @@
 이 문서는 처리량을 어떻게 늘리고(Scale Out, 수평 확장), 장애가 나도 서비스가 멈추지 않게
 어떻게 견디며(HA, 고가용성), 그 과정에서 어떤 파라미터를 어떤 기준으로 잡아야 하는지를 운영자
 눈높이에서 정리합니다. 설계 배경은 [DESIGN.md](DESIGN.md), 설정 적용 방법은
-[README.md](../README.md) 와 [packaging/README.md](../packaging/README.md) 를 참고하세요.
+[README.md](../README.md) 와 [DEPLOY.md](DEPLOY.md) 를 참고하세요.
 
 한 가지 약속만 기억하면 됩니다. 모든 파라미터는 `config/config.properties` 에 자바 스타일
 `key=value` 로 적고, 이 값이 `config.yml` 의 `${변수:기본값}` 자리표시자를 채웁니다. 아래 표의

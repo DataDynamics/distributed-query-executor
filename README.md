@@ -17,7 +17,7 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분�
 | [`docs/GUIDE.md`](docs/GUIDE.md) | 실행 모드 사용 가이드(stage_insert / query-execute / local_stage 등) |
 | [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | 애플리케이션(예: C#)에서 HTTP API 로 작업을 실행·확인하는 클라이언트 연동 |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | 성능·수평 확장·고가용성 운영 |
-| [`packaging/README.md`](packaging/README.md) | 배포·패키징·에어갭 설치 |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | 배포·설치·업그레이드·에어갭 |
 
 ## 아키텍처
 
@@ -93,7 +93,6 @@ bin/             # 런처·설치 스크립트(install·start/stop/restart/statu
 config/          # config.properties + config.yml 기본값 + templates/ + 스키마(*.sql)
 templates/       # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2)
 customs/         # 사이트 커스텀 코드(customs.query_funcs.* — 커스텀 쿼리 함수)
-packaging/       # 배포·패키징: README.md + wheels/(에어갭 휠 번들 py39·py311)
 tests/           # pytest (검증/라이프사이클/admission/대시보드)
 ```
 
@@ -387,5 +386,5 @@ drain(기본 25초)으로 진행 중 task 를 정리한 뒤 교체됩니다. sys
 업그레이드 시 운영자 소유 자산(`config/`·`templates/`·`customs/`)은 rsync 에서 제외되고 없을 때만
 시딩되므로 편집·추가한 내용이 유지됩니다. 다만 새 버전이 추가한 기본값·설정 구조는 자동으로
 들어오지 않으므로, 새 소스 트리와 `diff` 를 떠서 `config.yml`·스키마는 교체하고 새로 생긴
-properties 키만 옮깁니다(절차는 [`packaging/README.md`](packaging/README.md) 의 업그레이드 절).
-에어갭 설치는 `packaging/wheels/`(py39·py311) 휠 번들로 `--no-index` 설치합니다.
+properties 키만 옮깁니다(절차는 [`docs/DEPLOY.md`](docs/DEPLOY.md) 의 업그레이드 절).
+에어갭 설치는 미리 받아 둔 휠 묶음 디렉터리를 `WHEELHOUSE` 로 지정해 `--no-index` 로 설치합니다.

@@ -5,8 +5,8 @@
 # 점검 대상
 #   1) OS 패키지 — README 의 빌드/런타임 의존성(rpm -q 로 확인):
 #        gcc gcc-c++ make python3-devel python3 python3-pip cyrus-sasl-devel
-#   2) 파이썬 휠 — packaging/wheels/py<버전>/ 의 .whl/.tar.gz 파일이 .venv 에
-#      (이름+버전 일치로) 설치되어 있는지 확인.
+#   2) 파이썬 휠 — WHEELS_ROOT 의 .whl/.tar.gz 파일이 .venv 에 (이름+버전 일치로)
+#      설치되어 있는지 확인. 에어갭용 휠 묶음을 따로 받아 둔 경우에만 쓴다.
 #
 # 사용법
 #   check-prereqs.sh                  # OS 패키지 + 휠 전체
@@ -14,8 +14,7 @@
 #   WHEELS_ONLY=1 check-prereqs.sh    # 휠만
 # 환경변수
 #   VENV_PY      점검할 파이썬(기본: <루트>/.venv/bin/python)
-#   WHEELS_ROOT  휠 묶음 루트(기본: <루트>/packaging/wheels/py<VENV_PY 버전>, 예: py39·py311.
-#                VENV_PY 가 없으면 py39)
+#   WHEELS_ROOT  에어갭용 휠 묶음 디렉터리. 지정하지 않으면 휠 점검을 건너뛴다
 # 종료코드: 모두 충족 0, 하나라도 누락/오류 1.
 set -uo pipefail
 
@@ -23,16 +22,9 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # bin/ → 루트는 한 단계 위(개발: 저장소 루트, 배포: /data1/distributed-query-executor).
 ROOT="$(cd "$DIR/.." && pwd)"
 VENV_PY="${VENV_PY:-$ROOT/.venv/bin/python}"
-# 휠 번들은 파이썬 버전별(py39/·py311/)로 나뉘어 있다 — 점검 대상 파이썬의 버전에 맞는
-# 쪽을 고른다(파이썬이 아직 없으면 RHEL 9.2 기본인 py39 로 가정).
-if [[ -z "${WHEELS_ROOT:-}" ]]; then
-    if [[ -x "$VENV_PY" ]]; then
-        PYTAG="py$("$VENV_PY" -c 'import sys; print("%d%d" % sys.version_info[:2])')"
-    else
-        PYTAG="py39"
-    fi
-    WHEELS_ROOT="$ROOT/packaging/wheels/$PYTAG"
-fi
+# 휠 묶음은 저장소에 담지 않는다(용량이 크고 파이썬 버전마다 달라진다). 에어갭 설치를
+# 준비하며 따로 받아 둔 디렉터리를 WHEELS_ROOT 로 알려 주면 그때만 점검한다.
+WHEELS_ROOT="${WHEELS_ROOT:-}"
 
 # README 가 명시한 OS 패키지 목록(빌드 툴체인 + 파이썬 + SASL).
 OS_PACKAGES=(
@@ -120,9 +112,14 @@ check_wheels() {
         return
     fi
     echo "  파이썬: $VENV_PY"
-    echo "  휠 번들: $WHEELS_ROOT"
+    echo "  휠 번들: ${WHEELS_ROOT:-(미지정)}"
 
     local f base nname ivers
+    # WHEELS_ROOT 를 주지 않았으면 에어갭 준비를 하지 않는 것이므로 누락으로 세지 않는다.
+    if [[ -z "$WHEELS_ROOT" ]]; then
+        echo "  (WHEELS_ROOT 미지정 — 휠 점검 건너뜀)"
+        return
+    fi
     if [[ ! -d "$WHEELS_ROOT" ]]; then
         echo "  ! 휠 디렉터리 없음: $WHEELS_ROOT"
         missing=$((missing + 1))
@@ -166,6 +163,6 @@ if [[ "$missing" -eq 0 ]]; then
 else
     echo "결과: 누락/문제 $missing 건 — 위 [MISSING]/! 항목을 설치하세요."
     echo "  OS:   sudo dnf install -y ${OS_PACKAGES[*]}"
-    echo "  휠:   sudo WHEELHOUSE=$WHEELS_ROOT ./bin/install.sh"
+    echo "  휠:   sudo WHEELHOUSE=${WHEELS_ROOT:-<휠-디렉터리>} ./bin/install.sh"
     exit 1
 fi

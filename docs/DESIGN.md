@@ -401,7 +401,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 | 동시성 | asyncio + Semaphore(admission/디스패치) + thread pool(동기 DB 호출 래핑) |
 | 상태/이력 저장 | 인메모리 dict / 파일 영속(JSON 스냅샷, 단일 노드 크래시 복구) / **PostgreSQL**(`jobs`/`job_history`/`task_history`/`executor_status`/`executor_health_metrics`) |
 | 대시보드 | 인라인 HTML + vanilla JS(빌드 도구 없음) |
-| 배포 | /data1 트리 + 런처 스크립트로 coordinator 1 + executor N([packaging/README.md](../packaging/README.md)) |
+| 배포 | /data1 트리 + 런처 스크립트로 coordinator 1 + executor N([DEPLOY.md](DEPLOY.md)) |
 
 ---
 
@@ -511,7 +511,7 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 - **파일 권한**: 외부테이블 read는 세그먼트 postgres 프로세스 사용자(보통 gpadmin)로 로컬 파일을 연다 → executor가 쓴 파일이 그 사용자에게 읽기 가능해야 함.
 - **호스트당 파일 수 ≤ 세그먼트 수** — coordinator가 `S_h`로 상한 강제.
 - **mirror failover**: primary 세그먼트가 다른 호스트 mirror로 넘어가면 그 로컬 파일이 없어 load 실패 → 재시도 정책 대상.
-- **배포 변경**: executor가 세그먼트 호스트에 co-locate돼야 하므로 `remote` 배치와 배포 형태가 다르다([packaging/README.md](../packaging/README.md)에 별도 기술).
+- **배포 변경**: executor가 세그먼트 호스트에 co-locate돼야 하므로 `remote` 배치와 배포 형태가 다르다([DEPLOY.md](DEPLOY.md)에 별도 기술).
 
 ### 17.8 설정 키
 
@@ -557,7 +557,7 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 - **DELETE 선삭제 명시 제어(`pre_delete`)**: 요청 필드 `pre_delete`(`Optional[bool]`)로 Phase 2 선삭제를 오버라이드한다 — `null`(기본)이면 `write_mode`를 따르고(`overwrite_partitions`→DELETE), `true`/`false`면 `write_mode`와 무관하게 강제/생략. `_run_s3_load`에서 `do_delete = job.pre_delete if not None else (write_mode=="overwrite_partitions")`로 결정한다.
 - **fan-out 연동**: 날짜 fan-out(§18.8)도 `s3_stage`를 지원한다(하루=1 task 업로드 → coordinator가 job 프리픽스로 한 번에 적재, append).
 - **SQL 조립**: `src/core/s3_stage.py`(순수 함수 — 객체 키·job 프리픽스·외부테이블 이름·PXF LOCATION·외부테이블 DDL·선삭제·정리 DDL). 업로더는 `src/executor/s3_client.py`(boto3 지연 임포트, `delete_prefix` 포함).
-- **예제/설정**: `templates/sales_migration_s3/`, `config.yml`의 `executor.s3.*`(bucket/prefix/endpoint_url/자격증명/pxf_server/pxf_profile/external_schema). coordinator·executor가 같은 `settings`를 공유하므로 양쪽에서 `s3.*`를 읽는다(coordinator는 Phase 2 LOCATION·프리픽스, executor는 업로드). 배포 시 GP 세그먼트에 PXF SERVER를 구성해야 한다(packaging/README).
+- **예제/설정**: `templates/sales_migration_s3/`, `config.yml`의 `executor.s3.*`(bucket/prefix/endpoint_url/자격증명/pxf_server/pxf_profile/external_schema). coordinator·executor가 같은 `settings`를 공유하므로 양쪽에서 `s3.*`를 읽는다(coordinator는 Phase 2 LOCATION·프리픽스, executor는 업로드). 배포 시 GP 세그먼트에 PXF SERVER를 구성해야 한다(DEPLOY.md).
 - **테스트**: `tests/test_s3_stage.py` — s3_stage.py 순수 함수, 가짜 S3/GP로 backend Phase 1/2/3(업로드+로컬 삭제·external→INSERT→cleanup·overwrite 선삭제·프리픽스 삭제·bucket 미설정 오류), executor 라우팅·`/s3/{job}/cleanup` 엔드포인트, coordinator 검증/dry-run, LocalDispatcher 2-phase e2e, 템플릿 렌더 + 날짜 fan-out. `tests/test_s3_stage_integration.py` + `tests/helpers.py`의 **`MockS3StageBackend`** — GP·S3 없이 **인메모리 S3로 "S3 루프 닫힘"**을 검증한다(`local_stage`의 `MockLocalStageBackend`에 대응): Phase 1이 인메모리 S3에 올린 객체를 Phase 2가 coordinator 조립 external_ddl의 프리픽스로 파싱·read해 target에 집계하고, `POST /jobs`→split→out_path(S3 키)→export→배리어→`_run_s3_load`(외부테이블/INSERT 치환)→load→cleanup→finalize 전 경로를 통과시킨다(루프 닫힘·overwrite 선삭제·업로드 실패 시 Phase 2 skip·cleanup 비활성).
 
 ### 17.11 이관 소스 엔진 선택 (`datasource` — Impala 커서 | 커서 없는 커스텀 API)

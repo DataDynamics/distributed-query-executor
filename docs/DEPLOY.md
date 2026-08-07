@@ -97,20 +97,26 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status-executor.sh
 
 ## 오프라인 설치 (에어갭 휠 번들)
 
-인터넷이 막힌 서버에서는 `pip` 이 패키지를 내려받을 곳(PyPI)이 없다. 그래서 미리 받아 둔 설치 파일을 한곳에 모아 두고 `pip` 에게 "인터넷 대신 이 폴더에서 찾아라"라고 알려 주는 방식으로 설치한다. 이 설치 파일은 대부분 **휠(wheel)** — 파이썬 패키지를 미리 빌드해 하나로 묶은 형식이라 컴파일 없이 빠르게 설치된다. 휠 묶음을 모아 둔 폴더를 흔히 **WHEELHOUSE**(휠 창고)라 부르고, 이 저장소는 `packaging/wheels/` 아래에 그 번들을 함께 담고 있다.
+인터넷이 막힌 서버에서는 `pip` 이 패키지를 내려받을 곳(PyPI)이 없다. 그래서 미리 받아 둔 설치 파일을 한곳에 모아 두고 `pip` 에게 "인터넷 대신 이 폴더에서 찾아라"라고 알려 주는 방식으로 설치한다. 이 설치 파일은 대부분 **휠(wheel)** — 파이썬 패키지를 미리 빌드해 하나로 묶은 형식이라 컴파일 없이 빠르게 설치된다. 휠 묶음을 모아 둔 폴더를 흔히 **WHEELHOUSE**(휠 창고)라 부른다.
 
-번들은 **파이썬 버전별로 두 벌**이다: `packaging/wheels/py39`(RHEL 9.2 기본 python3.9, 바이너리 휠 `cp39` 태그)와 `packaging/wheels/py311`(`dnf install python3.11` 로 설치하는 Python 3.11, `cp311` 태그). 두 벌은 같은 패키지·같은 버전이고 C 확장 휠의 ABI 태그만 다르다(`exceptiongroup`·`tomli` 는 3.11 표준 라이브러리에 흡수된 백포트라 `py311/` 에는 없다). 리눅스 배포판 간 시스템 라이브러리 차이는 **manylinux** 표준으로 흡수한다 — glibc ≤ 2.28 에서 빌드된 휠은 그보다 높은 버전에서도 돌고, RHEL 9.2 의 glibc 2.34 와도 호환된다.
+휠 번들은 저장소에 담지 않는다. 용량이 크고 파이썬 버전마다 내용이 달라져 저장소가 금방 무거워지기 때문이다. 대신 인터넷이 되는 장비에서 한 번 받아 두고 그 폴더를 배포 서버로 옮겨 쓴다. 이때 **받는 장비의 파이썬 버전과 OS 가 배포 대상과 같아야** 한다 — C 확장 휠은 `cp39`/`cp311` 같은 ABI 태그로 갈리므로 3.9 용 휠은 3.11 가상환경에 설치되지 않는다. 리눅스 배포판 간 시스템 라이브러리 차이는 **manylinux** 표준이 흡수하므로(glibc ≤ 2.28 에서 빌드된 휠은 RHEL 9.2 의 glibc 2.34 와도 호환된다) 같은 계열 배포판이면 대개 문제없다.
 
-각 버전 디렉터리에는 필요한 휠이 **한 폴더에 전부** 들어 있다: coordinator 런타임 의존성(`requirements.txt`, Jinja2 포함), executor 드라이버(impyla·thrift·SASL·trino)와 Cython, pytest·pytest-asyncio 등 테스트 의존성, 설치 부트스트랩(`pip`·`setuptools`·`wheel`)까지 모두다. 무엇이 실제로 설치될지는 폴더가 아니라 **requirements 파일이 결정**한다 — pip 은 `-r` 목록에 있는 패키지만 골라 설치하므로, coordinator 만 설치하면 executor 드라이버나 pytest 휠은 폴더에 있어도 무시된다.
+```bash
+# 인터넷이 되는 장비에서 (배포 대상과 같은 파이썬으로)
+python3.9 -m pip download -d wheels/py39 -r requirements-executor.txt
+python3.9 -m pip download -d wheels/py39 pip setuptools wheel
+```
 
-가장 간단한 길은 `bin/install.sh` 에 `WHEELHOUSE` 로 휠 폴더 위치를 알려 주는 것이다. 그러면 스크립트가 알아서 `--no-index`(인터넷 저장소를 보지 말라는 뜻)와 `--find-links` 를 붙여 설치한다. `WHEELHOUSE` 에는 배포 대상 파이썬 버전의 디렉터리 하나만 지정하면 되고, coordinator 만 설치하든 executor 까지 설치하든 같은 폴더를 쓴다(무엇이 설치될지는 `INSTALL_EXECUTOR` 가 정하는 requirements 파일이 결정).
+`requirements-executor.txt` 는 coordinator 런타임(`requirements.txt`)을 포함하므로 이 한 번으로 두 역할의 의존성이 모두 모인다. 무엇이 실제로 설치될지는 폴더가 아니라 **requirements 파일이 결정**한다 — pip 은 `-r` 목록에 있는 패키지만 골라 설치하므로, coordinator 만 설치하면 executor 드라이버는 폴더에 있어도 무시된다. 그래서 번들 하나를 두 역할이 함께 써도 된다.
+
+받아 둔 폴더를 배포 서버로 옮긴 뒤에는 `bin/install.sh` 에 `WHEELHOUSE` 로 위치를 알려 준다. 그러면 스크립트가 알아서 `--no-index`(인터넷 저장소를 보지 말라는 뜻)와 `--find-links` 를 붙여 설치한다.
 
 ```bash
 # coordinator 만
-sudo WHEELHOUSE=packaging/wheels/py39 ./bin/install.sh
+sudo WHEELHOUSE=/srv/wheels/py39 ./bin/install.sh
 
 # executor 포함
-sudo WHEELHOUSE=packaging/wheels/py39 INSTALL_EXECUTOR=1 ./bin/install.sh
+sudo WHEELHOUSE=/srv/wheels/py39 INSTALL_EXECUTOR=1 ./bin/install.sh
 ```
 
 스크립트를 거치지 않고 `pip` 을 직접 부르려면 손으로 옵션을 붙여도 된다. `--no-index` 로 인터넷을 끊고, `--find-links` 로 pip 이 이 폴더에서만 휠을 찾게 한 뒤, `-r` 로 설치할 목록 파일을 지정한다.
@@ -118,15 +124,15 @@ sudo WHEELHOUSE=packaging/wheels/py39 INSTALL_EXECUTOR=1 ./bin/install.sh
 ```bash
 # 수동 설치 예시
 pip install --no-index \
-  --find-links packaging/wheels/py39 \
+  --find-links /srv/wheels/py39 \
   -r requirements-executor.txt
 ```
 
-Python 3.11 로 배포할 때는 경로의 `py39` 를 `py311` 로 바꾸면 된다. 다만 가상환경 자체도 3.11 로 만들어야 하므로 `install.sh` 에는 `PYTHON=python3.11` 을 함께 준다.
+Python 3.11 로 배포할 때는 휠도 3.11 로 받아 두고(`python3.11 -m pip download -d wheels/py311 …`) 가상환경도 3.11 로 만들어야 하므로 `install.sh` 에 `PYTHON=python3.11` 을 함께 준다.
 
 ```bash
 # Python 3.11 + executor 포함 설치
-sudo PYTHON=python3.11 WHEELHOUSE=packaging/wheels/py311 \
+sudo PYTHON=python3.11 WHEELHOUSE=/srv/wheels/py311 \
      INSTALL_EXECUTOR=1 ./bin/install.sh
 ```
 
@@ -145,7 +151,7 @@ OS_ONLY=1     ./bin/check-prereqs.sh   # OS 패키지만
 WHEELS_ONLY=1 ./bin/check-prereqs.sh   # 휠만
 ```
 
-**OS 패키지** 점검은 `rpm -q` 로 빌드 도구와 SASL 의존성(`gcc gcc-c++ make python3-devel python3 python3-pip cyrus-sasl-devel`)이 깔려 있는지 본다. **파이썬 휠** 점검은 `packaging/wheels/py<버전>/` 의 `.whl`·`.tar.gz` 이름에서 패키지명·버전을 뽑아 실제 `.venv` 설치 목록과 대조해 `[OK]`/`[MISSING]`/`[VER ?]`(경고, 실패 아님)로 표시한다. 검사 대상 경로는 환경변수로 바꾼다 — 파이썬은 `VENV_PY`, 휠 번들 루트는 `WHEELS_ROOT` 이고, 배포 서버에서는 보통 `VENV_PY=/data1/distributed-query-executor/.venv/bin/python` 처럼 그 서버의 가상환경을 가리킨다.
+**OS 패키지** 점검은 `rpm -q` 로 빌드 도구와 SASL 의존성(`gcc gcc-c++ make python3-devel python3 python3-pip cyrus-sasl-devel`)이 깔려 있는지 본다. **파이썬 휠** 점검은 앞서 받아 둔 번들의 `.whl`·`.tar.gz` 이름에서 패키지명·버전을 뽑아 실제 `.venv` 설치 목록과 대조해 `[OK]`/`[MISSING]`/`[VER ?]`(경고, 실패 아님)로 표시한다. 번들은 저장소에 없으므로 위치를 `WHEELS_ROOT` 로 알려 줄 때만 이 점검이 돌고, 지정하지 않으면 건너뛴다. 파이썬 경로는 `VENV_PY` 로 바꾸며, 배포 서버에서는 보통 `VENV_PY=/data1/distributed-query-executor/.venv/bin/python` 처럼 그 서버의 가상환경을 가리킨다.
 
 ## 설정 항목 (config.properties)
 

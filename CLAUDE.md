@@ -2,7 +2,7 @@
 
 이 저장소에서 작업하는 Claude Code(및 기타 에이전트)를 위한 안내다. 개요와 빠른 시작은
 [README.md](README.md), 설계 심화는 [docs/DESIGN.md](docs/DESIGN.md), 실행 모드별 사용법은
-[docs/GUIDE.md](docs/GUIDE.md), 배포는 [packaging/README.md](packaging/README.md)를 참고한다.
+[docs/GUIDE.md](docs/GUIDE.md), 배포는 [docs/DEPLOY.md](docs/DEPLOY.md)를 참고한다.
 
 ## 프로젝트 개요
 
@@ -45,7 +45,6 @@ bin/           # 런처·설치 스크립트 + 운영자 CLI 래퍼(/data1 배�
 config/        # config.properties + config.yml 기본값 + 스키마(postgresql.sql / warehousepg.sql)
 templates/     # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2)
 customs/       # 사이트 커스텀 코드(customs.query_funcs.* — src 밖 최상위 패키지)
-packaging/     # 배포 안내 + wheels/(에어갭 휠 번들 py39·py311). 설치는 bin/install.sh
 tests/         # pytest (검증/라이프사이클/admission/대시보드/로깅)
 ```
 
@@ -264,7 +263,7 @@ executor 를 설정 목록의 index 로만 지정하는 allowlist 방식이라 S
 
 업그레이드 때 설정을 반영하는 자동화는 두지 않는다. config/·templates/·customs/ 는 install.sh 의
 rsync 에서 제외되고 최초 1회만 시딩되므로 재설치만으로는 새 버전의 변경이 들어가지 않는데, 이를
-`diff` 로 확인해 운영자가 직접 옮긴다(절차는 packaging/README.md). 여기서 놓치기 쉬운 것이
+`diff` 로 확인해 운영자가 직접 옮긴다(절차는 docs/DEPLOY.md). 여기서 놓치기 쉬운 것이
 **`config.yml` 을 교체해야 새 버전이 추가한 설정 구조가 반영된다**는 점이다. config.yml 은 값이
 아니라 `${변수:기본값}` 자리를 담은 구조라, 자리가 없으면 properties 에 값을 적어도 조용히
 무시된다.
