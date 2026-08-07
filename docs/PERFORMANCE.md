@@ -246,14 +246,18 @@ executor 가 Greenplum 으로 데이터를 실제로 밀어 넣을 때의 처리
 파이프라인 모드에서 벽시계 ≈ `read_starve + write_wait + finalize` 이므로 셋 중 가장 큰 항이 곧
 병목입니다. 처방은 병목별로 다릅니다.
 
-- **`read_starve` 지배(Impala 가 느림)**: 파티션 분할(`parallelism`)을 늘려 여러 executor 가 서로
-  다른 파티션을 동시에 읽게 하는 것이 최우선. `copy.batch_size` 상향(예: 10k→50k)으로 fetch 왕복을
-  줄이고, `impala.query_options`(`MEM_LIMIT`, `REQUEST_POOL`)·스캔 대상 축소로 Impala 를 튜닝.
-- **`write_wait` 지배(클라이언트 인코딩/전송)**: `copy.format=binary` 로 텍스트 인코딩 CPU 절감
-  (실패 시 자동 text 폴백), executor↔GP 네트워크 점검, `copy.batch_size` 상향.
-- **`finalize_wait` 지배(Greenplum COPY 처리)**: 한 스트림이 마스터로 몰리는 구조라 `parallelism` 을
-  늘려 여러 executor 가 동시에 COPY 하게 하는 것이 가장 효과적(`greenplum.pool_max` 로 동시 GP 연결
-  조절). 대상 테이블 인덱스/트리거/분산키(`DISTRIBUTED BY`)도 재검토.
+- **`read_starve` 가 지배하면 Impala 가 느린 것입니다.** 파티션 분할(`parallelism`)을 늘려 여러
+  executor 가 서로 다른 파티션을 동시에 읽게 하는 것이 가장 효과가 큽니다. 이어서
+  `copy.batch_size` 를 올려(예: 10k → 50k) fetch 왕복을 줄이고,
+  `impala.query_options`(`MEM_LIMIT`, `REQUEST_POOL`)를 조정하거나 스캔 대상을 줄여 Impala 자체를
+  튜닝합니다.
+- **`write_wait` 가 지배하면 클라이언트의 인코딩과 전송이 병목입니다.** `copy.format=binary` 로
+  텍스트 인코딩 CPU 를 줄이고(실패하면 자동으로 text 로 폴백합니다), executor 와 GP 사이 네트워크를
+  점검한 뒤 `copy.batch_size` 를 올립니다.
+- **`finalize_wait` 가 지배하면 Greenplum 의 COPY 처리가 병목입니다.** 한 스트림이 마스터로 몰리는
+  구조라, `parallelism` 을 늘려 여러 executor 가 동시에 COPY 하게 하는 것이 가장 효과적입니다
+  (동시 GP 연결은 `greenplum.pool_max` 로 조절합니다). 대상 테이블의 인덱스·트리거·분산키
+  (`DISTRIBUTED BY`)도 함께 재검토합니다.
 
 튜닝은 느린 task 하나의 STREAM_COPY 지표에서 지배 항을 찾고, 위 처방을 **하나씩** 적용해 다시
 측정하는 식으로 진행합니다. `read_starve` 와 `write_wait` 가 비슷하면 이미 파이프라인이 잘 겹치는
@@ -386,10 +390,11 @@ heartbeat_interval_s  ＜  reservation_ttl_s
 잃은 job 정리 주기는 그보다 길거나 같게, 예약 유효기간(`reservation_ttl_s`)은 heartbeat 보다 길게
 둡니다. 구체적으로:
 
-- `coordinator_stale_s` 는 `heartbeat_interval_s` 의 2~3배. 신호를 한두 번 놓쳐도 살아 있다고 봐
-  주기 위해서이며, 너무 작으면 잠깐의 GC·지연만으로 멀쩡한 coordinator 의 job 을 빼앗습니다.
-- `reservation_ttl_s` 는 heartbeat 의 수 배. 너무 짧으면 예약이 일찍 풀려 균형 효과가 사라지고,
-  너무 길면 죽은 coordinator 의 예약이 남아 부하를 부풀려 보게 됩니다.
+- `coordinator_stale_s` 는 `heartbeat_interval_s` 의 2~3배로 둡니다. 신호를 한두 번 놓쳐도 살아
+  있다고 봐 주기 위해서이며, 너무 작으면 잠깐의 GC 나 지연만으로 멀쩡한 coordinator 의 job 을
+  빼앗습니다.
+- `reservation_ttl_s` 는 heartbeat 의 몇 배로 둡니다. 너무 짧으면 예약이 일찍 풀려 균형 효과가
+  사라지고, 너무 길면 죽은 coordinator 의 예약이 남아 부하를 부풀려 보게 됩니다.
 - 장애를 더 빨리 감지하려면 위 부등식 순서를 깨지 않은 채 관련 값들을 한 세트로 함께 줄입니다.
   하나만 줄이면 부등식이 깨져 오탐이 생깁니다.
 

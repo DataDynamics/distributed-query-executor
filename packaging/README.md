@@ -56,12 +56,12 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
 
 `install.sh` 가 대신 해 주는 일은 다음과 같다.
 
-- 서비스 계정 `gpadmin` 생성(홈 `/data1`)
-- 앱을 `/data1/distributed-query-executor` 로 복사(`.venv`/`.git`/`logs`/`run`, 그리고 운영자 자산 `config`/`templates`/`customs` 제외)
-- `/data1/distributed-query-executor/.venv` 가상환경 + 의존성 설치(`WHEELHOUSE` 지정 시 오프라인)
-- `config/`(설정·스키마)·`templates/`(템플릿)·`customs/`(커스텀 함수)를 소스에서 배치(**없을 때만**), 로그 경로를 `/data1/distributed-query-executor/logs` 로 설정
-- TLS 자리표시 파일 생성(`config/impala-ca.pem`)
-- 런처 스크립트를 `bin/` 으로 배치, 소유권/권한 설정
+- 서비스 계정 `gpadmin` 을 홈 `/data1` 으로 만든다.
+- 앱을 `/data1/distributed-query-executor` 로 복사한다. 이때 `.venv`·`.git`·`logs`·`run` 과 운영자 자산인 `config`·`templates`·`customs` 는 제외한다.
+- `/data1/distributed-query-executor/.venv` 에 가상환경을 만들고 의존성을 설치한다. `WHEELHOUSE` 를 지정하면 오프라인으로 설치한다.
+- 설정·스키마(`config/`), 템플릿(`templates/`), 커스텀 함수(`customs/`)를 소스에서 배치하되 **아직 없을 때만** 넣고, 로그 경로를 `/data1/distributed-query-executor/logs` 로 맞춘다.
+- TLS 자리표시 파일 `config/impala-ca.pem` 을 만든다.
+- 런처 스크립트를 `bin/` 에 배치하고 소유권과 권한을 설정한다.
 
 > **업그레이드 시 자산 반영**: `config/`·`templates/`·`customs/` 는 모두 운영자가 편집·추가하는 자산이라 rsync 에서 제외되고 "없을 때만" 시딩된다. 그래서 재설치해도 운영자 편집·인증서·직접 추가한 템플릿·커스텀 함수는 보존되지만, **새 버전이 추가·변경한 기본값·설정 구조·예제도 자동으로 반영되지 않는다.** 이때 `bin/migrate-config.sh` 가 세 트리를 파일별 전략으로 반영한다:
 >

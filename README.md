@@ -106,17 +106,20 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 
 자주 변경하는 핵심 항목은 다음과 같습니다.
 
-- `coordinator.executors` — executor URL 목록
-- `coordinator.max_concurrent_jobs`(기본 16) / `coordinator.max_pending_jobs`(기본 100) —
-  실행 슬롯 + 대기 큐. 합(capacity)을 넘는 요청은 `429 Too Many Requests`(`Retry-After: 5`)로 거부
-- `impala.*` — 원본 접속. 기본 **TLS + LDAP** 인증(`impala.use_ssl`/`impala.ca_cert`/
-  `impala.auth_mechanism=LDAP`/`impala.user`/`impala.password`). 인증은 원본 Impala 에만 적용되고,
-  적재 대상 Greenplum 은 TLS/인증 없는 일반 `postgresql://` DSN 을 씁니다
-- `greenplum.dsn` — 적재 대상 접속 / `copy.batch_size` — 한 번에 보낼 행 수
-- `s3.*` — `s3_stage` 스테이징(`s3.bucket`/`s3.prefix`/자격증명/`s3.pxf_server`). `s3.external_schema`
-  를 주면 Phase 2 외부테이블이 스키마 한정(`dwtemp.s3ext_<job_id>`)으로 만들어집니다(비우면 `search_path`)
-- `query.func.module` — `/query-execute` 소스 실행 위임 함수(미리보기, `limit` 적용) /
-  `query.func.fetch_module` — **이관** 소스 읽기 위임 함수(전량). 접속 설정은 `query.func.config.*` 공유
+- `coordinator.executors` 에 executor 의 URL 목록을 콤마로 이어 적습니다.
+- `coordinator.max_concurrent_jobs`(기본 16)는 동시에 실행할 job 수이고,
+  `coordinator.max_pending_jobs`(기본 100)는 슬롯이 찼을 때 대기시킬 job 수입니다. 둘의 합을 넘는
+  요청은 `429 Too Many Requests` 와 `Retry-After: 5` 로 거절합니다.
+- `impala.*` 는 원본 접속 정보이며 기본적으로 TLS 와 LDAP 인증을 씁니다(`impala.use_ssl`,
+  `impala.ca_cert`, `impala.auth_mechanism=LDAP`, `impala.user`, `impala.password`). 이 인증은 원본
+  Impala 에만 적용되고, 적재 대상 Greenplum 은 TLS 나 인증 없는 일반 `postgresql://` DSN 을 씁니다.
+- `greenplum.dsn` 은 적재 대상 접속 정보이고, `copy.batch_size` 로 한 번에 보낼 행 수를 정합니다.
+- `s3.*` 는 `s3_stage` 스테이징 설정입니다(`s3.bucket`, `s3.prefix`, 자격증명, `s3.pxf_server`).
+  `s3.external_schema` 를 주면 Phase 2 외부테이블이 스키마 한정(`dwtemp.s3ext_<job_id>`)으로
+  만들어지고, 비워 두면 예전처럼 `search_path` 를 따릅니다.
+- `query.func.module` 은 `/query-execute` 의 소스 실행을 위임할 함수로 미리보기용이라 `limit` 이
+  적용됩니다. 이관에서 소스를 읽는 함수는 `query.func.fetch_module` 이며 전량을 반환해야 합니다.
+  접속 설정은 두 함수가 `query.func.config.*` 를 공유합니다.
 
 `impala.host` 와 `greenplum.dsn` 이 모두 채워져 있으면 실제 `ImpalaToGreenplumBackend` 가 동작하고,
 둘 중 하나라도 비면 실입출력 없이 API 만 확인할 수 있는 `MockBackend` 로 자동 대체됩니다. 로깅은
