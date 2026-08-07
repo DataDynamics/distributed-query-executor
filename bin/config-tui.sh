@@ -13,8 +13,12 @@ if [[ -x "/data1/distributed-query-executor/.venv/bin/python" ]]; then
     PY="/data1/distributed-query-executor/.venv/bin/python"
 elif [[ -x "$ROOT/.venv/bin/python" ]]; then
     PY="$ROOT/.venv/bin/python"
+elif PY="$(command -v python3)"; then
+    :
 else
-    PY="$(command -v python3)"
+    # set -e 로 그냥 죽으면 아무 메시지도 없이 끝나 원인을 알 수 없다.
+    echo "python3 을 찾을 수 없습니다. 가상환경(.venv)을 만들거나 python3 을 설치하세요." >&2
+    exit 2
 fi
 
 # src 레이아웃이므로 PYTHONPATH 에 src 를 넣어야 core 모듈을 찾는다.

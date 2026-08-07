@@ -18,7 +18,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 626개(+pandas 미설치 시 5 skip).
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 639개(+pandas 미설치 시 5 skip).
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -252,6 +252,20 @@ API(`query(sql, config, limit) -> DataFrame`)를 호출한다.
 core.config_tui`, `bin/config-tui.sh`). `config.yml` 을 파싱해 항목·기본값·설명·enum 을 자동
 추출하므로 스키마를 하드코딩하지 않으며, 바꾼 값만 주석과 순서를 보존해 diff-write 한다(저장 전
 `.bak` 백업, 비밀값 마스킹).
+
+여기서 예외가 스키마로는 알 수 없는 두 가지 표다. `ENUM_CHOICES` 는 값 후보를, `INT_BOUNDS` 는
+숫자 항목의 `(최소, 최대, 스텝)` 을 프로퍼티 키로 열거한다. 스텝은 `+`/`-` 키가 한 번에 움직이는
+폭이라 배치 크기처럼 자릿수가 큰 항목은 크게 잡고, 최소·최대는 경고가 아니라 **저장을 막는
+error** 로 쓴다 — 하한 아래는 대개 조용히 멈추는 값이기 때문이다. 대표적으로
+`max_dispatch_concurrency=0` 은 `asyncio.Semaphore(0)` 이 되어 디스패치가 영원히 대기한다.
+
+동시 처리량 손잡이는 coordinator·executor·greenplum·copy 로 흩어져 있어 조정하려면 탭을 옮겨
+다녀야 했다. 그래서 `CONCURRENCY_KEYS` 의 키만 모은 **동시성 가상 탭**을 맨 앞에 두었다. 같은
+`Field` 를 공유하므로 원래 탭에서 고쳐도 결과는 같고, 화면 아래에는 `concurrency_summary` 가
+곱셈을 풀어 준다(입구 수용량, 플릿 동시 task 수, GP 연결 수, copy 버퍼 행 수). 값들 **사이의**
+정합은 `check_concurrency` 가 따로 보는데, 개별 항목이 저마다 유효해도 조합이 어긋나면 처리량이
+조용히 깎이기 때문이다(GP 풀이 동시 task 보다 작으면 연결 대기, 디스패치 상한이 플릿 용량보다
+작으면 디스패치 병목).
 
 **`coordinator/tui.py`** 는 대시보드의 읽기 전용 curses 모니터다(`python -m coordinator.tui`,
 `bin/dashboard-tui.sh`). 웹 대시보드와 같은 JSON API(`/cluster`·`/jobs`·`/history`·`/info`)를

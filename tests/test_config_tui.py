@@ -1,7 +1,9 @@
-"""config_tui 의 순수 로직(스키마 파싱·diff-write·검증·마스킹) 테스트.
+"""config_tui 의 순수 로직(스키마 파싱·diff-write·검증·마스킹·동시성 조정) 테스트.
 
-curses UI 는 대화형이라 여기서 다루지 않고, 스키마 추출과 파일 병합처럼 회귀
-위험이 큰 부분만 검증한다. 실제 저장소 config/config.yml 을 그대로 파싱해 드리프트도 잡는다.
+스키마 추출과 파일 병합처럼 회귀 위험이 큰 부분을 검증하며, 실제 저장소 config/config.yml 을
+그대로 파싱해 드리프트도 잡는다. 키 입력을 흉내 내는 대화형 시나리오는 다루지 않지만,
+화면 그리기만은 가짜 curses(:class:`_FakeScreen`)로 한 번 훑는다 — 항목이 늘거나 이름이
+길어졌을 때 열이 밀리거나 탭이 화면 밖으로 사라지는 사고가 실제로 나기 때문이다.
 """
 
 from __future__ import annotations
@@ -9,11 +11,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.config_tui import (
+    CONCURRENCY_KEYS,
+    CONCURRENCY_SECTION,
+    INT_BOUNDS,
+    SECTION_LABELS,
+    ConfigTUI,
     Field,
+    check_concurrency,
+    concurrency_summary,
     display_value,
     infer_type,
     merge_properties_lines,
     parse_schema,
+    step_value,
     validate,
     write_config,
 )
@@ -188,3 +198,188 @@ def test_display_masks_secrets():
     assert display_value(dsn, "postgresql://u:secret@h/db") == "postgresql://u:***@h/db"
     assert display_value(pw, "hunter2") == "***"
     assert display_value(pw, "") == "(미설정)"
+
+
+# ── 동시성 조정 ────────────────────────────────────────────────────────────
+
+def test_동시성_키가_실제_스키마에_모두_있다():
+    """동시성 탭과 범위 표가 config.yml 의 실제 키를 가리키는지 본다.
+
+    설정 키 이름이 바뀌면 탭에서 조용히 사라지므로(에러 없이 빈 줄만 준다) 여기서 막는다.
+    """
+    keys = {f.prop_key for f in _schema()}
+    assert not (set(CONCURRENCY_KEYS) - keys)
+    assert not (set(INT_BOUNDS) - keys)
+
+
+def test_step_value_는_스텝만큼_움직이고_범위에서_멈춘다():
+    by = {f.prop_key: f for f in _schema()}
+    tasks = by["executor.max_concurrent_tasks"]
+    assert step_value(tasks, "8", 1) == "9"
+    assert step_value(tasks, "8", -1) == "7"
+    assert step_value(tasks, "0", -1) == "0"          # 하한(0)에서 더 내려가지 않는다
+    assert step_value(tasks, "1024", 1) == "1024"     # 상한에서 멈춘다
+
+
+def test_step_value_는_큰_스텝을_눈금에_맞춘다():
+    """배치 크기처럼 스텝이 큰 항목은 어중간한 값에서 눈금으로 정렬한다."""
+    batch = {f.prop_key: f for f in _schema()}["copy.batch_size"]
+    assert step_value(batch, "10000", 1) == "11000"
+    assert step_value(batch, "10500", 1) == "11000"
+    assert step_value(batch, "10500", -1) == "10000"
+
+
+def test_step_value_는_숫자가_아니면_손대지_않는다():
+    by = {f.prop_key: f for f in _schema()}
+    assert step_value(by["coordinator.executors"], "http://a:8087", 1) == "http://a:8087"
+    assert step_value(by["dashboard.enabled"], "true", 1) == "true"
+    # float 은 0.5 씩 움직이고 정수로 떨어지면 소수점을 남기지 않는다.
+    assert step_value(by["coordinator.poll_interval_s"], "1.0", 1) == "1.5"
+    assert step_value(by["coordinator.poll_interval_s"], "1.5", 1) == "2"
+
+
+def test_동시성_요약이_유효_용량을_곱해_보여준다():
+    lines = concurrency_summary({
+        "coordinator.executors": "http://a:8087,http://b:8087",
+        "coordinator.max_concurrent_jobs": "16",
+        "coordinator.max_pending_jobs": "100",
+        "executor.max_concurrent_tasks": "8",
+        "greenplum.pool_max": "0",
+        "copy.batch_size": "10000",
+        "copy.queue_size": "8",
+    })
+    text = " ".join(lines)
+    assert "116건까지 수용" in text            # 16 실행 + 100 대기
+    assert "동시 16개" in text                 # executor 2대 × task 8개
+    assert "GP 연결 최대 16개" in text         # pool_max=0 이면 task 수를 따라간다
+    assert "80,000행" in text                  # queue 8 × batch 10000
+
+
+def test_동시성_요약은_무제한과_미설정을_구분해_적는다():
+    unlimited = concurrency_summary({"coordinator.max_concurrent_jobs": "0"})
+    assert "무제한" in unlimited[0]
+    no_exec = concurrency_summary({"coordinator.executors": ""})
+    assert "계산할 수 없다" in " ".join(no_exec)
+
+
+def test_check_concurrency_는_어긋난_조합을_경고한다():
+    keys = [k for _, k, _ in check_concurrency({
+        "coordinator.executors": "http://a:8087,http://b:8087",
+        "coordinator.max_concurrent_jobs": "16",
+        "coordinator.max_pending_jobs": "0",       # 대기 큐 없음
+        "coordinator.max_dispatch_concurrency": "4",  # 플릿 용량 16보다 작다
+        "executor.max_concurrent_tasks": "8",
+        "greenplum.pool_max": "4",                 # 동시 task 8 보다 작다
+    })]
+    assert set(keys) == {
+        "greenplum.pool_max",
+        "coordinator.max_pending_jobs",
+        "coordinator.max_dispatch_concurrency",
+    }
+
+
+def test_check_concurrency_는_맞는_조합에_침묵한다():
+    assert check_concurrency({
+        "coordinator.executors": "http://a:8087,http://b:8087",
+        "coordinator.max_concurrent_jobs": "16",
+        "coordinator.max_pending_jobs": "100",
+        "coordinator.max_dispatch_concurrency": "32",
+        "executor.max_concurrent_tasks": "8",
+        "greenplum.pool_max": "0",
+    }) == []
+
+
+def test_validate_는_범위를_벗어난_숫자를_막는다():
+    """max_dispatch_concurrency=0 은 세마포어가 0 이 되어 디스패치가 영원히 멈춘다."""
+    fields = _schema()
+    errs = [i for i in validate(fields, {"coordinator.max_dispatch_concurrency": "0"})
+            if i[0] == "error"]
+    assert errs and errs[0][1] == "coordinator.max_dispatch_concurrency"
+    # 정상 범위는 통과한다.
+    assert not [i for i in validate(fields, {"coordinator.max_dispatch_concurrency": "32"})
+                if i[0] == "error"]
+
+
+def test_동시성_탭이_맨_앞에_모든_손잡이를_모은다():
+    fields = _schema()
+    app = ConfigTUI(_CONF, fields, {})
+    assert app.sections[0] == CONCURRENCY_SECTION
+    assert [f.prop_key for f in app._visible()] == CONCURRENCY_KEYS
+
+
+# ── 화면 그리기(가짜 curses) ───────────────────────────────────────────────
+
+class _FakeCurses:
+    """ConfigTUI._draw 가 쓰는 상수와 함수만 흉내 낸 curses 대역이다."""
+
+    KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN = 260, 261, 259, 258
+    KEY_PPAGE, KEY_NPAGE, KEY_HOME, KEY_END, KEY_ENTER = 339, 338, 262, 360, 343
+    A_BOLD = A_REVERSE = 1
+    COLOR_CYAN = COLOR_YELLOW = COLOR_GREEN = COLOR_RED = COLOR_WHITE = COLOR_BLUE = 0
+
+    def color_pair(self, n):
+        return 0
+
+
+class _FakeScreen:
+    """폭·높이를 넘겨 쓰면 그 자리에서 실패하는 화면이다.
+
+    진짜 curses 는 화면 밖에 쓰면 curses.error 를 던져 TUI 가 통째로 죽으므로,
+    여기서도 관대하게 잘라 주지 않고 단언으로 잡는다.
+    """
+
+    def __init__(self, h=24, w=100):
+        self.h, self.w, self.lines = h, w, {}
+
+    def getmaxyx(self):
+        return (self.h, self.w)
+
+    def erase(self):
+        self.lines.clear()
+
+    def refresh(self):
+        pass
+
+    def addstr(self, y, x, s, attr=0):
+        assert 0 <= y < self.h, f"y={y} 가 화면(h={self.h}) 밖"
+        assert 0 <= x < self.w, f"x={x} 가 화면(w={self.w}) 밖"
+        assert x + len(s) <= self.w, f"y={y} 에서 오른쪽 넘침(x={x}, len={len(s)}, w={self.w})"
+        self.lines[y] = self.lines.get(y, "") + s
+
+
+def test_모든_탭의_모든_행을_그려도_화면을_넘지_않는다():
+    app = ConfigTUI(_CONF, _schema(), {})
+    for size in ((24, 100), (10, 40), (8, 30)):
+        screen = _FakeScreen(*size)
+        for tab in range(len(app.sections)):
+            app.tab, app.top = tab, 0
+            for row in range(len(app._visible())):
+                app.row = row
+                app._draw(screen, _FakeCurses())
+
+
+def test_선택한_탭은_좁은_화면에서도_탭_바에_보인다():
+    """탭이 늘어 폭을 넘기면 앞을 잘라 내되 선택한 탭은 남겨야 한다."""
+    app = ConfigTUI(_CONF, _schema(), {})
+    last = len(app.sections) - 1
+    for width in (100, 70, 50):
+        for tab in (0, last):
+            app.tab, app.row, app.top = tab, 0, 0
+            screen = _FakeScreen(24, width)
+            app._draw(screen, _FakeCurses())
+            label = SECTION_LABELS.get(app.sections[tab], app.sections[tab])
+            assert label in screen.lines[1], f"w={width} tab={tab}: '{label}' 이 탭 바에 없다"
+
+
+def test_동시성_탭은_값_열이_밀리지_않고_요약을_함께_그린다():
+    app = ConfigTUI(_CONF, _schema(), {})
+    app.tab = app.sections.index(CONCURRENCY_SECTION)
+    screen = _FakeScreen(24, 100)
+    app._draw(screen, _FakeCurses())
+    # 가장 긴 키에서도 값이 같은 열에서 시작한다.
+    rows = [screen.lines[y] for y in range(3, 3 + len(CONCURRENCY_KEYS))]
+    starts = {len(r) - len(r.split()[-1]) for r in rows if r.split()[-1] not in ("(미설정)",)}
+    assert len(starts) == 1, f"값 열이 어긋난다: {rows}"
+    # 유도값 요약이 함께 보인다.
+    assert any("입구:" in line for line in screen.lines.values())
+    assert any("copy 버퍼:" in line for line in screen.lines.values())

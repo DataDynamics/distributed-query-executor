@@ -132,7 +132,9 @@ bin/s3-ops rmdir s3://dw-stage/dqe-stage/ --older-than 7d --yes
 `/data1/distributed-query-executor/config` 이고, 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 바꿉니다
 (개발 시 `config`). `config.properties` 는 손으로 고치는 대신 터미널 설정 편집기
 `bin/config-tui.sh` 로도 편집할 수 있습니다(항목·기본값·설명·enum 을 `config.yml` 에서 자동 추출,
-저장 시 `.bak` 백업 + 비밀값 마스킹).
+저장 시 `.bak` 백업 + 비밀값 마스킹). 첫 화면인 **동시성** 탭에는 처리량을 좌우하는 손잡이가
+섹션을 넘어 한자리에 모여 있고, `+`/`-` 로 값을 올리고 내리면 입구 용량·플릿 동시 task 수·GP
+연결 수가 즉시 다시 계산되어 아래에 표시됩니다.
 
 자주 변경하는 핵심 항목은 다음과 같습니다.
 
