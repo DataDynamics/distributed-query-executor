@@ -75,6 +75,17 @@ async def test_info_and_config_endpoints():
             assert ":@" not in str(row["value"]) or "***" in str(row["value"])
 
 
+async def test_config_endpoint_exposes_s3_stage_section():
+    """executor 환경설정 탭에도 s3_stage 설정(s3.*)이 보여야 한다(Phase 1 업로드 대상)."""
+    app = create_executor_app()
+    async with _client(app) as c:
+        rows = (await c.get("/config")).json()["config"]
+    keys = {(r["section"], r["key"]) for r in rows}
+    for key in ("bucket", "prefix", "external_schema", "endpoint_url",
+                "access_key", "secret_key", "pxf_server", "delete_on_cleanup"):
+        assert ("s3", key) in keys, key
+
+
 async def test_dashboard_has_cancel_action():
     """처리중 탭의 task 취소 버튼(JS 핸들러)이 HTML 에 포함돼야 한다."""
     app = create_executor_app()

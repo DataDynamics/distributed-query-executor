@@ -24,6 +24,30 @@ def test_masked_config_no_plaintext_secrets():
         assert "secret" not in val.lower()
 
 
+def test_masked_config_exposes_s3_stage_section():
+    """환경설정 탭에 s3_stage 설정(s3.*)이 보여야 한다 — 특히 외부테이블 스키마."""
+    rows = masked_config(core_settings)
+    keys = {(r["section"], r["key"]) for r in rows}
+    for key in ("bucket", "prefix", "external_schema", "endpoint_url", "region",
+                "use_ssl", "pxf_server", "pxf_profile", "gp_location_template",
+                "delete_on_cleanup"):
+        assert ("s3", key) in keys, key
+    by_key = {r["key"]: r for r in rows if r["section"] == "s3"}
+    # 미설정 값은 빈칸이 아니라 사람이 읽을 수 있는 안내로 표시된다.
+    assert by_key["external_schema"]["value"] == "(없음→search_path)"
+    assert by_key["bucket"]["value"] == "(미설정→s3_stage 비활성)"
+
+
+def test_masked_config_masks_s3_credentials(monkeypatch):
+    """S3 자격증명은 값이 아니라 존재 여부만 노출한다."""
+    monkeypatch.setattr(core_settings, "s3_access_key", "AKIAsecret", raising=False)
+    monkeypatch.setattr(core_settings, "s3_secret_key", "topsecret", raising=False)
+    monkeypatch.setattr(core_settings, "s3_external_schema", "dwtemp", raising=False)
+    by_key = {r["key"]: r["value"] for r in masked_config(core_settings) if r["section"] == "s3"}
+    assert by_key["access_key"] == "***" and by_key["secret_key"] == "***"
+    assert by_key["external_schema"] == "dwtemp"
+
+
 def test_dashboard_html_served(client):
     r = client.get("/")
     assert r.status_code == 200
