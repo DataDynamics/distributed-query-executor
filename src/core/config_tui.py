@@ -21,12 +21,20 @@
 화면 아래에는 :func:`concurrency_summary` 가 그 값에서 유도되는 실제 용량을 곱해 보여 주고,
 :func:`check_concurrency` 가 값들 사이의 어긋난 조합을 경고한다.
 
+## 항목별 설명
+
+목록 화면 아래의 한 줄 설명은 길면 잘리므로, ``?`` 를 누르면 :func:`help_lines` 가 만든 전문이
+뜬다. 여기에는 ``config.yml`` 주석에서 온 **무엇인가**와 :mod:`core.config_help` 에서 온
+**어떻게 쓰는가**가 함께 오르고, 현재 값·기본값·허용 범위·함께 볼 항목도 곁들여 이 화면만으로
+판단이 끝나게 했다. 화면에 쓰기 전에는 :func:`core.textui.cut` 으로 폭을 맞추는데, 한글이 섞인
+줄을 글자 수로 자르면 실제 폭의 두 배까지 밀려 맨 아랫줄에서 curses 가 예외를 던지기 때문이다.
+
 ## 구성
 
 * 순수 로직(테스트 대상, curses 무관): :func:`parse_schema`,
   :func:`merge_properties_lines`, :func:`validate`, :func:`infer_type`,
   :func:`display_value`, :func:`step_value`, :func:`concurrency_summary`,
-  :func:`check_concurrency`.
+  :func:`check_concurrency`, :func:`help_lines`.
 * :class:`Field` — 항목 하나의 메타(프로퍼티 키/섹션 경로/기본값/도움말/타입/enum/비밀 여부).
 * curses UI: :class:`ConfigTUI` 와 :func:`run_tui`.
 * 진입점: :func:`main` (``python -m core.config_tui`` 또는 ``bin/config-tui``).
@@ -44,8 +52,10 @@ from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Any
 
+from core.config_help import help_for, related_to
 from core.config_loader import DEFAULT_CONFIG_DIR, load_properties
 from core.masking import mask_dsn
+from core.textui import cut, pad, wrap
 
 # ``${변수:기본값}`` 자리표시자를 찾는다(config_loader 와 같은 규칙이다). group(1)이 변수명이고 group(2)가 기본값이다.
 _VAR_PATTERN = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
@@ -394,6 +404,46 @@ def check_concurrency(values: dict[str, str]) -> list[tuple[str, str, str]]:
     return issues
 
 
+def help_lines(fld: Field, value: str, cols: int) -> list[str]:
+    """한 항목의 도움말 화면에 그릴 줄들을 만든다(curses 무관).
+
+    화면에는 이 값이 **무엇을 정하는지**(config.yml 주석)와 **어떻게 정하는지**
+    (:mod:`core.config_help` 의 안내)를 함께 올린다. 목록 화면의 한 줄짜리 설명은 길면
+    잘리므로, 전문을 보려면 이 화면을 연다. 현재 값과 기본값, 허용 범위, 함께 볼 항목도
+    같이 보여 주어 이 화면만으로 판단이 끝나게 한다.
+    """
+    out: list[str] = [fld.prop_key, ""]
+
+    cur = display_value(fld, value)
+    out.append(f"현재 값: {cur}")
+    out.append(f"기본값: {fld.default or '(빈 값)'}")
+    if fld.enum:
+        out.append(f"고를 수 있는 값: {' | '.join(fld.enum)}")
+    elif fld.prop_key in INT_BOUNDS:
+        lo, hi, step = INT_BOUNDS[fld.prop_key]
+        out.append(f"허용 범위: {lo} ~ {hi}   (+/- 한 번에 {step})")
+    else:
+        out.append(f"형식: {fld.ftype}")
+
+    # config.yml 주석 — 이 설정이 무엇인지.
+    meaning = " ".join(x for x in (fld.help_long, fld.help_inline) if x)
+    if meaning:
+        out += ["", "■ 무엇인가"] + wrap(meaning, cols)
+
+    # 별도 안내 — 어떻게 정하는지.
+    guide = help_for(fld.prop_key)
+    if guide:
+        out += ["", "■ 어떻게 쓰는가"] + wrap(guide, cols)
+
+    rel = related_to(fld.prop_key)
+    if rel:
+        out += ["", "■ 함께 보기"] + wrap(", ".join(rel), cols)
+
+    if not meaning and not guide:
+        out += ["", "(이 항목에는 준비된 설명이 없다)"]
+    return out
+
+
 def display_value(fld: Field, value: str) -> str:
     """항목의 현재 값을 화면 표시용 문자열로 만든다(비밀값 마스킹 포함).
 
@@ -564,9 +614,11 @@ class ConfigTUI:
         self.row = 0
         self.top = 0                               # 스크롤 오프셋이다
         self.status = (
-            "↑↓/PgUp/PgDn 이동  ←→ 탭  Enter 편집  스페이스 토글  +/- 증감  r 초기화  s 저장  q 종료"
+            "↑↓ 이동  ←→ 탭  Enter 편집  스페이스 토글  +/- 증감  ? 설명  r 초기화  s 저장  q 종료"
         )
         self.dirty = False
+        self.help_top = 0                          # 도움말 화면의 스크롤 위치다(열려 있을 때만 쓴다)
+        self.help_open = False
 
     # 현재 탭에 속한 항목들을 모은다. 동시성 탭만 섹션이 아니라 키 목록으로 뽑는다.
     def _visible(self) -> list[Field]:
@@ -588,9 +640,23 @@ class ConfigTUI:
         stdscr.keypad(True)
         self._init_colors(curses)
         while True:
+            if self.help_open:
+                self._draw_help(stdscr, curses)
+                ch = stdscr.getch()
+                h = stdscr.getmaxyx()[0]
+                if ch in (curses.KEY_DOWN, curses.KEY_NPAGE):
+                    self.help_top += 1 if ch == curses.KEY_DOWN else max(1, h - 4)
+                elif ch in (curses.KEY_UP, curses.KEY_PPAGE):
+                    self.help_top = max(0, self.help_top - (1 if ch == curses.KEY_UP else max(1, h - 4)))
+                else:                              # 그 밖의 키는 모두 닫기로 본다
+                    self.help_open = False
+                continue
+
             self._draw(stdscr, curses)
             ch = stdscr.getch()
-            if ch in (ord("q"), 27):               # q / ESC
+            if ch in (ord("?"), ord("h")):
+                self.help_open, self.help_top = True, 0
+            elif ch in (ord("q"), 27):             # q / ESC
                 if self.dirty and not self._confirm(stdscr, curses, "저장 안 함. 종료? (y/n)"):
                     continue
                 return False
@@ -678,7 +744,7 @@ class ConfigTUI:
         curses.echo()
         stdscr.move(h - 1, 0)
         stdscr.clrtoeol()
-        stdscr.addstr(h - 1, 0, prompt[: w - 1])
+        stdscr.addstr(h - 1, 0, cut(prompt, w - 1))
         try:
             raw = stdscr.getstr(h - 1, min(len(prompt), w - 1), max(1, w - len(prompt) - 2))
             new = raw.decode("utf-8", "replace").strip()
@@ -719,13 +785,44 @@ class ConfigTUI:
         )
         return True
 
+    def _draw_help(self, stdscr: Any, curses: Any) -> None:
+        """선택한 항목의 설명을 화면 가득 그린다. 아무 키나 누르면 닫힌다."""
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        vis = self._visible()
+        fld = vis[self.row] if vis else None
+        if fld is None:
+            self.help_open = False
+            return
+
+        lines = help_lines(fld, self._eff(fld), w - 4)
+        body_h = h - 3
+        # 끝을 넘겨 스크롤하면 빈 화면만 남으므로 마지막 화면에서 멈춘다.
+        self.help_top = max(0, min(self.help_top, max(0, len(lines) - body_h)))
+
+        stdscr.addstr(0, 0, cut(" 설정 설명 ", w - 1), curses.color_pair(1) | curses.A_BOLD)
+        y = 2
+        for line in lines[self.help_top : self.help_top + body_h]:
+            if y >= h - 1:
+                break
+            # 소제목(■)과 키 이름은 눈에 띄게 둔다.
+            attr = curses.color_pair(1) if line.startswith("■") else 0
+            if line == fld.prop_key:
+                attr = curses.color_pair(3) | curses.A_BOLD
+            stdscr.addstr(y, 2, cut(line, w - 3), attr)
+            y += 1
+
+        more = "  (↑↓/PgUp/PgDn 스크롤)" if len(lines) > body_h else ""
+        stdscr.addstr(h - 1, 0, cut(f" 아무 키나 누르면 닫힘{more}", w - 1), curses.A_REVERSE)
+        stdscr.refresh()
+
     def _draw(self, stdscr: Any, curses: Any) -> None:
         stdscr.erase()
         h, w = stdscr.getmaxyx()
 
         # 타이틀과 탭 바를 그린다.
         title = " Distributed Query Executor — 설정 "
-        stdscr.addstr(0, 0, title[: w - 1], curses.color_pair(1) | curses.A_BOLD)
+        stdscr.addstr(0, 0, cut(title, w - 1), curses.color_pair(1) | curses.A_BOLD)
         # 탭이 화면 폭을 넘으면 앞에서부터 잘라 낸다. 그대로 두면 뒤쪽 탭(Executor 등)이
         # 보이지 않아 그 탭에 있는 동안 어디인지 알 수 없다. 선택한 탭이 항상 보이도록
         # 시작 위치를 밀고, 잘린 쪽에는 화살표로 더 있음을 알린다.
@@ -775,8 +872,9 @@ class ConfigTUI:
             marker = "●" if self._is_override(f) else " "
             row_attr = curses.color_pair(5) if selected else 0
             # 키 열은 가장 긴 키(coordinator.max_dispatch_concurrency, 36자)에 맞춘다.
-            line = f" {marker} {key_txt:<36} {val_txt}"
-            stdscr.addstr(y, 0, line[: w - 1], row_attr)
+            # 폭은 글자 수가 아니라 화면 칸 수로 재야 값 열이 어긋나지 않는다.
+            line = f" {marker} {pad(key_txt, 36)} {val_txt}"
+            stdscr.addstr(y, 0, cut(line, w - 1), row_attr)
             if not selected and self._is_override(f):
                 stdscr.addstr(y, 1, marker, curses.color_pair(2))
             y += 1
@@ -786,7 +884,7 @@ class ConfigTUI:
         for i, line in enumerate(summary):
             sy = h - 4 - len(summary) + i
             if 3 <= sy < h - 3:
-                stdscr.addstr(sy, 1, line[: w - 2], curses.color_pair(3))
+                stdscr.addstr(sy, 1, cut(line, w - 2), curses.color_pair(3))
 
         # 선택한 항목의 설명 패널을 그린다.
         cur = vis[self.row] if vis else None
@@ -798,11 +896,11 @@ class ConfigTUI:
             elif cur.prop_key in INT_BOUNDS:
                 lo, hi, step = INT_BOUNDS[cur.prop_key]
                 base += f"   범위: {lo}..{hi}   +/- 스텝: {step}"
-            stdscr.addstr(h - 3, 0, base[: w - 1], curses.color_pair(3))
+            stdscr.addstr(h - 3, 0, cut(base, w - 1), curses.color_pair(3))
             if desc:
-                stdscr.addstr(h - 2, 0, desc[: w - 1])
+                stdscr.addstr(h - 2, 0, cut(desc, w - 1))
 
-        stdscr.addstr(h - 1, 0, self.status[: w - 1], curses.A_REVERSE)
+        stdscr.addstr(h - 1, 0, cut(self.status, w - 1), curses.A_REVERSE)
         stdscr.refresh()
 
 

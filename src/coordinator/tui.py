@@ -13,6 +13,11 @@ coordinator 프록시(`GET /executors/{idx}/tasks`·`/metrics`)로 가져오므�
 * curses UI: :class:`DashboardTUI` 와 :func:`run_tui`.
 * 진입점: :func:`main` (`python -m coordinator.tui` 또는 `bin/dashboard-tui.sh`).
 
+폴링 화면이라 줄 수가 시시각각 바뀌므로 갱신할 때마다 :meth:`DashboardTUI.clamp` 로 커서를
+범위 안에 들여놓는다. 목록이 짧아졌는데 커서가 끝 너머에 남으면 화면이 통째로 비기 때문이다.
+화면에 쓰기 전에는 반드시 :func:`core.textui.cut` 을 거치는데, 한글이 섞인 줄을 글자 수로
+자르면 실제 폭의 두 배까지 밀려 맨 아랫줄에서 curses 가 예외를 던진다.
+
 에어갭 전제라 외부 TUI 라이브러리 없이 표준 ``curses`` 만 쓴다(config-tui 와 동일 노선).
 읽기 전용이므로 job 취소/재시도 같은 쓰기 동작은 하지 않는다(향후 옵션).
 """
@@ -21,7 +26,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 from typing import Any
+
+from core.textui import cut
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CoordinatorApi — coordinator JSON API 클라이언트
@@ -295,6 +303,8 @@ class DashboardTUI:
         self.error: str | None = None
         self.lines: list[str] = []       # 현재 뷰를 렌더한 줄들이다
         self.select_rows: list[Any] = [] # 드릴인할 수 있는 행의 키다(job_id 나 executor index)
+        self.refreshed_at = "-"          # 마지막으로 데이터를 받아 온 시각(HH:MM:SS)이다
+        self.paused = False              # 자동 폴링 정지 여부다
 
     # ── 데이터 폴링 ──
     def refresh(self) -> None:
@@ -305,8 +315,22 @@ class DashboardTUI:
                 self._refresh_detail()
             else:
                 self._refresh_tab()
+            self.refreshed_at = time.strftime("%H:%M:%S")
         except Exception as e:  # 네트워크·HTTP·파싱 오류는 배너로만 알리고 UI 는 그대로 둔다
             self.error = f"{type(e).__name__}: {e}"
+        self.clamp()
+
+    def clamp(self) -> None:
+        """커서와 스크롤을 현재 줄 수 안으로 되돌린다.
+
+        폴링하는 화면이라 줄 수가 시시각각 줄어든다(job 이 끝나 목록에서 빠지는 등).
+        아래쪽을 보던 중에 목록이 짧아지면 커서와 스크롤이 모두 끝 너머에 남아 화면이
+        통째로 비고, 위 방향키는 한 칸씩만 올라오므로 빈 화면에서 좀처럼 빠져나오지
+        못한다. 그래서 갱신할 때마다 범위 안으로 당겨 둔다.
+        """
+        last = max(0, len(self.lines) - 1)
+        self.row = min(self.row, last)
+        self.top = min(self.top, last)
 
     def _refresh_tab(self) -> None:
         key = TABS[self.tab][1]
@@ -371,6 +395,15 @@ class DashboardTUI:
             return True
         return False
 
+    def set_interval(self, seconds: float) -> float:
+        """폴링 주기를 바꾸고 확정된 값을 돌려준다.
+
+        0.5초보다 촘촘하면 coordinator 를 두드리기만 하고, 60초보다 성기면 모니터라기보다
+        정지 화면에 가까우므로 그 사이로 가둔다.
+        """
+        self.interval = max(0.5, min(60.0, round(seconds, 1)))
+        return self.interval
+
     def set_tab(self, tab: int) -> None:
         self.tab = tab % len(TABS)
         self.detail = None
@@ -396,7 +429,8 @@ class DashboardTUI:
             self._draw(stdscr, curses)
             ch = stdscr.getch()
             if ch == -1:                      # 타임아웃이므로 자동으로 폴링한다
-                self.refresh()
+                if not self.paused:
+                    self.refresh()
             elif ch in (ord("q"), 27) and self.detail is None:  # 최상위에서 q 나 ESC 를 누르면 종료한다
                 if ch == 27 and self.back():
                     continue
@@ -415,10 +449,25 @@ class DashboardTUI:
                 self.row = max(0, self.row - 1)
             elif ch == curses.KEY_DOWN:
                 self.row = min(max(0, len(self.lines) - 1), self.row + 1)
+            elif ch in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+                page = max(1, stdscr.getmaxyx()[0] - 5)
+                delta = -page if ch == curses.KEY_PPAGE else page
+                self.row = max(0, min(max(0, len(self.lines) - 1), self.row + delta))
+            elif ch == curses.KEY_HOME:
+                self.row = self.top = 0
+            elif ch == curses.KEY_END:
+                self.row = max(0, len(self.lines) - 1)
             elif ch in (curses.KEY_ENTER, 10, 13):
                 self.enter()
             elif ch == ord("r"):
                 self.refresh()
+            elif ch == ord(" "):
+                # 화면이 계속 바뀌면 긴 목록을 읽거나 옮겨 적기 어렵다. 잠시 세워 둔다.
+                self.paused = not self.paused
+            elif ch in (ord("+"), ord("=") , ord("-"), ord("_")):
+                # 폴링 주기 조정이다. 사고를 좇을 땐 촘촘히, 평소엔 성기게 본다.
+                self.set_interval(self.interval * (2.0 if ch in (ord("-"), ord("_")) else 0.5))
+                stdscr.timeout(int(self.interval * 1000))
 
     def _draw(self, stdscr: Any, curses: Any) -> None:
         stdscr.erase()
@@ -426,15 +475,23 @@ class DashboardTUI:
 
         # 타이틀과 탭 바를 그린다.
         title = f" Coordinator 모니터  {self.api.base_url} "
-        stdscr.addstr(0, 0, title[: w - 1], curses.color_pair(1) | curses.A_BOLD)
+        stdscr.addstr(0, 0, cut(title, w - 1), curses.color_pair(1) | curses.A_BOLD)
+        # 탭이 화면 폭을 넘으면 앞에서부터 잘라 내되 현재 탭은 항상 남긴다(config-tui 와 같은 방식).
+        segs = [f" {label} " for label, _ in TABS]
+        start = 0
+        while start < self.tab and sum(len(segs[i]) + 1 for i in range(start, self.tab + 1)) >= w - 2:
+            start += 1
         x = 0
-        for i, (label, _) in enumerate(TABS):
-            seg = f" {label} "
-            if x + len(seg) >= w:
+        if start > 0:
+            stdscr.addstr(1, 0, "‹", curses.color_pair(1))
+            x = 2
+        for i in range(start, len(segs)):
+            if x + len(segs[i]) >= w - 1:
+                stdscr.addstr(1, min(x, w - 2), "›", curses.color_pair(1))
                 break
             attr = curses.color_pair(4) if (i == self.tab and self.detail is None) else curses.color_pair(1)
-            stdscr.addstr(1, x, seg, attr)
-            x += len(seg) + 1
+            stdscr.addstr(1, x, segs[i], attr)
+            x += len(segs[i]) + 1
 
         # 본문을 스크롤하며 그린다. 상세 모드면 상세 줄을, 아니면 탭 줄을 쓴다.
         body = self.lines
@@ -454,18 +511,21 @@ class DashboardTUI:
             attr = 0
             if selectable and i == self.row and i < len(self.select_rows) and self.select_rows[i] is not None:
                 attr = curses.color_pair(4)
-            stdscr.addstr(y, 0, line[: w - 1], attr)
+            stdscr.addstr(y, 0, cut(line, w - 1), attr)
             y += 1
 
-        # 상태 줄을 그린다.
+        # 상태 줄을 그린다. 오류가 아니면 갱신 상태와 키 안내를 함께 남긴다 — 화면이
+        # 그대로여도 데이터가 언제 것인지 알 수 있어야 멈춘 것인지 조용한 것인지 구분된다.
         if self.error:
-            status = f" ⚠ {self.error} "
-            stdscr.addstr(h - 1, 0, status[: w - 1], curses.color_pair(3) | curses.A_REVERSE)
+            status = f" ⚠ {self.error}  (갱신 {self.refreshed_at}) "
+            stdscr.addstr(h - 1, 0, cut(status, w - 1), curses.color_pair(3) | curses.A_REVERSE)
         else:
-            hint = ("↑↓ 이동  Enter 상세  ←/ESC 뒤로  r 새로고침  q 종료"
+            state = f"{'❚❚ 정지' if self.paused else f'{self.interval:g}초'} · 갱신 {self.refreshed_at}"
+            hint = ("↑↓ 이동  ←/ESC 뒤로  스페이스 정지  +/- 주기  r 새로고침  q 종료"
                     if self.detail is not None
-                    else "←→ 탭  ↑↓ 이동  Enter 상세  r 새로고침  q 종료")
-            stdscr.addstr(h - 1, 0, (" " + hint)[: w - 1], curses.A_REVERSE)
+                    else "←→ 탭  ↑↓ 이동  Enter 상세  스페이스 정지  +/- 주기  r 새로고침  q 종료")
+            line = f" [{state}]  {hint}"
+            stdscr.addstr(h - 1, 0, cut(line, w - 1), curses.A_REVERSE)
         stdscr.refresh()
 
 
@@ -474,7 +534,9 @@ def run_tui(base_url: str, interval: float = 2.0) -> None:
     import curses
 
     api = CoordinatorApi(base_url)
-    curses.wrapper(DashboardTUI(api, interval=interval).run)
+    app = DashboardTUI(api, interval=interval)
+    app.set_interval(interval)          # --interval 로 들어온 값도 같은 범위로 가둔다
+    curses.wrapper(app.run)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -490,7 +552,8 @@ def main(argv: list[str] | None = None) -> int:
         help="coordinator 베이스 URL(기본: 설정/COORDINATOR_URL 에서 유추, %(default)s)",
     )
     parser.add_argument(
-        "--interval", type=float, default=2.0, help="자동 새로고침 주기(초, 기본 %(default)s)",
+        "--interval", type=float, default=2.0,
+        help="자동 새로고침 주기(초, 기본 %(default)s, 0.5~60). 실행 중에는 +/- 로 조정",
     )
     args = parser.parse_args(argv)
 

@@ -18,7 +18,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 639개(+pandas 미설치 시 5 skip).
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 662개(+pandas 미설치 시 5 skip).
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -267,13 +267,34 @@ error** 로 쓴다 — 하한 아래는 대개 조용히 멈추는 값이기 때
 조용히 깎이기 때문이다(GP 풀이 동시 task 보다 작으면 연결 대기, 디스패치 상한이 플릿 용량보다
 작으면 디스패치 병목).
 
+**`core/config_help.py`** 는 항목별로 "무엇이고 어떻게 쓰는가"를 담은 안내 사전이다(`?` 키로
+뜨는 화면을 `help_lines` 가 만든다). config.yml 의 줄 끝 주석은 한 줄 요약이라 뜻은 알려 줘도
+얼마로 두어야 하는지까지는 담기 어렵고, 주석을 문단째 늘리면 운영자가 업그레이드 때 손으로
+옮겨야 하는 파일만 무거워진다. 그래서 안내는 코드에 두어 새 버전을 설치하면 자동으로 따라오게
+했다. 대신 키가 사라지면 안내가 조용히 붕 뜨므로 `tests/test_config_help.py` 가 모든 키의
+실재를 확인한다. 모든 항목을 채우지는 않고, 잘못 잡으면 성능이나 정합성이 상하는 항목에
+집중한다.
+
+**`core/textui.py`** 는 두 TUI 가 공유하는 문자 폭 계산이다. 한글은 한 글자가 두 칸이라
+`line[: w - 1]` 처럼 글자 수로 자르면 화면 폭의 두 배까지 밀려나고, 그렇게 넘긴 문자열은
+**맨 아랫줄에서 `addwstr() returned ERR` 로 TUI 를 통째로 죽인다**(중간 줄은 조용히 잘린다).
+상태 줄과 설명 줄이 대부분 한글이라 폭 80칸에서 바로 걸리므로, 화면에 쓰기 전에는 반드시
+`cut()` 을 거치고 열 맞춤은 `f"{s:<12}"` 대신 `pad()` 를 쓴다.
+
 **`coordinator/tui.py`** 는 대시보드의 읽기 전용 curses 모니터다(`python -m coordinator.tui`,
 `bin/dashboard-tui.sh`). 웹 대시보드와 같은 JSON API(`/cluster`·`/jobs`·`/history`·`/info`)를
 폴링해 그리며 HTML 을 스크래핑하지 않는다. 개별 executor 상세는 coordinator 프록시(app.py 의
 `_proxy_executor_get`)로 가져오므로 coordinator 한 곳만 붙어도 executor 화면까지 볼 수 있는데,
 executor 를 설정 목록의 index 로만 지정하는 allowlist 방식이라 SSRF 가 막힌다(`/datasources`
-프록시와 같은 관례). 두 TUI 모두 순수 로직이 curses 와 무관해 테스트할 수 있고, 에어갭을 고려해
-표준 라이브러리 curses 만 쓴다.
+프록시와 같은 관례). 폴링 화면이라 줄 수가 시시각각 바뀌므로 갱신할 때마다 `clamp()` 로 커서를
+범위 안에 들여놓는데, 목록이 짧아졌는데 커서가 끝 너머에 남으면 화면이 통째로 비고 위 방향키로는
+한 칸씩만 올라와 좀처럼 빠져나오지 못하기 때문이다. 스페이스로 폴링을 세우고 `+`/`-` 로 주기를
+바꾸며, 상태 줄의 갱신 시각으로 화면이 언제 것인지 알 수 있다.
+
+두 TUI 모두 순수 로직이 curses 와 무관해 테스트할 수 있고, 에어갭을 고려해 표준 라이브러리
+curses 만 쓴다. 화면 그리기는 가짜 curses(화면 밖에 쓰면 단언으로 실패하는 대역)로 모든 탭의
+모든 행을 여러 화면 크기에서 훑어 확인한다 — 열 밀림과 탭 잘림, 폭 넘침이 실제로 이 방식에서
+잡혔다.
 
 업그레이드 때 설정을 반영하는 자동화는 두지 않는다. config/·templates/·customs/ 는 install.sh 의
 rsync 에서 제외되고 최초 1회만 시딩되므로 재설치만으로는 새 버전의 변경이 들어가지 않는데, 이를

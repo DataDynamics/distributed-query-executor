@@ -134,7 +134,8 @@ bin/s3-ops rmdir s3://dw-stage/dqe-stage/ --older-than 7d --yes
 `bin/config-tui.sh` 로도 편집할 수 있습니다(항목·기본값·설명·enum 을 `config.yml` 에서 자동 추출,
 저장 시 `.bak` 백업 + 비밀값 마스킹). 첫 화면인 **동시성** 탭에는 처리량을 좌우하는 손잡이가
 섹션을 넘어 한자리에 모여 있고, `+`/`-` 로 값을 올리고 내리면 입구 용량·플릿 동시 task 수·GP
-연결 수가 즉시 다시 계산되어 아래에 표시됩니다.
+연결 수가 즉시 다시 계산되어 아래에 표시됩니다. 어떤 값인지 확실하지 않을 때는 `?` 를 누르면
+그 항목이 무엇을 정하는지와 얼마로 두어야 하는지, 함께 보아야 할 설정이 한 화면에 나옵니다.
 
 자주 변경하는 핵심 항목은 다음과 같습니다.
 
@@ -330,6 +331,9 @@ HTML 화면이 3초마다 JSON API 를 폴링해 처리중 Query / 실행 이력
 JSON API(`/cluster`·`/jobs`·`/history`·`/info`)를 폴링하며, 개별 executor 화면은 coordinator 프록시
 (`GET /executors/{idx}/tasks`·`/metrics`)로 가져오므로 coordinator 한 곳만 붙어도 됩니다. 클러스터
 전체 상태는 `GET /cluster` 로 한 번에 조회합니다(`refresh=true` 즉시 폴링 / `refresh=false` 캐시).
+화면은 `--interval` 주기로 스스로 갱신하는데, 목록을 읽는 동안 화면이 바뀌는 것이 거슬리면
+스페이스로 잠시 세우고 `+`/`-` 로 주기를 조절합니다. 상태 줄의 갱신 시각을 보면 지금 화면이
+언제 것인지 알 수 있습니다.
 
 ```bash
 curl -s localhost:8088/cluster                        # 통합 상태(즉시 폴링)
