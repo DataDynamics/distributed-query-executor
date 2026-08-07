@@ -34,20 +34,6 @@ query-execute 의 trino 경로가 이 함수에 실행을 위임한다(프레임
 
 이 예제는 표준 dbprobe 의 정형(_shape) 로직을 재사용해 ``fetchmany(limit+1)`` 로 truncated
 를 판정한다. 조직 표준(게이트웨이/래퍼/커넥션 풀 등)이 있으면 이 함수 본문만 바꾸면 된다.
-
-**결과가 pandas DataFrame 으로 오는 경우**(사내 게이트웨이/래퍼가 커서 대신 DataFrame 을
-돌려주는 흔한 형태)에도 ``_shape`` 를 그대로 쓴다 — DataFrame 을 넘기면 컬럼명·행·truncated
-를 알아서 뽑고, numpy 스칼라(np.int64 등)와 결측(NaN/NaT/pd.NA)을 JSON 안전한 값(숫자/null)
-으로 정규화한다::
-
-    def run(sql, *, config, limit):
-        started = time.perf_counter()
-        df = my_gateway.query(sql)          # -> pandas.DataFrame
-        return _shape(None, df, limit, started)
-
-DataFrame 은 상위 ``limit+1`` 행만 잘라 변환하므로 큰 결과가 와도 정형 비용은 미리보기
-크기에 비례한다. pandas 는 이 프로젝트의 의존성이 아니라 덕타이핑으로 인식하므로, 쓰는
-배포에만 설치돼 있으면 된다.
 """
 from __future__ import annotations
 
