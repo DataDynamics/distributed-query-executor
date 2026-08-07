@@ -505,7 +505,9 @@ class _DispatcherBase:
 
         # coordinator 가 GP master 에 실행할 SQL 을 조립한다(core/s3_stage.py — 순수 함수).
         csv_options = stage_sql.resolve_csv_options(job, self.settings)
-        ext = s3_sql.external_table_name(job.job_id)
+        # 외부테이블 이름은 설정 s3.external_schema 로 스키마 한정할 수 있다(예: dwtemp.s3ext_<job_id>).
+        # DDL/DROP/INSERT 치환이 모두 이 한 이름을 쓰므로 세 곳이 어긋나지 않는다.
+        ext = s3_sql.external_table_name(job.job_id, self.settings.s3_external_schema)
         prefix = s3_sql.s3_job_prefix(self.settings.s3_prefix, job.job_id)
         location = s3_sql.build_s3_location(
             self.settings.s3_bucket, prefix,

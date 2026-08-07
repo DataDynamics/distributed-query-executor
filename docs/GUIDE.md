@@ -424,6 +424,7 @@ POST /jobs
 - `local_stage` 와 달리 **`staging_ddl` 은 주지 않는다**(heap staging 없이 S3 외부테이블을 최종
   INSERT 의 소스로 곧장 쓴다). `staging_table` 은 `insert_sql` 의 `FROM` 이 참조하는 이름이고,
   coordinator 가 Phase 2 에서 이를 **job 고유 외부테이블 이름 `s3ext_<job_id>`** 로 치환한다.
+  설정 `s3.external_schema` 를 주면 이 이름이 **스키마 한정**(`dwtemp.s3ext_<job_id>`)이 된다.
 - `external_columns` 는 CSV 컬럼 순서(=SELECT 출력 순서)와 타입이 일치해야 한다.
 - **적재 전 파티션 DELETE 제어(`pre_delete`)**: Phase 2 의 선삭제 여부를 요청 단위로 명시한다.
   `null`(기본)이면 `write_mode` 를 따르고(`overwrite_partitions`→DELETE, `append`→미삭제),
@@ -463,7 +464,7 @@ Phase 2 가 `S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
 | **executor 설정(Phase 1 업로드)** | `impala.host`(소스), `s3.bucket`·`s3.prefix`·`s3.endpoint_url`(온프렘 S3 호환이면)·`s3.access_key`/`s3.secret_key`(또는 boto3 기본 자격증명 체인). 업로드는 `boto3`(requirements-executor.txt). executor 는 GP 를 직접 쓰지 않지만, 실백엔드 선택을 위해 `greenplum.dsn` 은 있어야 한다(연결은 lazy). |
 | **coordinator 설정(Phase 2 적재)** | `greenplum.dsn`(GP master — 외부테이블 생성·INSERT), 그리고 Phase 2 LOCATION 조립을 위해 **coordinator 도 같은 `s3.*`**(bucket/prefix/pxf_server/pxf_profile)를 읽는다(설정은 coordinator·executor 공유). |
 | **GP 읽기(PXF)** | GP 세그먼트에 **PXF 를 설치·기동**하고 **S3 SERVER 프로파일**을 구성한다: `$PXF_BASE/servers/<server>/s3-site.xml` 에 S3 자격증명·엔드포인트. 그 서버 이름을 `s3.pxf_server` 로 지정(프로파일 기본 `s3:csv`). 업로드 자격증명과 **경로가 분리**된다. |
-| **GP 스키마** | target 테이블 존재/생성 가능, 외부테이블 생성 권한. |
+| **GP 스키마** | target 테이블 존재/생성 가능, 외부테이블 생성 권한. 외부테이블을 특정 스키마에 만들려면 `s3.external_schema`(예: `dwtemp`)를 지정한다 — 그 스키마는 **미리 생성**돼 있어야 하고 GP 롤에 `CREATE` 권한이 필요하다. 비우면 세션 `search_path` 를 따른다. |
 | **CSV 방언** | executor write 와 외부테이블 `FORMAT 'CSV'` 는 같은 설정(`stage.csv_delimiter` 기본 backtick `` ` ``)을 쓰므로 자동 일치. |
 
 `s3.delete_on_cleanup=true`(기본)면 적재 후 S3 객체를 삭제하고, 디버깅 시 `false` 로 보존한다.

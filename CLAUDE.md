@@ -117,7 +117,9 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   `load_external_s3`(GP master 에 **job 프리픽스 `<prefix>/<job_id>/` 로 PXF 외부테이블 하나**
   생성 → target INSERT) → Phase 3 S3 정리). 외부테이블·INSERT 는 local_stage 처럼 coordinator
   중앙 수행이고 heap staging 없이 external→target 직접. insert_sql 의 staging 참조를 job 고유
-  외부테이블 `s3ext_<job_id>` 로 치환(`s3_stage.external_table_name`). local_stage 는 co-locate 필요,
+  외부테이블 `s3ext_<job_id>` 로 치환(`s3_stage.external_table_name`). 설정 `s3.external_schema` 를
+  주면 외부테이블이 스키마 한정(`dwtemp.s3ext_<job_id>`)으로 만들어진다(CREATE·INSERT 치환·DROP 이
+  같은 이름을 공유, 값은 `sanitize_schema` 로 식별자 안전화, 비우면 기존대로 search_path). local_stage 는 co-locate 필요,
   s3_stage 는 S3 가 위치 무관이라 **co-locate 불필요**(DESIGN §17.1). export fetch 는 형변환을 꺼
   timestamp/date 를 wire 문자열 그대로 받아 CSV 로 쓴다(재파싱 비용 제거 — impyla
   `convert_types=False`). s3_stage 업로드/삭제는 `src/executor/s3_client.py`(boto3 지연 임포트),

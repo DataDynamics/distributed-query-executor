@@ -510,6 +510,9 @@ class Settings:
         # GP 읽기(PXF): 자격증명은 세그먼트의 PXF SERVER 설정에서 읽으므로 여기엔 서버 이름만.
         self.s3_pxf_server: str = _get_nested("executor", "s3", "pxf_server", "")
         self.s3_pxf_profile: str = _get_nested("executor", "s3", "pxf_profile", "s3:csv")
+        # Phase 2 외부테이블(s3ext_<job_id>)을 만들 스키마. 비우면 비한정 이름(search_path 따름),
+        # 지정하면 <schema>.s3ext_<job_id> 로 만들고 DROP/INSERT 치환도 같은 한정 이름을 쓴다.
+        self.s3_external_schema: str = _get_nested("executor", "s3", "external_schema", "")
         # 고급: LOCATION 문자열 raw override({bucket}/{key}/{profile}/{server} 치환).
         self.s3_gp_location_template: str = _get_nested(
             "executor", "s3", "gp_location_template", ""

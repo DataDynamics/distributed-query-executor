@@ -47,6 +47,28 @@ def test_external_table_name_job_unique_and_safe():
     assert s3sql.external_table_name("a") != s3sql.external_table_name("b")
 
 
+def test_external_table_name_with_schema():
+    # s3.external_schema 를 주면 스키마 한정 이름이 된다(예: dwtemp.s3ext_<job_id>).
+    assert s3sql.external_table_name("job_1", "dwtemp") == "dwtemp.s3ext_job_1"
+    # 빈 값/공백/None 은 예전처럼 비한정(하위 호환 — search_path 를 따른다).
+    assert s3sql.external_table_name("job_1", "") == "s3ext_job_1"
+    assert s3sql.external_table_name("job_1", "   ") == "s3ext_job_1"
+    assert s3sql.external_table_name("job_1", None) == "s3ext_job_1"
+    # 설정값이라도 그대로 SQL 에 넣지 않고 식별자로 안전화한다(따옴표 제거, 이상 문자 → _).
+    assert s3sql.external_table_name("job_1", '"dwtemp"') == "dwtemp.s3ext_job_1"
+    assert s3sql.external_table_name("job_1", "dw temp; drop") == "dw_temp__drop.s3ext_job_1"
+    assert s3sql.sanitize_schema("dw_temp2") == "dw_temp2"
+    assert s3sql.sanitize_schema("") == ""
+
+
+def test_schema_qualified_name_flows_into_ddl_and_cleanup():
+    # DDL·DROP 이 같은 한정 이름을 쓴다(세 곳이 어긋나면 Phase 2 가 깨진다).
+    ext = s3sql.external_table_name("j", "dwtemp")
+    ddl = s3sql.build_s3_external_ddl(ext, "id int", "pxf://b/k/", None)
+    assert ddl.startswith("CREATE EXTERNAL TABLE dwtemp.s3ext_j (id int)")
+    assert s3sql.build_cleanup_ddl(ext) == "DROP EXTERNAL TABLE IF EXISTS dwtemp.s3ext_j"
+
+
 def test_build_s3_location_default_pxf_directory():
     prefix = s3sql.s3_job_prefix("dqe-stage", "j")
     loc = s3sql.build_s3_location("mybkt", prefix, profile="s3:csv", server="s3srv")
@@ -351,6 +373,7 @@ def _s3_settings(monkeypatch):
     monkeypatch.setattr(coord_settings, "s3_pxf_server", "s3srv", raising=False)
     monkeypatch.setattr(coord_settings, "s3_pxf_profile", "s3:csv", raising=False)
     monkeypatch.setattr(coord_settings, "s3_gp_location_template", "", raising=False)
+    monkeypatch.setattr(coord_settings, "s3_external_schema", "", raising=False)
     monkeypatch.setattr(coord_settings, "s3_delete_on_cleanup", True, raising=False)
     monkeypatch.setattr(coord_settings, "executors", [], raising=False)
     monkeypatch.setattr(coord_settings, "executor_mode", "local", raising=False)
@@ -389,6 +412,37 @@ async def test_localdispatcher_s3_stage_two_phase(monkeypatch):
     assert pre_delete and pre_delete.startswith("DELETE FROM public.target")
     # Phase 3: S3 스테이징 프리픽스 정리.
     assert backend.cleaned == [prefix]
+
+
+async def test_localdispatcher_s3_stage_external_schema(monkeypatch):
+    """s3.external_schema 를 주면 Phase 2 의 외부테이블이 스키마 한정으로 만들어진다.
+
+    DDL(CREATE)·insert_sql 치환·정리(DROP) 세 곳이 모두 같은 ``dwtemp.s3ext_<job_id>`` 를
+    써야 한다(하나라도 비한정이면 search_path 에 따라 다른 테이블을 가리켜 적재가 깨진다).
+    """
+    _s3_settings(monkeypatch)
+    monkeypatch.setattr(coord_settings, "s3_external_schema", "dwtemp", raising=False)
+    backend = _MockS3StageBackend()
+    store = JobStore()
+    disp = LocalDispatcher(coord_settings, backend=backend, store=store)
+    app = create_app(runner=disp, store=store, settings=coord_settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
+        resp = await c.post("/jobs", json=_job_payload(parallelism=2))
+        assert resp.status_code == 202, resp.text
+        job_id = resp.json()["job_id"]
+        for _ in range(300):
+            st = (await c.get(f"/jobs/{job_id}/status")).json()
+            if st["status"] in ("DONE", "PARTIAL", "FAILED", "CANCELLED"):
+                break
+            await asyncio.sleep(0.01)
+    assert st["status"] == "DONE", st
+    ext_ddl, _pre_delete, insert_sql, cleanup = backend.phase2
+    ext_name = s3sql.external_table_name(job_id, "dwtemp")
+    assert ext_name.startswith("dwtemp.s3ext_")
+    assert f"CREATE EXTERNAL TABLE {ext_name} (" in ext_ddl
+    assert f"FROM {ext_name}" in insert_sql
+    assert cleanup == [f"DROP EXTERNAL TABLE IF EXISTS {ext_name}"]
 
 
 # ───────────────────── 템플릿 렌더 + 날짜 fan-out ─────────────────────

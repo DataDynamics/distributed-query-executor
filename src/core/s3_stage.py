@@ -40,15 +40,34 @@ def s3_job_prefix(prefix: str, job_id: str) -> str:
     return f"{head}{job_id}/"
 
 
-def external_table_name(job_id: str) -> str:
-    """job 별 고유 외부테이블 이름(``s3ext_<job_id 안전화>``). 영숫자 외 문자는 ``_`` 로 치환.
+def sanitize_schema(schema: str) -> str:
+    """설정에서 온 스키마 이름을 식별자로 안전화한다(빈 값이면 빈 문자열).
+
+    ``s3.external_schema`` 는 운영자가 config.properties 에 적는 값이라 그대로 SQL 에
+    끼워 넣지 않고, 영숫자/밑줄만 남기고 나머지는 ``_`` 로 바꾼다(따옴표·공백 제거 후).
+    외부테이블 이름과 같은 규칙이라 DDL/DROP/INSERT 치환이 모두 같은 토큰을 쓴다.
+    """
+    sch = str(schema or "").strip().strip('"').strip()
+    if not sch:
+        return ""
+    return "".join(c if (c.isalnum() or c == "_") else "_" for c in sch)
+
+
+def external_table_name(job_id: str, schema: str = "") -> str:
+    """job 별 고유 외부테이블 이름(``[<schema>.]s3ext_<job_id 안전화>``). 영숫자 외 문자는 ``_`` 로 치환.
 
     외부테이블은 GP 카탈로그 전역이라 job 마다 고유해야 동시 실행 job 간 충돌이 없다.
     coordinator(Phase 2)가 이 이름으로 외부테이블을 만들고, insert_sql 의 staging 참조를
     이 이름으로 치환해 ``INSERT INTO target SELECT ... FROM <이 이름>`` 이 되게 한다.
+
+    ``schema``(설정 ``s3.external_schema``)를 주면 ``dwtemp.s3ext_<job_id>`` 처럼 **스키마
+    한정 이름**이 된다. 비우면 예전처럼 비한정 이름이라 GP 세션의 search_path 를 따른다.
+    스키마 자체는 운영자가 미리 만들어 둬야 한다(프레임워크는 CREATE SCHEMA 를 하지 않는다).
     """
     safe = "".join(c if c.isalnum() else "_" for c in str(job_id))
-    return f"s3ext_{safe}"
+    name = f"s3ext_{safe}"
+    sch = sanitize_schema(schema)
+    return f"{sch}.{name}" if sch else name
 
 
 def csv_format_clause(csv_options: dict | None) -> str:

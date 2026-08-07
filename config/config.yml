@@ -159,5 +159,6 @@ executor:
     use_ssl: ${s3.use_ssl:true}                   # 업로드 TLS 사용 여부
     pxf_server: ${s3.pxf_server:}                 # GP 읽기용 PXF SERVER 이름($PXF_BASE/servers/<server>/s3-site.xml 에 자격증명)
     pxf_profile: ${s3.pxf_profile:s3:csv}         # PXF 프로파일(기본 s3:csv)
+    external_schema: ${s3.external_schema:}       # Phase 2 외부테이블 스키마 → <schema>.s3ext_{job_id}(예: dwtemp). 비우면 비한정(search_path 따름). 스키마는 미리 생성돼 있어야 함
     gp_location_template: ${s3.gp_location_template:}  # 고급: LOCATION raw override({bucket}/{key}/{profile}/{server} 치환)
     delete_on_cleanup: ${s3.delete_on_cleanup:true}    # 적재 성공/실패 후 S3 객체 정리 여부
