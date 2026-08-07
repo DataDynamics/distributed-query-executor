@@ -98,6 +98,8 @@ fi
 echo "==> 런처 스크립트 실행 권한 -> $BIN_DIR"
 chmod +x "$BIN_DIR"/*.sh
 chmod +x "$BIN_DIR"/gp-shell "$BIN_DIR"/impala-shell "$BIN_DIR"/s3-ops
+# systemd 유닛과 설치 스크립트는 bin/systemd/ 에 따로 모아 두었다(선택 설치).
+chmod +x "$BIN_DIR"/systemd/*.sh
 
 echo "==> 소유권/권한"
 chown -R "$APP_USER:$APP_USER" "$APP_BASE"
@@ -110,13 +112,10 @@ cat <<EOF
   - 설정:        $CONF_DIR/config.properties , $CONF_DIR/config.yml
   - Impala TLS:  $CONF_DIR/impala-ca.pem        (실제 CA 인증서로 교체)
 
-기동/중지/재기동/상태(전체):
-  sudo -u $APP_USER $BIN_DIR/start.sh
-  sudo -u $APP_USER $BIN_DIR/stop.sh
-  sudo -u $APP_USER $BIN_DIR/restart.sh
+상태(전체):
   sudo -u $APP_USER $BIN_DIR/status.sh
 
-역할별(coordinator / executor 구분):
+기동/중지/재기동(역할별). executor 를 먼저 띄우고 coordinator 를 띄운다:
   sudo -u $APP_USER $BIN_DIR/start-coordinator.sh
   sudo -u $APP_USER $BIN_DIR/start-executor.sh   [PORT...]   # 포트 생략 시 EXECUTOR_PORTS 전체
   sudo -u $APP_USER $BIN_DIR/stop-coordinator.sh

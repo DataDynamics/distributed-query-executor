@@ -18,7 +18,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 605개(+pandas 미설치 시 5 skip).
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 637개(+pandas 미설치 시 5 skip).
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -40,7 +40,8 @@ src/
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: 소스 읽기 → Greenplum 적재(backend), task 상태 노출
   tools/       # 운영자용 CLI(gp-shell·impala-shell·s3-ops). 서비스와 별개로 사람이 직접 쓴다
-bin/           # 런처·설치 스크립트 + 운영자 CLI 래퍼 + systemd 유닛(/data1 배포 트리와 공용)
+bin/           # 런처·설치 스크립트 + 운영자 CLI 래퍼(/data1 배포 트리와 공용)
+  systemd/     # systemd 유닛(coordinator.service·executor@.service) + install-systemd.sh
 config/        # config.properties + config.yml 기본값 + 스키마(postgresql.sql / warehousepg.sql)
 templates/     # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2)
 customs/       # 사이트 커스텀 코드(customs.query_funcs.* — src 밖 최상위 패키지)

@@ -1,4 +1,4 @@
-"""systemd 유닛(bin/coordinator.service, bin/executor@.service) 정합성 검증.
+"""systemd 유닛(bin/systemd/coordinator.service, bin/systemd/executor@.service) 정합성 검증.
 
 systemd 없이도 파일 자체를 파싱해, 런처 환경(bin/env.sh)과 어긋나지 않는지 확인한다
 (경로·설정 디렉터리·PYTHONPATH·실행 커맨드·executor 인스턴스 %i). 배포 트리 경로가
@@ -10,6 +10,8 @@ import configparser
 from pathlib import Path
 
 BIN = Path(__file__).resolve().parent.parent / "bin"
+# systemd 자산은 서비스 런처와 섞이지 않도록 bin/systemd/ 아래에 모아 두었다.
+SYSTEMD = BIN / "systemd"
 APP_HOME = "/data1/distributed-query-executor"
 
 
@@ -18,14 +20,14 @@ def _unit(name: str) -> configparser.ConfigParser:
     # 쓸 수 있으므로(Environment=, After= 등) strict=False 로 중복을 허용한다(마지막 값 유지).
     cp = configparser.ConfigParser(interpolation=None, strict=False)
     cp.optionxform = str  # 대소문자 보존(Environment 등)
-    cp.read(BIN / name, encoding="utf-8")
+    cp.read(SYSTEMD / name, encoding="utf-8")
     return cp
 
 
 def test_두_유닛_파일이_존재한다():
-    assert (BIN / "coordinator.service").is_file()
-    assert (BIN / "executor@.service").is_file()
-    assert (BIN / "install-systemd.sh").is_file()
+    assert (SYSTEMD / "coordinator.service").is_file()
+    assert (SYSTEMD / "executor@.service").is_file()
+    assert (SYSTEMD / "install-systemd.sh").is_file()
 
 
 def test_coordinator_유닛_핵심_지시자():
@@ -43,7 +45,7 @@ def test_executor_템플릿_유닛은_포트_인스턴스를_쓴다():
     assert u["Service"]["ExecStart"] == f"{APP_HOME}/.venv/bin/python -m executor"
     # 포트/인스턴스 식별자는 systemd 인스턴스 이름 %i 로 주입된다. configparser 는 같은 키
     # (Environment)가 여러 줄이면 마지막만 남으므로 원문 텍스트로 확인한다.
-    text = (BIN / "executor@.service").read_text(encoding="utf-8")
+    text = (SYSTEMD / "executor@.service").read_text(encoding="utf-8")
     assert "Environment=EXECUTOR_PORT=%i" in text
     assert "Environment=EXECUTOR_INSTANCE=%i" in text
     assert "Description=Distributed Query Executor - Executor (port %i)" in text
@@ -57,6 +59,6 @@ def test_유닛_환경이_env_sh_와_일치한다():
     assert 'QUERY_EXECUTOR_CONFIG_DIR="$APP_HOME/config"' in env_sh
     assert 'PYTHONPATH="$APP_HOME/src:$APP_HOME' in env_sh
     for name in ("coordinator.service", "executor@.service"):
-        text = (BIN / name).read_text(encoding="utf-8")
+        text = (SYSTEMD / name).read_text(encoding="utf-8")
         assert f"Environment=QUERY_EXECUTOR_CONFIG_DIR={APP_HOME}/config" in text
         assert f"Environment=PYTHONPATH={APP_HOME}/src:{APP_HOME}" in text

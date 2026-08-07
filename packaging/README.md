@@ -4,8 +4,8 @@
 
 > **보안 정책**: `/etc`·`/opt`·`/var` 에 파일을 추가하지 않는다. 애플리케이션·설정·로그·
 > 런타임을 모두 **`/data1/distributed-query-executor`** 아래에 두고, 기본은 **런처 스크립트(`bin/`)**
-> 로 구동한다. systemd 를 쓰려면 `bin/` 의 유닛(`coordinator.service`·`executor@.service`)을
-> `systemctl link` 로 설치한다(`bin/install-systemd.sh`, /etc 에는 심볼릭 링크만 생성).
+> 로 구동한다. systemd 를 쓰려면 `bin/systemd/` 의 유닛(`coordinator.service`·`executor@.service`)을
+> `systemctl link` 로 설치한다(`bin/systemd/install-systemd.sh`, /etc 에는 심볼릭 링크만 생성).
 
 시스템 공용 디렉터리를 건드리지 않으므로 권한 다툼이나 다른 소프트웨어와의 충돌 없이 모든 것이 한 폴더에 모인다. 그만큼 백업·이동·제거도 쉬워진다.
 
@@ -15,9 +15,11 @@
 
 | 파일 | 설명 |
 |---|---|
-| `bin/start.sh` / `stop.sh` / `status.sh` | **전체**(coordinator + executor) 기동/중지/상태(nohup + PID) |
-| `bin/start-coordinator.sh` / `stop-…` / `status-…` | **coordinator 만** 제어 |
-| `bin/start-executor.sh` / `stop-…` / `status-…` | **executor 만** 제어(포트 인자 선택, 생략 시 전체) |
+| `bin/start-coordinator.sh` / `stop-…` / `restart-…` / `status-…` | **coordinator 만** 제어(nohup + PID) |
+| `bin/start-executor.sh` / `stop-…` / `restart-…` / `status-…` | **executor 만** 제어(포트 인자 선택, 생략 시 전체) |
+| `bin/status.sh` | 전체(coordinator + executor) 상태를 한 번에 조회 |
+| `bin/gp-shell` / `impala-shell` / `s3-ops` | 운영자용 CLI(SQL 셸, S3 조작) |
+| `bin/systemd/` | systemd 유닛(`coordinator.service`·`executor@.service`)과 `install-systemd.sh` |
 | `bin/check-prereqs.sh` | **사전 점검**: OS 패키지(rpm) + 파이썬 휠(.venv) 설치 여부 확인(설치는 안 함) |
 | `bin/env.sh` | 런처 공통 환경 + 헬퍼 함수(경로·포트) |
 | `../config/config.properties` | Java 스타일 key=value 변수 정의 |
@@ -47,8 +49,9 @@ sudo ./bin/install.sh
 # 2) 설정 확인/수정
 sudo vi /data1/distributed-query-executor/config/config.properties   # executors, impala.*, greenplum.dsn 등
 
-# 3) 서비스 기동 (executor 2개 + coordinator)
-sudo -u gpadmin /data1/distributed-query-executor/bin/start.sh
+# 3) 서비스 기동 (executor 를 먼저, 그다음 coordinator)
+sudo -u gpadmin /data1/distributed-query-executor/bin/start-executor.sh
+sudo -u gpadmin /data1/distributed-query-executor/bin/start-coordinator.sh
 sudo -u gpadmin /data1/distributed-query-executor/bin/status.sh
 ```
 
@@ -275,16 +278,14 @@ tail -f /data1/distributed-query-executor/logs/query-executor-server-8087.log
 tail -f /data1/distributed-query-executor/logs/query-coordinator-server-warn.log
 tail -f /data1/distributed-query-executor/logs/query-executor-server-8087-warn.log
 
-# 재시작(전체) / 중지
-sudo -u gpadmin $B/stop.sh && sudo -u gpadmin $B/start.sh
-
-# 역할별 제어(coordinator / executor 따로)
+# 역할별 제어(coordinator / executor 따로). 중지는 coordinator 부터, 기동은 executor 부터.
 sudo -u gpadmin $B/stop-coordinator.sh        # coordinator 만 중지
-sudo -u gpadmin $B/start-executor.sh 8086     # executor 8086 만 기동/재기동
+sudo -u gpadmin $B/restart-executor.sh        # executor 전체 재기동(중지→종료 대기→기동)
+sudo -u gpadmin $B/start-executor.sh 8086     # executor 8086 만 기동
 sudo -u gpadmin $B/stop-executor.sh  8086     # executor 8086 만 중지
 
 # executor 인스턴스 추가(포트 8003): config.properties 의 executors 에 추가 후
-sudo -u gpadmin $B/start-executor.sh 8003     # 또는 전체: EXECUTOR_PORTS="8087 8086 8003" $B/start.sh
+sudo -u gpadmin $B/start-executor.sh 8003     # 또는 전체: EXECUTOR_PORTS="8087 8086 8003" $B/start-executor.sh
 ```
 
 로그는 두 종류다 — 일반 로그 외에 `*-warn.log` 가 WARNING 이상만 따로 모으므로, 문제를 추적할 때는 경고 로그만 빠르게 훑으면 원인에 더 빨리 다가간다. 또 executor 를 새로 늘릴 때는 스크립트만 실행하면 안 되고, 먼저 `config.properties` 의 executor 목록에 그 포트를 추가해야 coordinator 가 새 인스턴스를 인식한다.

@@ -371,15 +371,18 @@ QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator --version   # �
 ```bash
 sudo ./bin/install.sh                                    # 에어갭: WHEELHOUSE=... INSTALL_EXECUTOR=1
 B=/data1/distributed-query-executor/bin
-sudo -u gpadmin $B/start.sh      # 전체 기동(executor 들 + coordinator)
-sudo -u gpadmin $B/status.sh     # 상태(프로세스 + health)
-sudo -u gpadmin $B/restart.sh    # 전체 재기동(중지 → 종료 대기 → 기동)
-sudo -u gpadmin $B/stop.sh       # 전체 중지
+sudo -u gpadmin $B/start-executor.sh        # executor 를 먼저 띄웁니다(포트 생략 시 전체)
+sudo -u gpadmin $B/start-coordinator.sh     # 그다음 coordinator
+sudo -u gpadmin $B/status.sh                # 상태(프로세스 + health)
+sudo -u gpadmin $B/restart-executor.sh      # 재기동(중지 → 종료 대기 → 기동)
+sudo -u gpadmin $B/stop-coordinator.sh
 ```
 
-런처는 전체를 다루는 `start.sh`/`stop.sh`/`restart.sh`/`status.sh` 와 역할별
-`start-coordinator.sh`·`start-executor.sh [PORT...]` 등으로 구성됩니다. 재기동은 중지 → 종료 대기 →
-기동 순이며, executor 는 graceful drain(기본 25초)으로 진행 중 task 를 정리한 뒤 교체됩니다.
+런처는 역할별로 나뉩니다. `start-coordinator.sh` 와 `start-executor.sh [PORT...]`, 그리고 같은
+짝의 `stop-*`·`restart-*`·`status-*` 가 있고, 전체 상태만 한 번에 보는 `status.sh` 가 있습니다.
+기동은 executor 를 먼저, 중지는 coordinator 를 먼저 하는 것이 안전합니다. 재기동은 중지 → 종료
+대기 → 기동 순이며, executor 는 graceful drain(기본 25초)으로 진행 중 task 를 정리한 뒤
+교체됩니다. systemd 로 관리하려면 `bin/systemd/` 의 유닛과 `install-systemd.sh` 를 씁니다.
 
 업그레이드 시 운영자 소유 자산(`config/`·`templates/`·`customs/`)은 rsync 에서 제외되고 없을 때만
 시딩되므로 편집·추가한 내용이 유지됩니다. 새 버전이 추가한 기본값·설정 구조는 새 소스 트리에서
