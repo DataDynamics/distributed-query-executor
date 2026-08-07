@@ -1,0 +1,5 @@
+{# 외부테이블(=staging) → target 적재 INSERT. Phase 2 는 Greenplum 에서 도는 SQL 이므로
+   소스가 Trino 든 Impala 든 완전히 동일하다(sales_migration_s3 과 같은 내용). #}
+INSERT INTO {{ target_table }} (user_id, amount, region, dt)
+SELECT user_id, amount, region, dt
+FROM {{ staging_table }}

@@ -14,7 +14,218 @@ import time
 from contextlib import contextmanager
 from typing import Protocol
 
+from core.config import is_custom_source
+from core.dbprobe import _is_missing
+
 logger = logging.getLogger(__name__)
+
+
+# dotted path → 로드된 호출가능 객체 캐시. 커스텀 함수는 프로세스 수명 동안 고정이라
+# 매 task 마다 importlib 를 돌 필요가 없다.
+_dotted_cache: dict = {}
+
+
+def load_dotted(dotted: str):
+    """``module:func`` 또는 ``module.func`` dotted path 로 호출가능 객체를 import 한다."""
+    fn = _dotted_cache.get(dotted)
+    if fn is not None:
+        return fn
+    import importlib
+
+    mod_path, sep, attr = dotted.partition(":")
+    if not sep:  # ':' 가 없으면 마지막 '.' 을 함수명 경계로 본다
+        mod_path, _, attr = dotted.rpartition(".")
+    if not mod_path or not attr:
+        raise ValueError(f"잘못된 함수 경로: {dotted!r} (module:func 형식이어야 함)")
+    try:
+        module = importlib.import_module(mod_path)
+        fn = getattr(module, attr)
+    except Exception as exc:
+        raise ValueError(f"커스텀 소스 함수 로드 실패: {dotted} ({exc})") from exc
+    if not callable(fn):
+        raise ValueError(f"커스텀 소스 함수가 호출 가능하지 않습니다: {dotted}")
+    _dotted_cache[dotted] = fn
+    return fn
+
+
+# ───────────────── 커서 없는 소스(커스텀 API) 어댑터 ─────────────────
+# Trino 처럼 운영에서 DB-API 커서를 쓸 수 없고 "SQL 을 주면 JSON/DataFrame 을 돌려주는"
+# 사내 API 만 있는 소스를 위한 계층. 읽기 루프(export_to_local_csv)가 소스에 요구하는 것은
+# **컬럼명(description) · 행 배치(fetchmany) · 종료(close)** 셋뿐이므로, 커스텀 API 결과를
+# 그 셋만 제공하는 얇은 객체로 감싸면 **읽기 루프를 한 줄도 고치지 않고** 태울 수 있다.
+
+
+def _looks_like_columns(obj) -> bool:
+    """``(columns, rows)`` 형태의 첫 원소인지(=문자열 컬럼명 목록인지) 판정한다.
+
+    데이터 행도 튜플이라 형태가 겹칠 수 있으므로 **전부 문자열인 비어있지 않은 시퀀스**
+    일 때만 컬럼 목록으로 본다.
+    """
+    return (
+        isinstance(obj, (list, tuple))
+        and len(obj) > 0
+        and all(isinstance(c, str) for c in obj)
+    )
+
+
+def _clean_row(values) -> tuple:
+    """행 하나의 결측값을 ``None`` 으로 정규화한다.
+
+    **왜 필요한가**: DataFrame 의 ``NaN``/``NaT`` 를 CSV writer 로 그대로 넘기면 NULL 마커
+    대신 문자열 ``"nan"``/``"NaT"`` 가 기록되어, 외부테이블이 그 컬럼을 NULL 로 읽지 못한다
+    (Impala 커서 경로는 애초에 None 을 주므로 이 문제가 없다). 값 자체는 건드리지 않는다 —
+    CSV 로 쓸 것이라 미리보기용 ``_json_safe`` 변환은 하지 않는다(불필요한 비용/표현 변경).
+    """
+    return tuple(None if _is_missing(v) else v for v in values)
+
+
+def _one_chunk(obj):
+    """단일 결과 형태면 ``(컬럼명|None, 행 목록)``, 아니면 ``None`` 을 반환한다.
+
+    커스텀 API 가 돌려줄 수 있는 형태를 모두 받는다(문서화된 계약):
+
+    - **pandas DataFrame**
+    - **records**: ``[{"a": 1, "dt": "..."}, ...]`` — 흔한 JSON 응답 형태
+    - **columns/rows dict**: ``{"columns": [...], "rows": [[...]]}`` (``data`` 키도 허용)
+    - **``(columns, rows)`` 튜플**
+    """
+    from core.dbprobe import _is_dataframe  # 지연 임포트(모듈 로드 순환 방지)
+
+    if _is_dataframe(obj):
+        cols = [str(c) for c in obj.columns]
+        return cols, [_clean_row(r) for r in obj.itertuples(index=False, name=None)]
+    if isinstance(obj, dict) and "columns" in obj:
+        cols = [str(c) for c in obj.get("columns") or []]
+        raw = obj.get("rows")
+        if raw is None:
+            raw = obj.get("data") or []
+        return cols, [_clean_row(r) for r in raw]
+    if isinstance(obj, tuple) and len(obj) == 2 and _looks_like_columns(obj[0]):
+        return [str(c) for c in obj[0]], [_clean_row(r) for r in obj[1]]
+    if isinstance(obj, (list, tuple)):
+        if not obj:
+            return [], []
+        if isinstance(obj[0], dict):  # records — 컬럼 순서는 첫 행의 키 순서
+            cols = [str(k) for k in obj[0].keys()]
+            return cols, [_clean_row([d.get(c) for c in cols]) for d in obj]
+    return None
+
+
+def _normalize_fetch_result(result) -> tuple[list, object]:
+    """커스텀 fetch 함수의 반환을 ``(컬럼명 목록, 배치 이터레이터)`` 로 정규화한다.
+
+    단일 결과(위 :func:`_one_chunk` 형태)면 배치 하나짜리로 감싸고, 그 형태가 아니면
+    **청크를 yield 하는 이터러블**로 본다(각 청크가 다시 단일 결과 형태). 청크 형태를
+    지원해 두면, 나중에 사내 API 에 페이징이 생겼을 때 **프레임워크 수정 없이** 전량
+    메모리 적재에서 스트리밍으로 전환된다. 컬럼명은 첫 청크에서 확정한다.
+    """
+    single = _one_chunk(result)
+    if single is not None:
+        cols, rows = single
+        return (cols or []), iter([rows])
+
+    try:
+        it = iter(result)
+    except TypeError as exc:
+        raise ValueError(
+            f"커스텀 소스 함수 반환 형태를 해석할 수 없습니다: {type(result).__name__}. "
+            "DataFrame / [{{컬럼: 값}}, ...] / {{'columns': [...], 'rows': [...]}} / "
+            "(columns, rows) 중 하나이거나, 그 형태의 청크를 yield 해야 합니다."
+        ) from exc
+
+    first = next(it, None)
+    if first is None:
+        return [], iter(())
+    parsed = _one_chunk(first)
+    if parsed is None:
+        raise ValueError(
+            f"커스텀 소스 함수의 청크 형태를 해석할 수 없습니다: {type(first).__name__}."
+        )
+    cols, first_rows = parsed
+
+    def _batches():
+        yield first_rows
+        for chunk in it:
+            got = _one_chunk(chunk)
+            if got is None:
+                raise ValueError(
+                    f"커스텀 소스 함수의 청크 형태를 해석할 수 없습니다: {type(chunk).__name__}."
+                )
+            yield got[1]
+
+    return (cols or []), _batches()
+
+
+class _FunctionCursor:
+    """커스텀 API 결과를 **커서처럼** 보이게 감싸는 어댑터(DB-API 커서가 없는 소스용).
+
+    읽기 루프가 쓰는 세 가지만 제공한다: ``execute`` → ``description`` → ``fetchmany``.
+    실행은 커서 생성 시점이 아니라 ``execute`` 시점에 일어나 Impala 커서와 순서가 같고,
+    따라서 ``IMPALA_SUBMIT``/``EXPORT_WRITE`` 단계 경계도 그대로 맞는다.
+    """
+
+    def __init__(self, fn, config: dict, batch_size: int, name: str):
+        self._fn = fn
+        self._config = dict(config or {})
+        self._batch_size = max(1, int(batch_size or 1))
+        self._name = name
+        self.description = None
+        self._batches = None
+        self._buf: list = []
+
+    def execute(self, sql: str, *args, **kwargs) -> None:
+        """커스텀 함수를 호출해 결과를 배치 이터레이터로 준비한다.
+
+        ``configuration=`` 같은 impyla 전용 kwarg 가 넘어와도 무시한다 — Impala 쿼리 옵션은
+        커스텀 소스에 의미가 없으므로 무시가 올바른 동작이다(``_source_execute`` 무변경).
+        """
+        result = self._fn(sql, config=dict(self._config))
+        cols, batches = _normalize_fetch_result(result)
+        self._batches = batches
+        self._buf = []
+        # DB-API description 은 7-튜플이고 읽기 루프는 [0](컬럼명)만 쓴다.
+        self.description = [(c, None, None, None, None, None, None) for c in cols]
+        logger.debug("커스텀 소스 실행: datasource=%s 컬럼=%s", self._name, cols)
+
+    def fetchmany(self, size: int | None = None) -> list:
+        """요청한 행 수만큼 배치에서 꺼내 돌려준다(소진되면 빈 목록 → 루프 종료)."""
+        n = max(1, int(size or self._batch_size))
+        out: list = []
+        while len(out) < n:
+            if self._buf:
+                take = n - len(out)
+                out.extend(self._buf[:take])
+                self._buf = self._buf[take:]
+                continue
+            if self._batches is None:
+                break
+            nxt = next(self._batches, None)
+            if nxt is None:  # 이터레이터 소진
+                break
+            self._buf = list(nxt)
+        return out
+
+    def close(self) -> None:
+        self._batches = None
+        self._buf = []
+
+
+class _FunctionConnection:
+    """``_FunctionCursor`` 를 내주는 최소 커넥션 어댑터(실제 연결은 없다).
+
+    읽기 경로는 ``conn.cursor(...)`` 와 ``conn.close()`` 만 쓰므로 이 둘만 제공한다.
+    ``cursor`` 는 임의 kwarg(``convert_types`` 등 impyla 전용)를 받아 무시하므로
+    ``_open_source_cursor`` 도 손대지 않는다.
+    """
+
+    def __init__(self, fn, config: dict, batch_size: int, name: str):
+        self._fn, self._config, self._batch_size, self._name = fn, config, batch_size, name
+
+    def cursor(self, **_kwargs) -> _FunctionCursor:
+        return _FunctionCursor(self._fn, self._config, self._batch_size, self._name)
+
+    def close(self) -> None:
+        return None
 
 
 def _emit(on_stage, name: str, event: str, meta: dict | None = None) -> None:
@@ -171,6 +382,7 @@ class Backend(Protocol):
         on_progress=None,
         query_options=None,
         on_stage=None,
+        datasource=None,
     ) -> int:
         """[local_stage 1단계] Impala SELECT 결과를 로컬 CSV 파일 하나로 스트리밍 저장, 행수 반환.
 
@@ -219,6 +431,7 @@ class Backend(Protocol):
         on_progress=None,
         query_options=None,
         on_stage=None,
+        datasource=None,
     ) -> int:
         """[s3_stage Phase 1] Impala SELECT 결과를 로컬 CSV 로 export 후 S3(``key``)에 업로드.
 
@@ -301,7 +514,7 @@ class MockBackend:
         _emit(on_stage, "COMMIT", "end")
         return self.rows_per_value
 
-    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None) -> int:
+    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
         # local_stage 1단계: 실제 파일은 만들지 않고 합성 단계 이벤트만 방출, rows_per_value 반환.
         total = self.rows_per_value
         _emit(on_stage, "IMPALA_SUBMIT", "start")
@@ -331,7 +544,7 @@ class MockBackend:
         return self.rows_per_value
 
     def export_to_s3(self, impala_select, key, job_id, task_id, csv_options=None,
-                     on_progress=None, query_options=None, on_stage=None) -> int:
+                     on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
         # s3_stage Phase 1: 실제 파일/업로드 없이 단계 이벤트만 방출하고 rows_per_value 반환.
         total = self.rows_per_value
         _emit(on_stage, "IMPALA_SUBMIT", "start")
@@ -382,9 +595,14 @@ class ImpalaToGreenplumBackend:
                  query_options: dict | None = None, copy_preflight: bool = True,
                  pool_max: int = 8, pipeline: bool = True, queue_size: int = 8,
                  copy_format: str = "text", stage_convert_types: bool = False,
-                 s3_config: dict | None = None, s3_client=None):
+                 s3_config: dict | None = None, s3_client=None,
+                 source_fetch_module: str = "", source_func_config: dict | None = None):
         # Impala 소스 접속 dict(impyla connect 에 그대로 전달).
         self.impala_dsn = impala_dsn
+        # 커서 없는 커스텀 소스(사내 API) 실행 함수와 그 설정. 비어 있으면(기본) 모든 읽기가
+        # 예전처럼 Impala 커서로 간다 — job 의 datasource 가 impala 가 아닐 때만 쓰인다.
+        self.source_fetch_module: str = str(source_fetch_module or "").strip()
+        self.source_func_config: dict = dict(source_func_config or {})
         # local_stage export 의 impyla 커서에 넘길 convert_types 값. False 면 형변환을 꺼
         # TIMESTAMP/DATE/DECIMAL 을 wire 문자열 그대로 받아(재파싱 비용 제거) CSV 로 바로 쓴다.
         self.stage_convert_types = stage_convert_types
@@ -421,8 +639,31 @@ class ImpalaToGreenplumBackend:
             )
         return self._s3_client
 
-    def _source_connect(self):
-        """Impala 소스 연결을 연다(impyla). 드라이버는 지연 임포트한다."""
+    def _source_connect(self, datasource: str | None = None):
+        """소스 연결을 연다. 기본은 Impala(impyla 커서)이고, datasource 가 지정되면 커스텀 API.
+
+        - ``impala``/``source``/미지정 → impyla 연결(기존 경로 그대로).
+        - 그 외 이름 → ``query.func.fetch_module`` 커스텀 함수를 커서처럼 감싼
+          :class:`_FunctionConnection`. **DB-API 커서가 없는 소스**(사내 API)를 위한 통로다.
+
+        설정이 없으면 조용히 Impala 로 폴백하지 않고 명확히 실패한다 — Trino 로 읽는 줄 알고
+        Impala 를 읽어 엉뚱한 데이터를 적재하는 사고를 막기 위해서다.
+        """
+        if is_custom_source(datasource):
+            name = str(datasource).strip().lower()
+            if not self.source_fetch_module:
+                raise ValueError(
+                    f"datasource={name} 의 소스 실행 함수가 설정되지 않았습니다. "
+                    "executor 설정에 query.func.fetch_module=<module:func> 를 지정하세요"
+                    "(계약: fetch(sql, *, config) -> DataFrame | records | "
+                    "{'columns':[...], 'rows':[...]} | (columns, rows), limit 없이 전량)."
+                )
+            logger.debug("커스텀 소스 사용: datasource=%s func=%s",
+                         name, self.source_fetch_module)
+            return _FunctionConnection(
+                load_dotted(self.source_fetch_module),
+                self.source_func_config, self.batch_size, name,
+            )
         # 연결 실패 시 상위엔 드라이버 예외만 올라가므로, 어느 호스트로 붙었는지
         # backend 레벨에서 남긴다(연결/인증 문제 진단의 첫 단서).
         logger.debug(
@@ -742,7 +983,7 @@ class ImpalaToGreenplumBackend:
         finally:
             impala_conn.close()
 
-    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None) -> int:
+    def export_to_local_csv(self, sub_query, out_path, csv_options=None, on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
         """local_stage 1단계: Impala SELECT 결과를 out_path 의 로컬 CSV 파일로 스트리밍 저장.
 
         impyla 커서를 batch_size 단위로 fetch 하며 표준 라이브러리 ``csv`` 로 한 줄씩 쓴다.
@@ -764,7 +1005,7 @@ class ImpalaToGreenplumBackend:
             os.makedirs(parent, exist_ok=True)
 
         written = 0
-        impala_conn = self._source_connect()
+        impala_conn = self._source_connect(datasource)
         try:
             # convert_types=False 로 형변환을 꺼 timestamp/date/decimal 을 문자열 그대로 받는다.
             cur = self._open_source_cursor(impala_conn, convert_types=self.stage_convert_types)
@@ -848,7 +1089,7 @@ class ImpalaToGreenplumBackend:
         return affected if affected and affected > 0 else 0
 
     def export_to_s3(self, impala_select, key, job_id, task_id, csv_options=None,
-                     on_progress=None, query_options=None, on_stage=None) -> int:
+                     on_progress=None, query_options=None, on_stage=None, datasource=None) -> int:
         """s3_stage Phase 1: Impala SELECT 결과를 로컬 CSV 로 export → S3 업로드 → 로컬 삭제.
 
         executor 가 GP 를 건드리지 않는 순수 Phase 1 이다(외부테이블 생성·INSERT 는
@@ -868,6 +1109,8 @@ class ImpalaToGreenplumBackend:
             rows = self.export_to_local_csv(
                 impala_select, out_path, csv_options, on_progress,
                 query_options=query_options, on_stage=on_stage,
+                # 커스텀 소스일 때만 인자를 붙인다 — impala 면 호출이 예전과 완전히 동일.
+                **({"datasource": datasource} if is_custom_source(datasource) else {}),
             )
             # 2) 로컬 CSV → S3 업로드 후 로컬 파일 즉시 삭제(로컬 디스크를 비운다).
             _emit(on_stage, "S3_UPLOAD", "start")
@@ -1178,6 +1421,9 @@ def build_backend(settings) -> Backend:
             copy_format=getattr(settings, "copy_format", "text"),
             stage_convert_types=getattr(settings, "stage_impala_convert_types", False),
             s3_config=build_s3_config(settings),
+            # 커서 없는 커스텀 소스(job.datasource 가 impala 가 아닐 때) 실행 함수·설정.
+            source_fetch_module=getattr(settings, "query_func_fetch_module", ""),
+            source_func_config=getattr(settings, "query_func_config", None),
         )
     logger.warning("greenplum.dsn 미설정 → MockBackend 사용")
     return MockBackend()

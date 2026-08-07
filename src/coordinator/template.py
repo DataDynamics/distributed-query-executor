@@ -56,10 +56,12 @@ _ROLES_BY_MODE: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 # manifest 가 기본값을 줄 수 있는 스칼라 필드(요청이 명시하면 요청이 이긴다). app.py 병합 대상.
+# ``datasource`` 는 이 템플릿의 SELECT 를 읽을 소스 엔진이다(impala=커서 | 그 외=커스텀 API).
+# ``sql_dialect``(sqlglot 파서)와는 다른 축이므로, Trino 템플릿은 둘 다 적는다.
 _SCALAR_DEFAULT_KEYS = (
     "exec_mode", "partition_column", "target_table", "staging_table",
     "write_mode", "split_strategy", "failure_policy", "parallelism",
-    "sql_dialect", "strict_validation", "task_bound",
+    "sql_dialect", "strict_validation", "task_bound", "datasource",
 )
 
 

@@ -56,6 +56,22 @@ def _collect_prefix(prefix: str) -> dict:
     return {k[len(prefix):]: v for k, v in _props.items() if k.startswith(prefix)}
 
 
+#: 이관 소스로 지정해도 **built-in Impala(커서) 경로**를 뜻하는 이름들. 이 값(과 빈 값)은
+#: 커스텀 소스 함수를 타지 않으므로, 호출 경로가 예전과 완전히 동일하게 유지된다.
+BUILTIN_SOURCES = ("impala", "source")
+
+
+def is_custom_source(datasource) -> bool:
+    """이 datasource 를 커스텀 소스 함수(커서 없음)로 읽어야 하는지 판단한다.
+
+    빈 값/``impala``/``source`` 는 False(기존 impyla 커서 경로). 그 외 이름은 True 이고
+    ``query.func.fetch_module`` 로 위임한다. coordinator·executor·backend 가 같은 기준을
+    써야 "어디선 커스텀, 어디선 Impala" 로 갈리지 않으므로 판정을 여기 한 곳에 둔다.
+    """
+    name = str(datasource or "").strip().lower()
+    return bool(name) and name not in BUILTIN_SOURCES
+
+
 def _get(section: str, key: str, default=None):
     """최상위 ``section`` 아래의 ``key`` 값을 읽는다.
 
@@ -417,6 +433,13 @@ class Settings:
         # YAML 스키마가 아니라 raw properties 를 직접 읽어 키를 자유롭게 추가할 수 있게 한다.
         self.query_func_module: str = str(_props.get("query.func.module", "")).strip()
         self.query_func_config: dict = _collect_prefix("query.func.config.")
+        # 이관(/jobs) 소스 읽기용 커스텀 함수. query.func.module(=미리보기 run)과 계약이 다르다:
+        # limit 없이 **전량**을 돌려줘야 한다(자르면 잘린 결과가 조용히 적재된다).
+        # 커서가 없는 소스(사내 API 등)를 job 의 datasource 로 지정할 때만 쓰인다.
+        # 접속 설정은 query.func.config.* 를 그대로 공유한다(블록을 두 벌 두지 않는다).
+        self.query_func_fetch_module: str = str(
+            _props.get("query.func.fetch_module", "")
+        ).strip()
         # Greenplum (target) — 읽어온 데이터를 적재할 대상 DB 접속 DSN.
         self.greenplum_dsn: str = _get_nested("executor", "greenplum", "dsn", "")
         # source→target 복사 시 한 번에 처리할 행 수. 메모리 사용량과 처리량의 균형값.

@@ -879,6 +879,11 @@ def create_app(
                     else None
                 ),
                 impala_query_options=req.impala_query_options,
+                # 소스 엔진 확정: 요청 > manifest(_apply_template 이 req 에 병합) > source.type.
+                # 이 값이 모든 task 에 실려 executor 의 읽기 경로(커서 vs 커스텀 API)를 정한다.
+                datasource=(
+                    req.datasource or getattr(settings, "source_type", "impala") or "impala"
+                ).strip().lower(),
                 template_id=req.template_id,
                 template_params=(_split_params(req.params)[0] if req.template_id else None),
                 external_columns=req.external_columns,

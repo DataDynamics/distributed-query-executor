@@ -88,6 +88,25 @@ Job 생성(SPLITTING) + 멱등 키 원자적 선점(`store.claim_and_add`) → �
   프리픽스로 모은 자유 설정 dict(`src/core/config.py` 의 `_collect_prefix`, raw properties 기반 — YAML 무관).
   참조 구현·설정은 docs/GUIDE.md / `customs/query_funcs/trino_runner.py`. 임의 SQL 미리보기(`/datasources/
   {name}/query`)는 별개 운영 점검용으로 built-in 유지.
+- **이관 소스 엔진 선택**(`datasource`) — template manifest 최상위 `datasource` 로 `/jobs` 의 SELECT
+  를 읽을 엔진을 고른다(순서: 요청 > manifest > `source.type`). coordinator 가 `Job.datasource` 로
+  확정해 모든 task 에 싣고, executor backend `_source_connect(datasource)` 가 분기한다:
+  빈 값·`impala`·`source` 는 **기존 impyla 커서**, 그 외 이름은 **`query.func.fetch_module`
+  커스텀 API**(커서 없음 — 운영에서 DB-API 를 못 쓰는 사내 API 용).
+  **핵심 트릭**: 읽기 루프가 소스에 요구하는 건 `description`/`fetchmany`/`close` 셋뿐이라,
+  커스텀 API 결과를 `_FunctionCursor`/`_FunctionConnection` 으로 감싸면 **CSV export 루프가
+  무변경**이다(`_open_source_cursor`·`_source_execute` 도 손대지 않음 — 어댑터가 impyla 전용
+  kwarg 를 삼킨다). 반환은 DataFrame·records·`{columns,rows}`·`(columns,rows)`·그 청크
+  이터러블을 모두 받는다(`_normalize_fetch_result`). `NaN`/`NaT` 는 `_clean_row` 가 `None` 으로
+  바꿔 CSV NULL 마커로 나가게 한다(안 하면 문자열 `"nan"` 이 적재된다).
+  **`run()`(query-execute)과 계약이 다르다** — `run` 은 `limit` 으로 자르는 미리보기라 이관에
+  쓰면 잘린 결과가 조용히 적재된다. `fetch_module` 은 전량 반환이 계약(`trino_runner.fetch_all`).
+  판정은 `core.config.is_custom_source` 한 곳. 미설정이면 Impala 폴백이 아니라 **명확한 실패**.
+  하위 호환 핵심: impala/미지정이면 backend 호출에 `datasource` kwarg 를 **아예 붙이지 않아**
+  (`_src_kw`) 기존 백엔드·테스트 더블이 무변경으로 동작한다. 적용 범위는 `export_to_local_csv`
+  하나(= s3_stage + local_stage)이고 copy/stage_insert 는 건드리지 않았다.
+  예제 `templates/sales_migration_s3_trino/`. 메모리: 청크 미사용 시 task 결과가 전량 메모리에
+  올라간다(`parallelism` 으로 완화).
 - `src/coordinator/splitter.py` — IN 값 N등분(contiguous/round_robin), 원문 포맷 보존 치환.
   **날짜 fan-out**(DESIGN §18.8): `/jobs` 에 `task_params`(구간의 두 끝을 담은 params 이름 2개)를
   주면 IN 분할 대신 **하루=1 task** 로 펼친다(`app.py` `_build_fanout`/`_compute_task_offsets`,

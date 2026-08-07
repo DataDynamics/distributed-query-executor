@@ -1,0 +1,14 @@
+{# Trino SELECT — manifest 의 datasource: trino 로 커스텀 API 가 실행한다(커서 없음).
+
+   Trino 는 varchar→date 암묵 변환을 하지 않으므로 날짜를 DATE '...' 로 명시한다
+   (dt IN ('2026-07-01') 은 타입 오류). sql_in 은 따옴표 리터럴 목록만 만들므로 여기서
+   직접 루프를 돌며 DATE 접두어를 붙이되, 값은 sql_str 로 이스케이프한다(인젝션 방지).
+
+   파티션 컬럼 dt 의 IN 목록은 splitter 가 N등분해 task 로 나눈다(소스 엔진과 무관하게 동일).
+   컬럼 순서/타입은 external_columns.sql.j2 와 정확히 일치해야 한다. #}
+SELECT user_id, amount, region, dt
+FROM {{ source_catalog }}.{{ source_schema }}.sales
+WHERE dt IN ( {% for d in date_range(start_dt, end_dt) %}{% if not loop.first %}, {% endif %}DATE {{ d | sql_str }}{% endfor %} )
+{%- if regions %}
+  AND region IN ( {{ regions | sql_in }} )
+{%- endif %}

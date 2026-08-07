@@ -91,6 +91,9 @@ class Task:
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
     impala_query_options: Optional[dict] = None  # 요청별 Impala SET 옵션(전역에 병합)
+    # SELECT 를 읽을 소스 엔진. None/impala 면 built-in Impala 커서(기존 동작), 그 외 이름이면
+    # 설정 query.func.fetch_module 의 커스텀 API 로 읽는다(커서 없는 소스).
+    datasource: Optional[str] = None
     # local_stage 모드: Impala 결과를 떨어뜨릴 로컬 CSV 파일의 절대 경로와 CSV 방언.
     # coordinator 가 파일 경로/인덱스를 확정해 넘긴다(file:// URI 와 짝을 이룬다).
     out_path: Optional[str] = None
@@ -194,6 +197,9 @@ class CreateTaskRequest(BaseModel):
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
     impala_query_options: Optional[dict] = None
+    # 이 task 의 SELECT 를 읽을 소스 엔진(coordinator 가 job 에서 확정해 싣는다). 미지정이면
+    # built-in Impala — 이 필드를 안 보내는 구버전 coordinator 와 호환된다.
+    datasource: Optional[str] = None
     # local_stage 는 로컬 CSV 경로, s3_stage 는 S3 객체 키를 out_path 로 받는다(coordinator 확정).
     out_path: Optional[str] = None
     csv_options: Optional[dict] = None

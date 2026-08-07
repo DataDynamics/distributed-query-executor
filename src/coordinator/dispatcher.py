@@ -33,6 +33,7 @@ from typing import Optional, Protocol
 import httpx
 
 from core import s3_stage as s3_sql
+from core.config import is_custom_source
 from core.logging import job_log_context
 from core.phases import close_open_phases
 from . import stage as stage_sql
@@ -57,6 +58,16 @@ _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
 # 반대로 executor 가 task 를 정상 접수해 FAILED 로 보고한 백엔드 오류는 여기 해당하지 않는다
 # (재시도해도 같은 결과이므로 그대로 실패 처리한다).
 _RETRYABLE = (httpx.TransportError, httpx.HTTPStatusError)
+
+
+def _src_kw(job: Job) -> dict:
+    """백엔드 호출에 실을 소스 엔진 인자(커스텀 소스일 때만).
+
+    impala/미지정이면 **빈 dict** 라 호출 시그니처가 예전과 완전히 동일해진다 — 새 kwarg 를
+    모르는 백엔드 구현·테스트 더블도 그대로 동작한다(영향 차단).
+    """
+    ds = getattr(job, "datasource", None)
+    return {"datasource": ds} if is_custom_source(ds) else {}
 
 
 def finalize_job(job: Job) -> None:
@@ -854,6 +865,9 @@ class HttpDispatcher(_DispatcherBase):
                 "staging_ddl": st_ddl,
                 "insert_sql": st_insert,
                 "impala_query_options": job.impala_query_options,
+                # 이 task 의 SELECT 를 읽을 소스 엔진. impala(기본)면 executor 가 커서로 읽고,
+                # 그 외 이름이면 query.func.fetch_module 커스텀 API 로 읽는다.
+                "datasource": job.datasource,
                 "username": job.username,
                 # local_stage 는 로컬 CSV 경로, s3_stage 는 S3 객체 키를 out_path 로 싣는다
                 # (둘 다 coordinator 가 확정한 "이 task 가 쓸 위치"). 외부테이블 생성/INSERT 는
@@ -1109,6 +1123,7 @@ class LocalDispatcher(_DispatcherBase):
                             _progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,
+                            **_src_kw(job),
                         ),
                     )
                 elif job.exec_mode == "s3_stage":
@@ -1124,6 +1139,7 @@ class LocalDispatcher(_DispatcherBase):
                             _progress,
                             query_options=job.impala_query_options,
                             on_stage=task.on_stage,
+                            **_src_kw(job),
                         ),
                     )
                 else:

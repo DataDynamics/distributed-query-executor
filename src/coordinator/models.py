@@ -261,6 +261,9 @@ class Job:
     pre_delete: Optional[bool] = None
     # 요청별 Impala 쿼리 옵션(SET). executor 에서 전역 기본값 위에 병합되어 적용된다.
     impala_query_options: Optional[dict] = None
+    # 이 job 의 SELECT 를 읽을 소스 엔진(impala 기본 = 커서 경로). impala 가 아니면 executor 가
+    # query.func.fetch_module 커스텀 API 로 읽는다. 모든 task 에 그대로 실려 간다.
+    datasource: Optional[str] = None
     # 템플릿 모드로 생성된 job 이면 사용한 template_id 와 렌더 파라미터를 보관(감사·재현용).
     # original_sql 에는 이미 렌더된 SELECT 전문이 들어가므로 retry 는 재렌더 없이 동작한다.
     template_id: Optional[str] = None
@@ -374,6 +377,7 @@ class Job:
             "staging_ddl": self.staging_ddl,
             "insert_sql": self.insert_sql,
             "impala_query_options": self.impala_query_options,
+            "datasource": self.datasource,
             "template_id": self.template_id,
             "template_params": self.template_params,
             "external_columns": self.external_columns,
@@ -416,6 +420,7 @@ class Job:
             staging_ddl=d.get("staging_ddl"),
             insert_sql=d.get("insert_sql"),
             impala_query_options=d.get("impala_query_options"),
+            datasource=d.get("datasource"),
             template_id=d.get("template_id"),
             template_params=d.get("template_params"),
             external_columns=d.get("external_columns"),
@@ -604,7 +609,15 @@ class CreateJobRequest(BaseModel):
     impala_query_options: Optional[dict[str, str]] = Field(
         default=None,
         description="이 작업의 Impala 쿼리 옵션(SET). 전역 impala.query_options 위에 병합된다. "
-        "예: {\"MEM_LIMIT\": \"2g\", \"REQUEST_POOL\": \"etl\"}. 미지정 시 전역값만 적용.",
+        "예: {\"MEM_LIMIT\": \"2g\", \"REQUEST_POOL\": \"etl\"}. 미지정 시 전역값만 적용. "
+        "datasource 가 impala 가 아니면 적용되지 않는다.",
+    )
+    datasource: Optional[str] = Field(
+        default=None,
+        description="SELECT(소스 읽기)를 실행할 엔진. 미지정 시 template manifest 의 datasource, "
+        "그것도 없으면 서버 source.type(기본 impala). impala 는 built-in 커서 경로이고, 그 외 "
+        "값(예: trino)은 executor 설정 query.func.fetch_module 의 커스텀 API 로 읽는다 "
+        "(커서 없는 소스). 적재 대상(Greenplum)과 exec_mode 는 이 값과 무관하다.",
     )
     # ── local_stage 전용 필드 ──
     external_columns: Optional[str] = Field(

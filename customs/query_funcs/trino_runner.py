@@ -122,6 +122,52 @@ def _login_noninteractive(config: dict):
         return _login_session
 
 
+def fetch_all(sql: str, *, config: dict):
+    """**이관(/jobs) 소스 읽기** — 커스텀 API 로 SQL 을 실행해 결과를 **전량** 돌려준다.
+
+    executor 설정 ``query.func.fetch_module`` 이 이 함수를 가리키면, job 의 ``datasource``
+    가 impala 가 아닐 때 backend 가 이 함수로 SELECT 를 읽는다. **커서를 쓰지 않는다** —
+    운영에서 DB-API 커서를 쓸 수 없는 사내 API 를 위한 경로다.
+
+    :func:`run` 과 계약이 다르다는 점이 핵심이다::
+
+        run(sql, config, limit) -> QueryResult   # 미리보기: limit 으로 자름, 화면 표시용
+        fetch_all(sql, config)   -> 전량          # 이관: 자르면 안 됨(조용한 데이터 손실)
+
+    반환은 다음 중 아무 형태나 된다(backend 어댑터가 정규화한다). 사내 API 응답을 **가공 없이
+    그대로** 돌려주면 되도록 흔한 형태를 모두 받는다:
+
+    - ``pandas.DataFrame``
+    - records: ``[{"a": 1, "dt": "2026-01-01"}, ...]`` — 일반적인 JSON 응답
+    - ``{"columns": [...], "rows": [[...], ...]}`` (``data`` 키도 허용)
+    - ``(columns, rows)`` 튜플
+    - 위 형태의 **청크를 yield 하는 이터러블** ← 사내 API 에 페이징이 있으면 이 형태를 쓴다
+
+    **메모리 주의**: 청크 형태가 아니면 task 하나의 결과가 executor 메모리에 통째로 올라간다
+    (Impala 커서 경로는 진짜 스트리밍이라 이 제약이 없다). 완화책은 ``parallelism`` 을 늘려
+    task 당 파티션을 잘게 쪼개는 것이고, 근본 해결은 API 에 페이징을 넣어 청크를 yield 하는 것이다.
+
+    아래 구현은 ``query.func.config.dataframe_module`` 로 지정한 사내 API 를 그대로 호출한다.
+    조직 표준이 다르면 이 함수 본문만 바꾸면 되고, 프레임워크는 손댈 필요가 없다.
+    """
+    dotted = (config.get("dataframe_module") or "").strip()
+    if not dotted:
+        raise ValueError(
+            "이관 소스 읽기에는 커스텀 API 가 필요합니다. "
+            "query.func.config.dataframe_module=<module:func> 를 설정하거나 "
+            "이 함수 본문을 조직 표준 호출로 교체하세요."
+        )
+    logger.info("커스텀 API 이관 읽기: %s / sql=%.200s", dotted, sql)
+    fn = _load_dotted(dotted)
+    try:
+        # 이관은 전량이므로 limit 을 넘기지 않는다. 사내 API 가 limit 을 요구하면
+        # 여기서 충분히 큰 값을 주되, 잘림 여부를 반드시 확인하도록 구현할 것.
+        return fn(sql, config=config)
+    except Exception:
+        logger.exception("커스텀 API 이관 읽기 실패: %s / sql=%.500s", dotted, sql)
+        raise
+
+
 def _load_dotted(dotted: str):
     """``module:func`` 또는 ``module.func`` dotted path 로 함수를 import 한다.
 

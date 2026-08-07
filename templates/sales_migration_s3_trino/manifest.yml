@@ -1,0 +1,71 @@
+# 쿼리 템플릿 예제 — 일별 매출 **Trino**→Greenplum 이관(s3_stage).
+#
+# sales_migration_s3 과 하는 일이 같고 **SELECT 를 읽는 엔진만 다르다**. 바뀌는 것은 둘뿐이다:
+#   1. manifest 의 datasource: trino  — 커스텀 API 로 읽는다(커서 없음)
+#   2. select.sql.j2 의 방언          — 3단 테이블 이름, DATE '...' 리터럴
+# 적재(Greenplum)·exec_mode·분할·Phase 2(PXF 외부테이블→target INSERT)·Phase 3(S3 정리)는
+# 전혀 바뀌지 않는다. insert/external_columns 조각은 sales_migration_s3 과 동일하다.
+#
+# ── 왜 커스텀 API 인가 ──
+# 운영에서 Trino DB-API 커서를 쓸 수 없고 "SQL 을 주면 JSON/DataFrame 을 돌려주는" 사내 API 만
+# 있는 경우를 위한 경로다. executor 는 그 결과를 커서처럼 감싸(백엔드 어댑터) CSV 로 흘려보내며,
+# 읽기 루프 자체는 Impala 경로와 공유한다.
+#
+# 사전 준비(운영):
+#   - executor config 에 **이관용 소스 함수**를 등록한다(없으면 task 가 명확한 오류로 실패한다
+#     — Impala 로 조용히 폴백하지 않는다):
+#       query.func.fetch_module=customs.query_funcs.trino_runner:fetch_all
+#       query.func.config.dataframe_module=mycorp.trino_api:query   # 사내 API
+#       query.func.config.<임의 키>=...                              # 접속 설정(자유)
+#     ※ 계약: fetch(sql, *, config) -> DataFrame | [{컬럼:값},...]
+#              | {"columns":[...], "rows":[...]} | (columns, rows) | 그 형태의 청크 이터러블
+#     ※ limit 없이 **전량**을 돌려줘야 한다. query-execute 용 run() 은 limit 으로 자르는
+#       미리보기 계약이라 이관에 쓰면 잘린 결과가 조용히 적재된다.
+#     ※ 대용량이면 청크를 yield 하는 형태를 쓴다(전량 메모리 적재 방지).
+#   - executor config 의 s3.* (bucket/prefix/자격증명) — Phase 1 업로드용.
+#   - GP 세그먼트에 PXF SERVER(s3.pxf_server) 구성 — Phase 2 읽기용.
+#
+# 요청 예:
+#   {"template_id": "sales_migration_s3_trino",
+#    "params": [{"name":"start_dt","value":"2026-07-01"},
+#               {"name":"end_dt","value":"2026-07-03"}],
+#    "parallelism": 3}
+#
+# 소스만 Impala 로 되돌리려면 요청에 "datasource": "impala" 를 준다(요청 > manifest >
+# source.type). 단 select 조각이 Trino 방언이라 그대로는 안 돈다 — sales_migration_s3 를 쓴다.
+
+id: sales_migration_s3_trino
+description: 일별 매출 Trino→Greenplum 이관(s3_stage — SELECT 만 커스텀 API, 적재는 동일)
+
+# ── 소스 엔진(커서 없음) ──
+# impala 가 아니므로 executor 가 query.func.fetch_module 커스텀 API 로 SELECT 를 읽는다.
+datasource: trino
+
+# ── 파서 방언(다른 축) ──
+# datasource 는 "누가 실행하나", sql_dialect 는 "coordinator 가 어떤 문법으로 읽나"다.
+# splitter 가 IN 목록을 찾아 N등분하려면 렌더된 SELECT 가 이 방언으로 파싱돼야 한다.
+sql_dialect: trino
+
+# ── 실행 방식/분할/적재 스칼라(요청에서 재정의 가능) ──
+exec_mode: s3_stage                # SELECT → 로컬 CSV → S3 → PXF 외부테이블 → target INSERT
+partition_column: dt               # 이 컬럼의 IN 목록을 splitter 가 분할
+target_table: public.sales         # 최종 적재 대상(Greenplum)
+staging_table: stg_sales_s3_trino  # insert_sql 의 FROM 이 참조하는 이름. Phase 2 에 외부테이블명으로 치환된다
+write_mode: overwrite_partitions   # 담당 파티션 선삭제 후 적재(재실행 멱등)
+strict_validation: false           # 렌더 SELECT 가 복합 쿼리일 수 있어 lenient 로 둔다
+
+# 파라미터 스키마 — 필수/타입/기본값을 선언한다. 렌더 전 검증에 쓰인다.
+params:
+  - {name: start_dt, type: date, required: true}    # 시작일(YYYY-MM-DD)
+  - {name: end_dt,   type: date, required: true}    # 종료일(YYYY-MM-DD)
+  - {name: regions,  type: list, required: false, default: []}   # 지역 필터(비면 전체)
+  # Trino 의 3단 테이블 이름(<catalog>.<schema>.<table>) 구성 요소. 접속의 기본
+  # catalog/schema 에 기대지 않고 명시하려고 파라미터로 뺐다(요청에서 덮어쓸 수 있다).
+  - {name: source_catalog, type: string, required: false, default: hive}
+  - {name: source_schema,  type: string, required: false, default: default}
+
+# role → 조각 파일 매핑. s3_stage 는 select(필수) + insert(필수) + external_columns(필수).
+files:
+  select:           select.sql.j2
+  insert:           insert.sql.j2
+  external_columns: external_columns.sql.j2

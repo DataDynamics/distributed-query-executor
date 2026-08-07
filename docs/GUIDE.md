@@ -775,6 +775,65 @@ def run(sql: str, *, config: dict, limit: int) -> QueryResult:
 함수 책임이다(예제는 `fetchmany(limit+1)`). 참조 구현은 `customs/query_funcs/trino_runner.py` 에
 있다(표준 `dbprobe._shape` 로 정형).
 
+#### 이관(`/jobs`)의 SELECT 를 Trino 등 커스텀 API 로 읽기
+
+template manifest 에 `datasource` 를 적으면 그 템플릿의 SELECT 를 읽을 엔진이 정해진다.
+
+```yaml
+# templates/sales_migration_s3_trino/manifest.yml
+exec_mode: s3_stage
+datasource: trino        # 커스텀 API 로 읽는다(커서 없음)
+sql_dialect: trino       # 파서 — 다른 축이므로 함께 적는다
+```
+
+| datasource | 읽기 경로 |
+|---|---|
+| `impala` · `source` · 미지정 | **기존 impyla 커서**(무변경) |
+| 그 외(`trino` 등) | `query.func.fetch_module` **커스텀 API**(커서 없음) |
+
+결정 순서는 **요청 > manifest > `source.type`** 이다. 적재(Greenplum)·`exec_mode`·분할·
+fan-out·Phase 2 는 소스 엔진과 무관하게 그대로다.
+
+```properties
+query.func.fetch_module=customs.query_funcs.trino_runner:fetch_all
+query.func.config.dataframe_module=mycorp.trino_api:query   # 사내 API
+```
+```python
+def fetch(sql, *, config):
+    """limit 없이 전량을 돌려준다. 반환은 아래 중 아무 형태나."""
+```
+
+| 반환 형태 | 비고 |
+|---|---|
+| `pandas.DataFrame` | |
+| `[{"a": 1, "dt": "..."}, ...]` | 흔한 JSON 응답(records) |
+| `{"columns": [...], "rows": [[...]]}` | `data` 키도 허용 |
+| `(columns, rows)` | |
+| **위 형태의 청크를 `yield`** | **대용량 권장형** |
+
+backend 가 이 결과를 **커서처럼 감싸** `description`/`fetchmany` 를 제공하므로, CSV export
+루프는 Impala 경로와 그대로 공유된다.
+
+> **`run()` 과 `fetch_module` 을 바꿔 쓰면 안 된다.** `run()` 은 `limit`(최대 10000)으로
+> 결과를 자르는 **미리보기** 계약이라 이관에 쓰면 **잘린 결과가 조용히 적재**된다.
+
+**설정이 없으면 조용히 Impala 로 폴백하지 않는다.** `datasource: trino` 인데
+`query.func.fetch_module` 이 없으면 task 가 명확한 오류로 실패한다.
+
+주의할 점:
+
+- **메모리**: 청크를 `yield` 하지 않으면 task 하나의 결과가 executor 메모리에 통째로
+  올라간다(Impala 커서는 진짜 스트리밍이라 이 제약이 없다). `parallelism` 을 늘려 task 당
+  파티션을 잘게 쪼개거나, 사내 API 에 페이징을 넣어 청크를 흘린다.
+- **결측값**: DataFrame 의 `NaN`/`NaT` 는 어댑터가 `None` 으로 정규화해 CSV NULL 마커로
+  기록한다(그대로 두면 문자열 `"nan"` 이 적재된다).
+- **날짜 표현**: Impala 커서는 `convert_types=False` 로 timestamp/date 를 wire 문자열 그대로
+  받지만, 커스텀 API 의 DataFrame 은 `datetime64` 라 `"2026-01-01 00:00:00"` 로 직렬화된다.
+  외부테이블 컬럼이 `date` 면 첫 실행에서 `external_columns` 와 맞는지 확인한다.
+- **`impala_query_options`** 는 Impala 에만 적용된다(커스텀 API 에 전달되지 않는다).
+
+참조: 예제 템플릿 `templates/sales_migration_s3_trino/`, 함수 `trino_runner.fetch_all`.
+
 #### 결과가 pandas DataFrame 인 경우
 
 사내 표준이 DB-API 드라이버가 아니라 **"SQL → DataFrame" 커스텀 API** 인 경우가 흔하다.

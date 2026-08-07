@@ -29,7 +29,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
-from core.config import settings
+from core.config import is_custom_source, settings
 from core.dbprobe import QueryResult, clamp_limit, run_impala_select, run_postgres_select
 from core.http_logging import install_http_logging
 from core.logging import job_log_context
@@ -76,6 +76,16 @@ def _load_query_func(dotted: str):
         raise ValueError(f"커스텀 실행 함수가 호출 가능하지 않습니다: {dotted}")
     _query_func_cache[dotted] = fn
     return fn
+
+
+def _src_kw(task) -> dict:
+    """백엔드 호출에 실을 소스 엔진 인자(커스텀 소스일 때만).
+
+    impala/미지정이면 **빈 dict** 라 호출 시그니처가 예전과 완전히 동일해진다 — 새 kwarg 를
+    모르는 백엔드 구현·테스트 더블도 그대로 동작한다(영향 차단).
+    """
+    ds = getattr(task, "datasource", None)
+    return {"datasource": ds} if is_custom_source(ds) else {}
 
 
 def _now_iso() -> str:
@@ -301,6 +311,7 @@ def create_app(
                         progress,
                         query_options=task.impala_query_options,
                         on_stage=task.on_stage,
+                        **_src_kw(task),
                     ),
                 )
             elif task.exec_mode == "s3_stage":
@@ -318,6 +329,7 @@ def create_app(
                         progress,
                         query_options=task.impala_query_options,
                         on_stage=task.on_stage,
+                        **_src_kw(task),
                     ),
                 )
             else:
@@ -396,6 +408,7 @@ def create_app(
             staging_ddl=req.staging_ddl,
             insert_sql=req.insert_sql,
             impala_query_options=req.impala_query_options,
+            datasource=req.datasource,
             out_path=req.out_path,
             csv_options=req.csv_options,
         )
