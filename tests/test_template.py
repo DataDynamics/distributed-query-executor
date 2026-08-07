@@ -322,24 +322,57 @@ def test_manifest_datasource_parsed_into_defaults(tmp_path):
     assert eng.load_manifest("ds").defaults["datasource"] == "trino"
 
 
-def test_jobs_rejects_non_impala_datasource_template(runner, store, monkeypatch, tmp_path):
-    """이관(/jobs)은 impala 아닌 datasource 템플릿을 422 로 거부한다(조용한 오실행 방지)."""
+def _ds_client(runner, store, monkeypatch, tmp_path, name: str, datasource: str):
+    """datasource 만 다른 최소 이관 템플릿 하나를 가진 coordinator 클라이언트."""
     from coordinator.config import settings
-    d = tmp_path / "trino_only"
+    d = tmp_path / name
     d.mkdir()
     (d / "manifest.yml").write_text(
-        "id: trino_only\nexec_mode: copy\npartition_column: dt\ntarget_table: public.t\n"
-        "datasource: trino\nfiles: {select: s.j2}\n", encoding="utf-8",
+        f"id: {name}\nexec_mode: copy\npartition_column: dt\ntarget_table: public.t\n"
+        f"datasource: {datasource}\nfiles: {{select: s.j2}}\n", encoding="utf-8",
     )
     (d / "s.j2").write_text("SELECT a, dt FROM t WHERE dt IN ('2026-01-01')\n", encoding="utf-8")
     monkeypatch.setattr(settings, "template_enabled", True, raising=False)
     monkeypatch.setattr(settings, "template_dir", str(tmp_path), raising=False)
     monkeypatch.setattr(settings, "template_auto_reload", False, raising=False)
     monkeypatch.setattr(settings, "template_func_modules", [], raising=False)
-    client = TestClient(create_app(runner=runner, store=store))
-    resp = client.post("/jobs", json={"template_id": "trino_only", "params": {}})
+    return TestClient(create_app(runner=runner, store=store))
+
+
+def test_jobs_template_datasource_flows_into_job(runner, store, monkeypatch, tmp_path):
+    """manifest 의 datasource 가 이관 job 에 실린다 — 이 값이 executor 의 읽기 경로를 정한다."""
+    client = _ds_client(runner, store, monkeypatch, tmp_path, "trino_src", "trino")
+    resp = client.post("/jobs", json={"template_id": "trino_src", "params": {}})
+    assert resp.status_code == 202, resp.text
+    assert runner.runs[0].datasource == "trino"
+
+
+def test_jobs_request_datasource_beats_manifest(runner, store, monkeypatch, tmp_path):
+    """요청의 datasource 가 manifest 를 이긴다(같은 템플릿을 다른 엔진으로 재실행)."""
+    client = _ds_client(runner, store, monkeypatch, tmp_path, "trino_src2", "trino")
+    resp = client.post("/jobs", json={
+        "template_id": "trino_src2", "params": {}, "datasource": "impala",
+    })
+    assert resp.status_code == 202, resp.text
+    assert runner.runs[0].datasource == "impala"
+
+
+def test_jobs_rejects_target_db_as_source(runner, store, monkeypatch, tmp_path):
+    """적재 대상/메타 DB(greenplum·history)는 이관 소스로 지정할 수 없다(422)."""
+    client = _ds_client(runner, store, monkeypatch, tmp_path, "gp_src", "greenplum")
+    resp = client.post("/jobs", json={"template_id": "gp_src", "params": {}})
     assert resp.status_code == 422, resp.text
-    assert resp.json()["error_code"] == "TEMPLATE_DATASOURCE_UNSUPPORTED"
+    assert resp.json()["error_code"] == "JOB_DATASOURCE_UNSUPPORTED"
+
+
+def test_jobs_default_datasource_is_source_type(runner, store, monkeypatch, tmp_path):
+    """datasource 를 아무도 지정하지 않으면 서버 source.type(기본 impala)을 따른다."""
+    import core.config as core_config
+    monkeypatch.setattr(core_config.settings, "source_type", "impala", raising=False)
+    client = _ds_client(runner, store, monkeypatch, tmp_path, "plain_src", "impala")
+    resp = client.post("/jobs", json={"template_id": "plain_src", "params": {}})
+    assert resp.status_code == 202, resp.text
+    assert runner.runs[0].datasource == "impala"
 
 
 def test_jobs_allows_impala_datasource_template(tmpl_client):

@@ -29,7 +29,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
-from core.config import settings
+from core.config import is_custom_source, settings
 from core.dbprobe import QueryResult, clamp_limit, run_impala_select, run_postgres_select
 from core.http_logging import install_http_logging
 from core.logging import job_log_context
@@ -38,7 +38,7 @@ from core.phases import close_open_phases
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
-from .backend import Backend, build_backend, build_impala_dsn
+from .backend import Backend, build_backend, build_impala_dsn, load_dotted
 from .dashboard import DASHBOARD_HTML, masked_config
 from .history import TaskHistoryRepository, _executor_id
 from .models import CreateTaskRequest, DatasourceQueryRequest, QueryRunRequest, Task, TaskStatus
@@ -46,36 +46,14 @@ from .status import ExecutorStatusReporter
 
 logger = logging.getLogger(__name__)
 
-# query-execute 위임용 커스텀 실행 함수 캐시(dotted path → callable). executor 는 단일 워커라
-# 프로세스 내 캐시가 안전하다. 첫 호출에서 import 후 재사용한다.
-_query_func_cache: dict = {}
-
-
 def _load_query_func(dotted: str):
     """``module:func`` 또는 ``module.func`` dotted path 로 커스텀 실행 함수를 import 한다.
 
-    template.func_modules 로딩과 같은 importlib 방식이며, 결과를 캐시한다. import/getattr
-    실패는 ValueError 로 올려 호출부가 502 로 변환하게 한다.
+    실제 로딩·캐시는 ``backend.load_dotted`` 하나로 모았다(이관 소스 접속 함수
+    ``query.func.<name>.connect`` 도 같은 규약을 쓰므로 로더가 둘일 이유가 없다).
+    이 얇은 래퍼는 기존 이름/테스트 대체 지점을 유지하기 위해 남긴다.
     """
-    fn = _query_func_cache.get(dotted)
-    if fn is not None:
-        return fn
-    import importlib
-
-    mod_path, sep, attr = dotted.partition(":")
-    if not sep:  # ':' 가 없으면 마지막 '.' 을 함수명 경계로 본다
-        mod_path, _, attr = dotted.rpartition(".")
-    if not mod_path or not attr:
-        raise ValueError(f"잘못된 함수 경로: {dotted!r} (module:func 형식이어야 함)")
-    try:
-        module = importlib.import_module(mod_path)
-        fn = getattr(module, attr)
-    except Exception as exc:
-        raise ValueError(f"커스텀 실행 함수 로드 실패: {dotted} ({exc})") from exc
-    if not callable(fn):
-        raise ValueError(f"커스텀 실행 함수가 호출 가능하지 않습니다: {dotted}")
-    _query_func_cache[dotted] = fn
-    return fn
+    return load_dotted(dotted)
 
 
 def _resolve_query_func(datasource: str | None) -> tuple[str, dict]:
@@ -280,6 +258,13 @@ def create_app(
                 "적재 시작 exec_mode=%s target=%s sub_query=%s",
                 task.exec_mode, task.target_table, _snip(task.sub_query),
             )
+            # 소스 엔진 인자는 **커스텀 소스일 때만** 넘긴다. impala(기본)면 인자를 아예
+            # 붙이지 않아 백엔드 호출이 예전과 완전히 동일하다(새 kwarg 를 모르는 기존
+            # 백엔드 구현/테스트 더블도 그대로 동작).
+            src_kw = (
+                {"datasource": task.datasource}
+                if is_custom_source(task.datasource) else {}
+            )
             if task.exec_mode == "statement":
                 # wrapper 로 감싼 INSERT 등을 대상 DB에서 그대로 실행(COPY 미사용)
                 rows = await loop.run_in_executor(
@@ -301,6 +286,7 @@ def create_app(
                         progress,
                         query_options=task.impala_query_options,
                         on_stage=task.on_stage,
+                        **src_kw,
                     ),
                 )
             elif task.exec_mode == "local_stage":
@@ -316,6 +302,7 @@ def create_app(
                         progress,
                         query_options=task.impala_query_options,
                         on_stage=task.on_stage,
+                        **src_kw,
                     ),
                 )
             elif task.exec_mode == "s3_stage":
@@ -333,6 +320,7 @@ def create_app(
                         progress,
                         query_options=task.impala_query_options,
                         on_stage=task.on_stage,
+                        **src_kw,
                     ),
                 )
             else:
@@ -349,6 +337,7 @@ def create_app(
                         progress,
                         query_options=task.impala_query_options,
                         on_stage=task.on_stage,
+                        **src_kw,
                     ),
                 )
             task.rows_written = rows
@@ -411,6 +400,7 @@ def create_app(
             staging_ddl=req.staging_ddl,
             insert_sql=req.insert_sql,
             impala_query_options=req.impala_query_options,
+            datasource=req.datasource,
             out_path=req.out_path,
             csv_options=req.csv_options,
         )

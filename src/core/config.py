@@ -56,33 +56,60 @@ def _collect_prefix(prefix: str) -> dict:
     return {k[len(prefix):]: v for k, v in _props.items() if k.startswith(prefix)}
 
 
+#: 이관 소스로 지정해도 **built-in Impala 경로**를 뜻하는 이름들. 이 값(과 빈 값)은
+#: 커스텀 소스 함수를 타지 않으므로, 호출 경로가 예전과 완전히 동일하게 유지된다.
+BUILTIN_SOURCES = ("impala", "source")
+
+
+def is_custom_source(datasource) -> bool:
+    """이 datasource 를 커스텀 소스 접속 함수로 읽어야 하는지 판단한다.
+
+    빈 값/``impala``/``source`` 는 False(기존 Impala 경로). 그 외 이름은 True 이고
+    ``query.func.<name>.connect`` 로 위임한다. coordinator·executor·backend 가 같은 기준을
+    써야 "어디선 커스텀, 어디선 Impala" 로 갈리지 않으므로 판정을 여기 한 곳에 둔다.
+    """
+    name = str(datasource or "").strip().lower()
+    return bool(name) and name not in BUILTIN_SOURCES
+
+
 def _collect_query_funcs() -> dict:
-    """``query.func.<name>.module`` / ``query.func.<name>.config.*`` 를 소스 이름별로 모은다.
+    """``query.func.<name>.*`` 를 데이터소스 이름별로 모은다(엔진 하나 = 설정 블록 하나).
 
-    query-execute 의 소스 실행을 **데이터소스마다 다른 함수**에 위임하기 위한 설정이다::
+    한 데이터소스에 **두 진입점**이 있고 쓰임이 다르다::
 
-        query.func.trino.module=customs.query_funcs.trino_runner:run
-        query.func.trino.config.host=trino.example.com
-        query.func.impala.module=customs.query_funcs.impala_runner:run
+        query.func.trino.module=customs.query_funcs.trino_runner:run      # query-execute(결과 반환)
+        query.func.trino.connect=customs.query_funcs.trino_runner:connect # 이관 소스 읽기(스트리밍)
+        query.func.trino.config.host=trino.example.com                    # 둘이 공유
 
-    반환은 ``{"trino": {"module": ..., "config": {...}}, ...}``. 이름 없는 단일 형태
-    (``query.func.module``)는 여기 포함되지 않고 ``query_func_module`` 로 따로 읽혀
+    - ``module``  : ``run(sql, config, limit) -> QueryResult`` — 상위 N행만 돌려주는
+      미리보기 계약(query-execute 전용).
+    - ``connect`` : ``connect(config) -> DB-API Connection`` — backend 가 커서를
+      ``fetchmany`` 로 돌며 스트리밍하는 **이관(/jobs) 소스 읽기** 계약. limit 이 없다.
+
+    반환은 ``{"trino": {"module": ..., "connect": ..., "config": {...}}, ...}``. 이름 없는
+    단일 형태(``query.func.module``)는 여기 포함되지 않고 ``query_func_module`` 로 따로 읽혀
     **소스별 항목이 없을 때의 폴백**이 된다(기존 배포 무변경).
     """
     out: dict[str, dict] = {}
-    head, tail = "query.func.", ".module"
+    head = "query.func."
     for key, val in _props.items():
-        if not (key.startswith(head) and key.endswith(tail)):
+        if not key.startswith(head):
             continue
-        name = key[len(head):-len(tail)].strip().lower()
-        # 이름이 비면 단일 형태(query.func.module)이고, 점이 남아 있으면 더 깊은 키다.
-        # 'config' 는 config.* 프리픽스와 충돌하므로 소스 이름으로 쓰지 않는다.
-        if not name or "." in name or name == "config":
-            continue
-        out[name] = {
-            "module": str(val).strip(),
-            "config": _collect_prefix(f"{head}{name}.config."),
-        }
+        rest = key[len(head):]
+        for role in ("module", "connect"):
+            suffix = f".{role}"
+            if not rest.endswith(suffix):
+                continue
+            name = rest[:-len(suffix)].strip().lower()
+            # 이름이 비면 단일 형태(query.func.module)이고, 점이 남아 있으면 더 깊은 키다.
+            # 'config' 는 config.* 프리픽스와 충돌하므로 소스 이름으로 쓰지 않는다.
+            if not name or "." in name or name == "config":
+                break
+            entry = out.setdefault(
+                name, {"module": "", "connect": "", "config": _collect_prefix(f"{head}{name}.config.")}
+            )
+            entry[role] = str(val).strip()
+            break
     return out
 
 

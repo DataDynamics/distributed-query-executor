@@ -548,6 +548,29 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **예제/설정**: `templates/sales_migration_s3/`, `config.yml`의 `executor.s3.*`(bucket/prefix/endpoint_url/자격증명/pxf_server/pxf_profile/external_schema). coordinator·executor가 같은 `settings`를 공유하므로 양쪽에서 `s3.*`를 읽는다(coordinator는 Phase 2 LOCATION·프리픽스, executor는 업로드). 배포 시 GP 세그먼트에 PXF SERVER를 구성해야 한다(packaging/README).
 - **테스트**: `tests/test_s3_stage.py` — s3_stage.py 순수 함수, 가짜 S3/GP로 backend Phase 1/2/3(업로드+로컬 삭제·external→INSERT→cleanup·overwrite 선삭제·프리픽스 삭제·bucket 미설정 오류), executor 라우팅·`/s3/{job}/cleanup` 엔드포인트, coordinator 검증/dry-run, LocalDispatcher 2-phase e2e, 템플릿 렌더 + 날짜 fan-out. `tests/test_s3_stage_integration.py` + `tests/helpers.py`의 **`MockS3StageBackend`** — GP·S3 없이 **인메모리 S3로 "S3 루프 닫힘"**을 검증한다(`local_stage`의 `MockLocalStageBackend`에 대응): Phase 1이 인메모리 S3에 올린 객체를 Phase 2가 coordinator 조립 external_ddl의 프리픽스로 파싱·read해 target에 집계하고, `POST /jobs`→split→out_path(S3 키)→export→배리어→`_run_s3_load`(외부테이블/INSERT 치환)→load→cleanup→finalize 전 경로를 통과시킨다(루프 닫힘·overwrite 선삭제·업로드 실패 시 Phase 2 skip·cleanup 비활성).
 
+### 17.2 이관 소스 엔진 선택 (`datasource` — Impala | 커스텀 함수)
+
+이관의 SELECT(소스 읽기)는 오랫동안 Impala 고정이었다(`backend._source_connect` 가 impyla 를 직접 import). 같은 템플릿을 Trino 등 다른 엔진에서 읽고 싶어도 방법이 없었다. 그래서 **소스 접속 계층만** 함수로 뽑아, job 의 `datasource` 로 고르게 했다. **적재(Greenplum)·exec_mode·분할·fan-out·Phase 2 는 전혀 바뀌지 않는다** — 바뀌는 것은 "커서를 어디서 얻는가" 하나다.
+
+- **결정 순서**: 요청 `datasource` > manifest `datasource` > 서버 `source.type`(기본 impala). coordinator 가 확정해 `Job.datasource` 에 담고, 모든 task 본문에 그대로 실어 보낸다.
+- **built-in vs 위임**: `core.config.is_custom_source()` 가 판정한다. 빈 값·`impala`·`source` 는 **built-in impyla 경로**이고, 그 외 이름만 `query.func.<name>.connect` 로 위임한다. 판정을 한 함수에 모아 coordinator/executor/backend 가 갈라지지 않게 했다.
+- **두 진입점, 한 설정 블록**: 같은 datasource 가 미리보기와 이관에서 계약이 다르다.
+
+  | 키 | 계약 | 쓰는 곳 |
+  |---|---|---|
+  | `query.func.<ds>.module` | `run(sql, config, limit) -> QueryResult` | query-execute(상위 N행) |
+  | `query.func.<ds>.connect` | `connect(config) -> DB-API Connection` | **이관 소스 읽기(스트리밍)** |
+  | `query.func.<ds>.config.*` | 자유 설정 dict | 위 둘이 공유 |
+
+  미리보기 계약(`run`)을 이관에 재사용할 수 없는 이유가 핵심이다 — `run` 은 `clamp_limit`(≤10000)으로 자르고 결과를 전부 materialize 하는 **미리보기 API** 라서, 그대로 쓰면 이관이 잘린 결과를 적재한다. `connect` 는 연결만 돌려주고 행은 만지지 않으므로, backend 의 기존 `fetchmany(batch_size)` 스트리밍 루프가 그대로 돈다.
+- **backend 변경 범위**: `_source_connect(datasource)` 만 분기하고 `_open_source_cursor`/CSV·COPY 스트리밍은 **공유**한다. `_open_source_cursor` 의 `convert_types=` 는 impyla 전용이라 커스텀 커서에선 `TypeError` 폴백이 그대로 받아낸다(기존 코드가 이미 그렇게 돼 있었다). `_source_execute` 는 `configuration=`(impyla 전용 kwarg)을 **Impala 에만** 넘긴다 — 커스텀 소스에 넘기면 TypeError 이고, `impala_query_options` 는 의미상으로도 Impala 전용이다.
+- **조용한 폴백 금지**: `datasource=trino` 인데 `query.func.trino.connect` 가 없으면 Impala 로 폴백하지 않고 **명확한 ValueError 로 task 를 실패**시킨다(설정된 소스 목록을 메시지에 넣는다). 폴백하면 Trino 를 읽는 줄 알면서 Impala 를 읽어 엉뚱한 데이터를 적재하게 된다.
+- **하위 호환(중요)**: `datasource` 가 impala/미지정이면 **backend 호출에 인자를 아예 붙이지 않는다**(`src_kw` 조건부 확장, coordinator dispatcher·executor app 양쪽). 호출 시그니처가 예전과 바이트 단위로 같아서, 새 kwarg 를 모르는 백엔드 구현·테스트 더블도 그대로 동작한다. task 본문의 `datasource` 도 선택 필드라 이를 안 보내는 구버전 coordinator 와 호환된다.
+- **거부 대상**: `greenplum`/`history` 는 적재 대상·메타 DB 라 이관 소스로 지정하면 접수 단계에서 `422 JOB_DATASOURCE_UNSUPPORTED`. 그 밖의 이름은 executor 설정에 달렸고 coordinator 는 알 수 없으므로 통과시키고, 미설정이면 위 규칙대로 task 가 실패한다.
+- **참조 구현**: `customs/query_funcs/trino_runner.py` 의 `connect()`. 기존 `run()` 이 인라인으로 하던 접속 kwargs 조립·비대화형 login 처리를 `connect()` 로 뽑고 `run()` 이 그것을 쓰도록 바꿨다 — 접속 로직과 설정이 두 경로에 하나만 존재한다.
+- **적용 범위**: 소스를 읽는 모든 exec_mode(`copy`·`stage_insert`·`local_stage`·`s3_stage`). `statement` 는 소스 읽기가 없어 무관하다.
+- **테스트**: `tests/test_custom_source.py` — 가짜 DB-API 연결로 스트리밍(2500행 > 미리보기 상한) 검증, built-in 이름(None/""/impala/source)이 커스텀 경로를 타지 않음, `configuration=` 미전달, 미설정 시 명확한 실패, task 본문 배선, `CreateTaskRequest` 하위 호환.
+
 ---
 
 ## 18. 쿼리 템플릿 엔진
@@ -624,7 +647,7 @@ executor가 쓰는 CSV 방언과 GP 외부테이블 `FORMAT 'CSV'(...)`의 방�
 - **manifest의 `datasource`(템플릿이 실행 엔진을 선언)**: 요청마다 `datasource`를 적는 대신 **템플릿이 자기 SELECT를 어디서 실행할지** manifest 최상위에 선언한다(`_SCALAR_DEFAULT_KEYS`). 결정 순서는 **요청 > manifest > `source.type`**. 같은 executor 집합에서 템플릿마다 다른 엔진을 쓰는 배포(예: 대부분 Impala, 일부 리포트만 Trino)를 클라이언트 수정 없이 만든다.
 - **소스별 실행 함수(`query.func.<name>.module`)**: 위 선택이 실제로 갈리려면 executor가 소스마다 다른 함수를 호출해야 한다. coordinator가 `/query-run` 본문에 `datasource`를 실어 보내고, executor는 `query.func.<datasource>.module`(+ `query.func.<datasource>.config.*`)로 함수를 고른다. 그 이름의 항목이 없으면 **단일 `query.func.module`로 폴백**하므로 기존 배포와, `datasource`를 안 보내는 구버전 coordinator 모두 그대로 동작한다(설정 수집은 `core/config.py`의 `_collect_query_funcs`, 선택은 `executor/app.py`의 `_resolve_query_func`).
 - **`datasource`와 `sql_dialect`는 다른 축이다**: 전자는 *실행 엔진*, 후자는 *sqlglot 파서*(검증 + splitter의 재직렬화)다. 실행 엔진과 sqlglot 방언 목록이 1:1이 아니라 한 축으로 합칠 수 없다 — **sqlglot에는 impala 방언이 없고**(30.x), Impala 문법은 한 방언으로 덮이지 않는다(백틱 식별자는 hive만, `trunc(current_date() - interval 7 day)`는 trino만 파싱). 그래서 `sql_dialect` 생략 시 `parser.resolve_dialect()`가 **요청 > manifest > datasource 유도(`DIALECT_BY_DATASOURCE`: trino→trino, greenplum/history→postgres) > 전역 `query.sql_dialect`** 순으로 정하되, **impala는 일부러 유도하지 않는다**(전역 기본 hive를 그대로 따르고, hive가 못 읽는 문법을 쓰는 템플릿만 manifest에서 `sql_dialect`를 직접 지정 — 예: `templates/daily_sales_interval`은 실행 Impala + 파싱 trino).
-- **이관(`/jobs`)에서는 거부**: `/jobs`의 소스는 executor backend가 Impala로 고정돼 있어(`_source_connect`) 다른 엔진을 실행할 수단이 없다. manifest가 impala 아닌 `datasource`를 선언한 템플릿을 이관으로 제출하면 `422 TEMPLATE_DATASOURCE_UNSUPPORTED`로 막는다(app.py `_reject_unsupported_datasource`). 선언을 조용히 무시하면 "Trino로 도는 줄 알았는데 Impala로 돌았다"는 오실행이 되기 때문이다.
+- **이관(`/jobs`)의 소스 엔진도 같은 `datasource`로 고른다**: §17.2 참고. query-execute와 요청/manifest/`source.type` 우선순위가 같고, 실행 계약만 다르다(미리보기는 `module`, 이관은 `connect`).
 - **경계**: 결과가 coordinator 메모리를 거치므로 `limit`(≤10000)으로 응답 크기를 강제하는 **미리보기 규모 전용**이다. 대량 이관은 계속 `/jobs`. executor의 `/query-run`·`/datasources/{name}/query`는 task 세마포어를 거치지 않으므로 무거운 사용이 예상되면 별도 동시성 가드를 후속 고려한다.
 
 **테스트**: `tests/test_query_execute.py`(render_query·coordinator 직접 실행·trino→/query-run 프록시· failover·오류 전파·**manifest datasource 우선순위와 방언 유도**) + `tests/test_datasource_query.py`(executor `/query-run` 커스텀 함수·dict 반환·미설정 400·함수 예외 502·`_load_query_func`·`_collect_prefix`·**소스별 함수 선택과 폴백**) + `tests/test_parser.py`(`resolve_dialect` 우선순위, Impala 문법이 한 방언으로 안 덮인다는 근거) + `tests/test_template.py`(manifest 파싱·`/jobs` 422)를 실 DB 없이 검증.
