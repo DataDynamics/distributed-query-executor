@@ -31,7 +31,8 @@ flowchart TB
 
     E1 & E2 & E3 -- "③-a read (TLS+LDAP)<br/>datasource=impala (기본)" --> Impala
     E1 & E2 & E3 -. "③-b fetch(sql, config)<br/>datasource=trino 등" .-> CustomAPI
-    E1 & E2 & E3 -- "④ COPY/INSERT 적재" --> GP
+    E1 & E2 & E3 -- "④-a COPY/INSERT 적재 (copy · statement · stage_insert)" --> GP
+    Dispatcher -. "④-b Phase 2 중앙 적재 (local_stage · s3_stage)<br/>외부테이블 → target INSERT" .-> GP
 
     Dispatcher -- "job_history + 공유 jobs store" --> PG
     Monitor -- "executor_health_metrics" --> PG

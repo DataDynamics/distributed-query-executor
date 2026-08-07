@@ -27,7 +27,8 @@ flowchart TB
     Dispatcher -- "② POST /tasks (sub-query)" --> E1 & E2 & E3
     E1 & E2 & E3 -- "③-a read (TLS+LDAP)<br/>datasource=impala" --> Impala
     E1 & E2 & E3 -. "③-b fetch (datasource=trino 등)" .-> CustomAPI
-    E1 & E2 & E3 -- "④ COPY 적재" --> GP
+    E1 & E2 & E3 -- "④-a 적재 (copy · statement · stage_insert)" --> GP
+    Dispatcher -. "④-b Phase 2 적재 (local_stage · s3_stage)<br/>executor 는 GP 에 붙지 않음" .-> GP
     Dispatcher -- "job_history" --> PG
     E1 & E2 & E3 -- "task_history" --> PG
     Client -- "⑤ GET /jobs/{id}/status" --> API
