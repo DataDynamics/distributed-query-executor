@@ -371,20 +371,20 @@ bin/s3-ops ls s3://<버킷>/<프리픽스>/$JOB_ID/
 
 ### 자주 나오는 원인
 
-coordinator 가 executor 에 닿지 못하면 재시도했다가 다른 executor 로 넘긴다
-(`coordinator.task_failover`). 로그에 연결 실패가 반복되면 그 executor 의 프로세스와 포트를 확인한다.
-다만 `local_stage` 는 executor 와 세그먼트가 짝지어 있어 넘어가면 짝이 깨지므로, 그 모드에서
-failover 가 도는 것 자체가 신호다.
+가장 먼저 의심할 것은 executor 에 닿지 못한 경우다. coordinator 는 연결에 실패하면 몇 번 재시도했다가
+다른 executor 로 넘기므로(`coordinator.task_failover`), 로그에 연결 실패가 반복된다면 그 executor 의
+프로세스와 포트를 확인한다. 다만 `local_stage` 는 executor 와 세그먼트가 짝지어 있어 다른 곳으로
+넘어가면 그 짝이 깨지므로, 이 모드에서는 failover 가 도는 것 자체가 이미 신호다.
 
-대상 테이블이나 컬럼이 어긋난 경우도 흔하다. `copy.preflight` 가 켜져 있으면 COPY 를 시작하기 전에
-걸러 주지만, 꺼져 있으면 데이터를 반쯤 밀어 넣다 실패한다.
+접속이 멀쩡하다면 다음은 스키마가 어긋난 경우다. 대상 테이블이나 컬럼이 SELECT 결과와 맞지 않는 일이
+흔한데, `copy.preflight` 가 켜져 있으면 COPY 를 시작하기 전에 걸러 주지만 꺼져 있으면 데이터를 반쯤
+밀어 넣다 실패한다. 비슷하게 `stage_insert` 에서 TEMP 테이블이 `already exists` 로 부딪힌다면
+`coordinator.stage_unique_staging` 이 꺼져 있는지 본다. GP 연결을 풀에서 재사용하는 구조라 이름이
+같으면 앞 작업의 TEMP 가 그대로 남아 있기 때문이다.
 
-`stage_insert` 에서 TEMP 테이블이 `already exists` 로 부딪히면 `coordinator.stage_unique_staging` 이
-꺼져 있는지 본다. GP 연결을 풀에서 재사용하는 구조라 이름이 같으면 앞 작업의 TEMP 가 남는다.
-
-작업은 성공이라는데 데이터가 없다면 MockBackend 를 의심한다. `greenplum.dsn` 이 비어 있으면 실제로는
-아무것도 읽고 쓰지 않는 백엔드로 기동하는데, 기동할 때 경고 로그가 남으므로 `*-warn.log` 에서 바로
-찾을 수 있다.
+증상이 아예 다른 경우도 있다. 작업은 성공이라는데 대상에 데이터가 없다면 MockBackend 를 의심한다.
+`greenplum.dsn` 이 비어 있으면 실제로는 아무것도 읽고 쓰지 않는 백엔드로 기동하는데, 기동할 때 경고
+로그가 남으므로 `*-warn.log` 에서 바로 찾을 수 있다.
 
 ```bash
 grep MockBackend $L/query-executor-server-*-warn.log
@@ -659,13 +659,15 @@ WHEELS_ONLY=1 ./bin/check-prereqs.sh   # 휠만
 
 ---
 
-## 기억해 둘 원칙 셋
+## 끝으로 기억해 둘 것
 
-coordinator 와 executor 모두 상태를 프로세스 메모리에 두므로 인스턴스마다 단일 워커로 실행한다.
-처리량 확장은 워커 수가 아니라 executor 인스턴스 수로 한다.
+운영 내내 바탕에 깔아 두면 좋은 원칙이 있다. coordinator 와 executor 는 모두 상태를 프로세스
+메모리에 두므로 인스턴스마다 단일 워커로 실행해야 하고, 그래서 처리량을 늘릴 때 손대는 것은 워커
+수가 아니라 언제나 executor 인스턴스 수다. 여기에서 자연스럽게 따라오는 것이 다음 원칙인데,
+coordinator 를 여러 대 띄우려면 작업 저장소와 이력을 반드시 공유 PostgreSQL 로 외부화해야 한다.
+메모리에만 상태를 두는 기본 구성으로 여러 대를 세우면 작업을 접수한 인스턴스만 그것을 알기 때문에,
+사용자가 자기 작업을 조회하지 못하는 일이 생긴다.
 
-coordinator 를 여러 대 띄우려면 작업 저장소와 이력을 반드시 공유 PostgreSQL 로 외부화한다. 그러지
-않으면 사용자가 자기 작업을 조회하지 못하는 일이 생긴다.
-
-별도 executor 프로세스 없이 동작만 검증하고 싶으면 `coordinator.executor_mode=local` 로 두어
-coordinator 안에서 백엔드를 직접 실행한다.
+마지막으로 시험해 볼 일이 있을 때는 executor 프로세스를 따로 띄우지 않아도 된다.
+`coordinator.executor_mode=local` 로 두면 coordinator 안에서 백엔드를 직접 실행하므로, 설정이나
+쿼리가 의도대로 도는지만 확인할 때 편하다.

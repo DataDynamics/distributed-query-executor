@@ -85,13 +85,13 @@ curl -s localhost:8088/jobs \
 하나이고 어떤 파이프라인으로 실행할지는 `exec_mode` 필드 하나가 정한다. 같은 SELECT 와 파티션,
 target 을 두고 이 값만 바꾸면 COPY 로 넣을지 staging 을 거칠지 외부테이블로 넣을지가 갈린다.
 
-```
-exec_mode: "copy"          → 소스 read → GP COPY (executor 가 직접)
-exec_mode: "statement"     → 받은 SQL 을 GP 에서 그대로 실행
-exec_mode: "stage_insert"  → 소스 → GP staging(TEMP) COPY → INSERT (task 하나가 완결)
-exec_mode: "local_stage"   → executor 로컬 CSV → file:// 외부테이블 (co-locate 필요)
-exec_mode: "s3_stage"      → executor S3 업로드 → PXF 외부테이블 (co-locate 불필요)
-```
+고를 수 있는 값은 다섯이다. `copy` 는 executor 가 소스에서 읽어 Greenplum 에 곧바로 COPY 하고,
+`statement` 는 받은 SQL 을 Greenplum 에서 그대로 실행한다. `stage_insert` 는 소스에서 읽은 결과를
+staging 테이블에 COPY 한 뒤 그것을 target 으로 INSERT 하는데, 이 과정을 조각 하나가 스스로 끝낸다.
+나머지 둘은 executor 가 파일을 만들어 두면 Greenplum 이 그 파일을 읽어 가는 방식이다.
+`local_stage` 는 executor 가 자기 호스트에 CSV 를 떨어뜨리고 세그먼트가 `file://` 외부테이블로
+읽으므로 둘이 같은 호스트에 있어야 하고, `s3_stage` 는 CSV 를 S3 에 올린 뒤 PXF 외부테이블로 읽으므로
+그런 제약이 없다.
 
 기본값은 `copy` 이며 대부분의 경우에 맞는다. 템플릿을 쓰면 manifest 의 `exec_mode` 가 기본값이
 되고, 요청에 명시하면 요청이 이긴다.
@@ -549,25 +549,23 @@ coordinator 를 여러 대 두고 로드밸런서 뒤에 놓았는데 상태 저
 
 ## 실수하기 쉬운 것들
 
-`202` 는 접수이지 완료가 아니다. 반드시 폴링으로 종료 상태를 확인한다.
+가장 자주 겪는 오해는 `202` 를 완료로 읽는 것이다. 그것은 접수했다는 뜻일 뿐이므로 반드시 폴링으로
+종료 상태를 확인해야 하고, 그 폴링도 경량 엔드포인트로 해야 한다. 조각 목록까지 담긴 전체 뷰는
+작업이 끝난 뒤 한 번이나 원인을 진단할 때만 부르면 충분하다. 이어서 헷갈리기 쉬운 것이 결과를 받는
+방식인데, 옮긴 데이터는 HTTP 응답에 담기지 않는다. executor 가 대상으로 직접 보내므로 확인은 대상
+테이블에서 해야 하고 API 가 돌려주는 것은 상태와 행 수뿐이다. 결과 행을 그 자리에서 보고 싶어
+`/query-execute` 를 이관에 쓰는 것도 같은 종류의 실수다. 그쪽은 `limit` 으로 잘리는 미리보기라 옮기는
+데 쓰면 잘린 데이터가 적재된다.
 
-`IN` 목록의 값 개수가 곧 병렬도의 한계다. `parallelism` 을 32로 줘도 `IN` 값이 셋이면 세 조각으로만
-나뉜다. 더 잘게 나누고 싶으면 나눌 값을 늘리거나 날짜 fan-out 을 쓴다.
+병렬도를 정할 때는 `IN` 목록의 값 개수가 곧 상한이라는 점을 기억한다. `parallelism` 을 32로 줘도
+`IN` 값이 셋이면 세 조각으로만 나뉘므로, 더 잘게 나누려면 나눌 값을 늘리거나 날짜 fan-out 을 쓴다.
 
-`append` 는 다시 돌리면 그만큼 쌓인다. 재실행이 예상되는 작업이라면 `write_mode:
-overwrite_partitions` 를 지원하는 모드(`copy`·`local_stage`·`s3_stage`)를 고르고 그 값으로 만들어
-두는 편이 낫다. `stage_insert` 는 이 옵션을 적용하지 않는다는 점을 특히 기억한다.
-
-폴링은 경량 엔드포인트로 하고, 조각 목록까지 담긴 전체 뷰는 종료 후 한 번이나 진단이 필요할 때만
-호출한다.
-
-타임아웃이 났다고 그냥 다시 보내면 작업이 두 번 만들어질 수 있다. 멱등 키를 쓰거나 이미
-만들어졌는지 먼저 확인한다.
-
-`/query-execute` 는 미리보기라 `limit` 으로 잘린다. 이관에 쓰지 않는다.
-
-결과는 HTTP 응답에 담기지 않는다. 데이터는 executor 가 대상으로 직접 보내므로 확인은 대상
-테이블에서 하고, API 가 돌려주는 것은 상태와 행 수뿐이다.
+다시 돌릴 가능성이 있는 작업이라면 처음부터 그에 맞게 만들어 둔다. `append` 는 재실행한 만큼 그대로
+쌓이므로, 멱등이 필요하면 `write_mode: overwrite_partitions` 를 지원하는 모드인 `copy` 나
+`local_stage`, `s3_stage` 를 고르고 그 값으로 제출한다. 여기서 `stage_insert` 는 이 옵션을 아예
+적용하지 않는다는 점을 특히 조심해야 한다. 재실행이 뜻하지 않게 일어나는 경우도 있는데, 타임아웃이
+났다고 그냥 다시 보내면 같은 작업이 두 번 만들어질 수 있다. 멱등 키를 쓰거나 이미 만들어졌는지
+먼저 확인한다.
 
 ---
 
