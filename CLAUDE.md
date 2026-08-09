@@ -4,11 +4,16 @@
 [README.md](README.md), 설계 심화는 [docs/DESIGN.md](docs/DESIGN.md), 실행 모드별 사용법은
 [docs/GUIDE.md](docs/GUIDE.md), 배포는 [docs/DEPLOY.md](docs/DEPLOY.md)를 참고한다.
 
-문서는 독자별로 갈린다. `docs/USER.md`(사용자 — API 사용법·오류 코드)와
-`docs/OPERATOR.md`(운영자 — 일상 점검·장애 추적·용량 조정)가 각 역할의 입구이고, GUIDE·
-INTEGRATION·DEPLOY·PERFORMANCE 는 그 둘이 필요할 때 가리키는 심화 문서다. **API 나 설정을
-바꾸면 해당 역할의 입구 문서도 함께 고친다** — 특히 오류 코드를 추가하면 USER.md 의 오류 절에,
-운영에 영향을 주는 설정을 바꾸면 OPERATOR.md 에 반영한다.
+문서는 독자별로 갈린다. `docs/USER.md`(사용자 — API 사용법·모드 선택·오류 코드)와
+`docs/OPERATOR.md`(운영자 — 일상 점검·장애 추적·용량 조정·설정)가 각 역할의 문서이고, GUIDE·
+INTEGRATION·DEPLOY·PERFORMANCE·DESIGN 은 특정 주제의 심화 문서다.
+
+**이 두 문서는 의도적으로 자립형이다.** 링크를 따라다니지 않고 하나만 읽어도 일을 끝낼 수 있도록
+다른 문서의 내용을 가져와 담았으므로, 심화 문서와 겹치는 서술이 있는 것이 정상이다. 중복을
+없애겠다고 본문을 링크로 바꾸지 않는다(문서 안에 다른 문서로 가는 링크를 두지 않는 것이 규칙이다).
+대신 **겹치는 사실을 바꿀 때는 양쪽을 함께 고친다** — 오류 코드를 추가하면 USER.md 의 오류 절에,
+운영에 영향을 주는 설정을 바꾸면 OPERATOR.md 에, 실행 모드의 필수 필드를 바꾸면 USER.md 와
+GUIDE.md 양쪽에 반영한다.
 
 ## 프로젝트 개요
 
