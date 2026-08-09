@@ -4,7 +4,7 @@
 Impala 에서 Greenplum 으로 **옮기는 이관**과, 결과를 클라이언트로 **동기 반환하는
 미리보기성 실행**이 큰 갈래이고, 이관은 다시 적재 방식(`exec_mode`)에 따라 나뉜다. 이 문서는
 그중 실무에서 가장 자주 쓰는 셋을 한자리에 모아 정리한다. 작업 제출과 상태 조회, 오류 대처
-같은 기본기는 [사용자 가이드](USER_GUIDE.md)에 있으므로 그쪽을 먼저 읽고 오면 편하다.
+같은 기본기는 [사용자 가이드](USER.md)에 있으므로 그쪽을 먼저 읽고 오면 편하다.
 
 - **`stage_insert` 이관**(`POST /jobs`, `exec_mode: stage_insert`) — 소스 SELECT 결과를
   Greenplum staging(TEMP) 테이블에 COPY 한 뒤 `INSERT … SELECT FROM staging` 으로 최종

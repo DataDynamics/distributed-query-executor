@@ -12,16 +12,16 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분�
 이어집니다.
 
 읽는 순서는 자기 역할에 따라 갈립니다. **작업을 맡기는 쪽**이라면
-[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) 하나로 시작하고, **서버를 돌보는 쪽**이라면
-[`docs/DEPLOY.md`](docs/DEPLOY.md) 로 설치한 뒤 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) 를
+[`docs/USER.md`](docs/USER.md) 하나로 시작하고, **서버를 돌보는 쪽**이라면
+[`docs/DEPLOY.md`](docs/DEPLOY.md) 로 설치한 뒤 [`docs/OPERATOR.md`](docs/OPERATOR.md) 를
 곁에 둡니다. 나머지는 그 두 문서가 필요할 때 가리키는 심화 문서입니다.
 
 | 문서 | 내용 | 누구를 위한 것인가 |
 |---|---|---|
-| [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | 작업 제출·조회·오류 대처 등 API 사용법 | 사용자 |
+| [`docs/USER.md`](docs/USER.md) | 작업 제출·조회·오류 대처 등 API 사용법 | 사용자 |
 | [`docs/GUIDE.md`](docs/GUIDE.md) | 실행 모드 사용 가이드(stage_insert / query-execute / local_stage 등) | 사용자 |
 | [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | 애플리케이션(예: C#)에서 HTTP API 로 작업을 실행·확인하는 클라이언트 연동 | 사용자 |
-| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | 일상 점검·로그 추적·장애 대응·용량 조정 | 운영자 |
+| [`docs/OPERATOR.md`](docs/OPERATOR.md) | 일상 점검·로그 추적·장애 대응·용량 조정 | 운영자 |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | 배포·설치·업그레이드·에어갭 | 운영자 |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | 성능·수평 확장·고가용성 운영 | 운영자 |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | 설계 근거·내부 동작 심화 | 개발자 |
@@ -161,8 +161,10 @@ bin/s3-ops rmdir s3://dw-stage/dqe-stage/ --older-than 7d --yes
   적용됩니다. 이관에서 소스를 읽는 함수는 `query.func.fetch_module` 이며 전량을 반환해야 합니다.
   접속 설정은 두 함수가 `query.func.config.*` 를 공유합니다.
 
-`impala.host` 와 `greenplum.dsn` 이 모두 채워져 있으면 실제 `ImpalaToGreenplumBackend` 가 동작하고,
-둘 중 하나라도 비면 실입출력 없이 API 만 확인할 수 있는 `MockBackend` 로 자동 대체됩니다. 로깅은
+백엔드 선택은 `greenplum.dsn` 하나가 정합니다. 값이 있으면 실제 `ImpalaToGreenplumBackend` 가
+동작하고, 비어 있으면 실입출력 없이 API 만 확인할 수 있는 `MockBackend` 로 자동 대체되며 이때는
+경고 로그가 남습니다. `impala.host` 만 비어 있으면 실제 백엔드로 뜨되 소스를 읽을 수 없어
+`statement` 모드만 동작합니다. 로깅은
 하루 단위로 파일이 갈리며, 작업 로그 앞에는 `[job_id][task_id]` 컨텍스트가 붙고 WARNING 이상만 모으는
 `*-warn.log` 가 별도로 남습니다.
 

@@ -7,7 +7,7 @@
 > 로 구동한다. systemd 를 쓰려면 `bin/systemd/` 의 유닛(`coordinator.service`·`executor@.service`)을
 > `systemctl link` 로 설치한다(`bin/systemd/install-systemd.sh`, /etc 에는 심볼릭 링크만 생성).
 
-설치를 마친 뒤의 일상 운영 — 무엇을 날마다 보고, 느리거나 실패했을 때 어디부터 뒤지는지 — 는 [운영자 가이드](OPERATIONS.md)에서 이어진다.
+설치를 마친 뒤의 일상 운영 — 무엇을 날마다 보고, 느리거나 실패했을 때 어디부터 뒤지는지 — 는 [운영자 가이드](OPERATOR.md)에서 이어진다.
 
 시스템 공용 디렉터리를 건드리지 않으므로 권한 다툼이나 다른 소프트웨어와의 충돌 없이 모든 것이 한 폴더에 모인다. 그만큼 백업·이동·제거도 쉬워진다.
 
