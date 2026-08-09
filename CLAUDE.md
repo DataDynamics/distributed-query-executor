@@ -4,6 +4,12 @@
 [README.md](README.md), 설계 심화는 [docs/DESIGN.md](docs/DESIGN.md), 실행 모드별 사용법은
 [docs/GUIDE.md](docs/GUIDE.md), 배포는 [docs/DEPLOY.md](docs/DEPLOY.md)를 참고한다.
 
+문서는 독자별로 갈린다. `docs/USER_GUIDE.md`(사용자 — API 사용법·오류 코드)와
+`docs/OPERATIONS.md`(운영자 — 일상 점검·장애 추적·용량 조정)가 각 역할의 입구이고, GUIDE·
+INTEGRATION·DEPLOY·PERFORMANCE 는 그 둘이 필요할 때 가리키는 심화 문서다. **API 나 설정을
+바꾸면 해당 역할의 입구 문서도 함께 고친다** — 특히 오류 코드를 추가하면 USER_GUIDE 의 대처 표에,
+운영에 영향을 주는 설정을 바꾸면 OPERATIONS 에 반영한다.
+
 ## 프로젝트 개요
 
 Coordinator 한 대와 Executor N대로 이루어진 분산 쿼리 실행기다. Impala `SELECT` 한 건을 파티션
@@ -365,8 +371,9 @@ impyla 와 boto3 는 이미 `requirements-executor.txt` 에 있으므로 추가 
   로그 레벨과 무관하게 INFO 로 항상 남는다.
 - **멀티 coordinator** — `store.backend=postgres` 와 공유 `history.db_dsn`,
   `executor.self_report=true` 를 함께 켠다.
-- **백엔드 선택** — `impala.host` 와 `greenplum.dsn` 이 둘 다 있으면 실제 백엔드를, 하나라도 비면
-  `MockBackend` 를 쓴다. query-execute 의 소스 실행은 이와 별개로 `/query-run` 커스텀 함수에
+- **백엔드 선택** — `build_backend` 는 **`greenplum.dsn` 하나만** 본다. 비어 있으면 경고를 남기고
+  `MockBackend` 로 떨어지고, 있으면 실제 백엔드를 쓴다. `impala.host` 가 비어도 실제 백엔드로 뜨되
+  소스를 읽을 수 없어 `statement` 모드만 동작한다(기동 로그에 `(미설정 → statement 모드만)`). query-execute 의 소스 실행은 이와 별개로 `/query-run` 커스텀 함수에
   위임한다(예제 `trino_runner`, 의존성 `trino` 는 이 예제 전용이라 requirements-executor.txt 에
   있다).
 - **템플릿 엔진** — `template.dir`(템플릿 루트, 개발 시 `templates`), `template.enabled`,

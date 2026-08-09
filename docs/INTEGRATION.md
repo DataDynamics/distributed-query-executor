@@ -2,8 +2,8 @@
 
 C# 애플리케이션이 Coordinator 의 HTTP API 로 쿼리 작업(Job)을 실행하고, 완료를 기다리고,
 실패 원인을 확인하는 방법을 정리합니다. 모든 요청·응답은 JSON 이며, 아래 예시는 실제 응답
-형태 그대로입니다. API 전체 목록과 의미는 [README.md](../README.md)·[DESIGN.md](DESIGN.md) 를
-함께 참고하세요.
+형태 그대로입니다. API 의 기본 사용법과 오류 코드는 [사용자 가이드](USER_GUIDE.md)에,
+API 전체 목록과 설계 배경은 [README.md](../README.md)·[DESIGN.md](DESIGN.md) 에 있습니다.
 
 ## 1. 비동기 작업 모델
 

@@ -11,13 +11,20 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분�
 이 문서는 **소개 + 빠른 시작 + 핵심 개념 요약**에 집중하는 입구입니다. 깊은 내용은 아래 문서로
 이어집니다.
 
-| 문서 | 내용 |
-|---|---|
-| [`docs/DESIGN.md`](docs/DESIGN.md) | 설계 근거·내부 동작 심화 |
-| [`docs/GUIDE.md`](docs/GUIDE.md) | 실행 모드 사용 가이드(stage_insert / query-execute / local_stage 등) |
-| [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | 애플리케이션(예: C#)에서 HTTP API 로 작업을 실행·확인하는 클라이언트 연동 |
-| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | 성능·수평 확장·고가용성 운영 |
-| [`docs/DEPLOY.md`](docs/DEPLOY.md) | 배포·설치·업그레이드·에어갭 |
+읽는 순서는 자기 역할에 따라 갈립니다. **작업을 맡기는 쪽**이라면
+[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) 하나로 시작하고, **서버를 돌보는 쪽**이라면
+[`docs/DEPLOY.md`](docs/DEPLOY.md) 로 설치한 뒤 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) 를
+곁에 둡니다. 나머지는 그 두 문서가 필요할 때 가리키는 심화 문서입니다.
+
+| 문서 | 내용 | 누구를 위한 것인가 |
+|---|---|---|
+| [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | 작업 제출·조회·오류 대처 등 API 사용법 | 사용자 |
+| [`docs/GUIDE.md`](docs/GUIDE.md) | 실행 모드 사용 가이드(stage_insert / query-execute / local_stage 등) | 사용자 |
+| [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | 애플리케이션(예: C#)에서 HTTP API 로 작업을 실행·확인하는 클라이언트 연동 | 사용자 |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | 일상 점검·로그 추적·장애 대응·용량 조정 | 운영자 |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | 배포·설치·업그레이드·에어갭 | 운영자 |
+| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | 성능·수평 확장·고가용성 운영 | 운영자 |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | 설계 근거·내부 동작 심화 | 개발자 |
 
 ## 아키텍처
 
