@@ -43,7 +43,12 @@ SQL 을 받아 DataFrame 을 돌려주는 API 인 경우)는 설정 한 줄로 �
 그러면 ``run`` 이 ``trino.dbapi`` 커서 대신 그 함수를 호출하고, 받은 DataFrame 을 그대로
 ``_shape`` 에 넘긴다(``_run_dataframe_api``). 커스텀 API 계약::
 
-    query(sql: str, *, config: dict, limit: int) -> pandas.DataFrame
+    query(sql: str, *, config: dict, limit: int | None) -> pandas.DataFrame
+
+``limit`` 이 ``None`` 이면 상한이 없다는 뜻이라 **전량을 돌려줘야** 한다. 같은 함수를 이관
+경로(``fetch_module``)도 부르기 때문인데, 미리보기는 상위 몇 행만 필요하지만 이관은 전량이
+필요해 넘길 상한이 없다. ``limit`` 을 아예 받지 않는 ``query(sql, *, config)`` 로 구현해도
+되며, 그때는 호출부가 인자를 빼고 부른다.
 
 DataFrame 을 손으로 풀 필요가 없다 — ``_shape`` 가 컬럼명·행·truncated 를 뽑고, numpy
 스칼라(``np.int64`` 등)와 결측(``NaN``/``NaT``/``pd.NA``)을 JSON 안전한 값으로 정규화한다.
@@ -54,6 +59,7 @@ from __future__ import annotations
 import builtins
 import getpass
 import importlib
+import inspect
 import io
 import logging
 import sys
@@ -161,9 +167,11 @@ def fetch_all(sql: str, *, config: dict):
     logger.info("커스텀 API 이관 읽기: %s / sql=%.200s", dotted, sql)
     fn = _load_dotted(dotted)
     try:
-        # 이관은 전량이므로 limit 을 넘기지 않는다. 사내 API 가 limit 을 요구하면
-        # 여기서 충분히 큰 값을 주되, 잘림 여부를 반드시 확인하도록 구현할 것.
-        return fn(sql, config=config)
+        # 이관은 전량이라 상한이 없다는 뜻으로 limit=None 을 넘긴다(limit 을 받지 않는
+        # 시그니처면 _call_dataframe_api 가 알아서 뺀다). 사내 API 가 상한을 반드시
+        # 요구하는 구조라면 그 API 안에서 충분히 큰 값으로 대체하되, 잘렸는지를 반드시
+        # 확인해 예외로 알려야 한다 — 조용히 잘리면 데이터가 비는 채로 적재된다.
+        return _call_dataframe_api(fn, sql, config=config, limit=None)
     except Exception:
         logger.exception("커스텀 API 이관 읽기 실패: %s / sql=%.500s", dotted, sql)
         raise
@@ -180,16 +188,52 @@ def _load_dotted(dotted: str):
     return getattr(importlib.import_module(mod_name), func_name)
 
 
+def _accepts_limit(fn) -> bool:
+    """커스텀 API 가 ``limit`` 을 받는 시그니처인지 본다.
+
+    시그니처를 읽을 수 없는 호출가능 객체(C 확장, 일부 래퍼)는 받는 쪽으로 본다. 문서화된
+    계약이 ``limit`` 을 포함하므로 그쪽이 기본이고, 못 읽었다고 인자를 빼면 오히려 어긋난다.
+    """
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return True
+    return "limit" in params or any(p.kind is p.VAR_KEYWORD for p in params.values())
+
+
+def _call_dataframe_api(fn, sql: str, *, config: dict, limit):
+    """커스텀 DataFrame API 를 그 함수의 시그니처에 맞춰 호출한다.
+
+    같은 ``dataframe_module`` 을 두 경로가 부르는데 필요한 것이 다르다. 미리보기(:func:`run`)는
+    상위 몇 행만 있으면 되니 ``limit`` 을 넘겨 서버측 푸시다운을 유도하고, 이관
+    (:func:`fetch_all`)은 전량이 필요하니 넘길 값이 없다. 그래서 이관에서는 ``limit=None``
+    ("상한 없음")을 넘긴다.
+
+    여기서 시그니처를 보는 이유는 두 계약이 현장에 섞여 있기 때문이다. 문서가 안내한
+    ``def query(sql, *, config, limit)`` 로 구현한 API 도, ``limit`` 을 아예 받지 않는
+    ``def query(sql, *, config)`` 로 구현한 API 도 양쪽 경로에서 모두 동작해야 한다. 예전에는
+    이관 경로가 ``limit`` 을 무조건 빼고 불러서, 문서대로 구현한 API 가
+    ``missing 1 required keyword-only argument: 'limit'`` 로 실패했다.
+    """
+    if _accepts_limit(fn):
+        return fn(sql, config=config, limit=limit)
+    return fn(sql, config=config)
+
+
 def _run_dataframe_api(sql: str, *, config: dict, limit: int) -> QueryResult:
     """사내 커스텀 API 로 Trino SQL 을 실행하고, 받은 **DataFrame** 을 그대로 정형한다.
 
     ``query.func.config.dataframe_module`` 이 설정된 배포에서 이 경로가 쓰인다. 커스텀 API
     계약은 이 파일의 ``run`` 과 같은 모양이되 반환만 DataFrame 이다::
 
-        def query(sql: str, *, config: dict, limit: int) -> pandas.DataFrame
+        def query(sql: str, *, config: dict, limit: int | None) -> pandas.DataFrame
 
     ``limit`` 은 API 가 서버측으로 밀어 넣을 수 있게 함께 넘기지만, **잘림 판정과 상한
     적용은 여기서 다시 한다**(``_shape``) — API 가 limit 을 무시해도 응답 크기가 보장된다.
+
+    같은 함수를 이관 경로(:func:`fetch_all`)도 부르며 그때는 ``limit=None`` 이 넘어온다는 점을
+    잊지 않는다. ``None`` 은 상한 없음이므로 전량을 돌려줘야 하고, ``df.head(limit)`` 처럼
+    무조건 자르는 구현이면 ``limit is None`` 을 먼저 걸러야 한다.
 
     DataFrame 을 직접 풀어(``itertuples`` 등) 넘길 필요는 없다. ``_shape`` 가 컬럼명·행·
     truncated 를 뽑고, numpy 스칼라(np.int64 등)와 결측(NaN/NaT/pd.NA)을 JSON 안전한
@@ -203,7 +247,7 @@ def _run_dataframe_api(sql: str, *, config: dict, limit: int) -> QueryResult:
     logger.info("커스텀 DataFrame API 호출: %s (limit=%s) sql=%.200s", dotted, limit, sql)
     fn = _load_dotted(dotted)
     try:
-        df = fn(sql, config=config, limit=limit)
+        df = _call_dataframe_api(fn, sql, config=config, limit=limit)
     except Exception:
         logger.exception("커스텀 DataFrame API 실패: %s / sql=%.500s", dotted, sql)
         raise

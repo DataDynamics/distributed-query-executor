@@ -29,7 +29,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 662개(+pandas 미설치 시 5 skip).
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 670개(+pandas 미설치 시 5 skip).
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -255,7 +255,16 @@ executor 는 소스에 직접 접속하지만 coordinator 는 history 와 greenp
 **컬럼 dtype 별로 결과 타입이 갈린다**. NaN·NaT·`pd.NA`·inf 는 표준 JSON 에 표현이 없으므로
 `null` 로 떨구며, 이 규칙은 모든 데이터소스에 적용된다. `trino_runner` 는
 `query.func.config.dataframe_module` 이 설정되면 trino 드라이버 대신 그 커스텀
-API(`query(sql, config, limit) -> DataFrame`)를 호출한다.
+API(`query(sql, config, limit=None) -> DataFrame`)를 호출한다.
+
+**같은 `dataframe_module` 을 두 경로가 부른다는 점이 함정이다.** 미리보기(`run`)는 상한이
+필요해 `limit` 을 넘기지만 이관(`fetch_all`)은 전량이 필요해 넘길 값이 없다. 예전에는 이관
+경로가 `limit` 을 아예 빼고 불러서, 문서가 안내한 `def query(sql, *, config, limit)` 으로
+구현한 사내 API 가 `missing 1 required keyword-only argument: 'limit'` 로 실패했다. 지금은
+`_call_dataframe_api` 가 `_accepts_limit` 으로 시그니처를 보고, 받는 함수에는 이관에서도
+`limit=None`(상한 없음)을 넘기고 받지 않는 함수에는 빼고 부른다. 그래서 두 시그니처가 양쪽
+경로에서 모두 동작한다. 커스텀 API 쪽에서는 **`limit is None` 을 전량으로 처리**해야 하며,
+무조건 자르면 이관이 조용히 일부만 적재한다.
 
 ### 운영 도구
 

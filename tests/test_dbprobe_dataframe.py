@@ -302,3 +302,75 @@ def test_real_json_safe_numpy_types():
     assert _json_safe(np.array([1, 2, 3])) == [1, 2, 3]
     assert _json_safe(np.float64("nan")) is None
     assert _json_safe(np.float64(1.5)) == 1.5
+
+
+# ───────── dataframe_module: 미리보기와 이관이 같은 함수를 부른다 ─────────
+#
+# 같은 dataframe_module 을 run(미리보기)과 fetch_all(이관)이 함께 부르는데 필요한 것이
+# 달라(전자는 상한, 후자는 전량) 시그니처가 어긋나기 쉽다. 예전에는 이관 경로가 limit 을
+# 무조건 빼고 불러서, 문서가 안내한 def query(sql, *, config, limit) 으로 구현한 사내 API 가
+# missing 1 required keyword-only argument: 'limit' 로 실패했다.
+
+_DF_COLS = ["user_id", "dt"]
+_DF_ROWS = [[1, "2026-01-01"], [2, "2026-01-02"], [3, "2026-01-03"]]
+
+
+def _api_required_limit(sql, *, config, limit):
+    """문서가 안내한 형태. limit=None 이면 상한 없음이므로 전량을 준다."""
+    return _FakeDF(_DF_COLS, _DF_ROWS if limit is None else _DF_ROWS[:limit])
+
+
+def _api_no_limit(sql, *, config):
+    """limit 을 아예 받지 않는 형태(전량 반환 API)."""
+    return _FakeDF(_DF_COLS, _DF_ROWS)
+
+
+def _api_kwargs(sql, *, config, **kw):
+    """**kwargs 로 받아 넘기는 래퍼 형태."""
+    lim = kw.get("limit")
+    return _FakeDF(_DF_COLS, _DF_ROWS if lim is None else _DF_ROWS[:lim])
+
+
+@pytest.mark.parametrize("api", [_api_required_limit, _api_no_limit, _api_kwargs])
+def test_이관_경로는_어떤_시그니처든_전량을_읽는다(monkeypatch, api):
+    from customs.query_funcs import trino_runner
+
+    monkeypatch.setattr(trino_runner, "_load_dotted", lambda dotted: api)
+    df = trino_runner.fetch_all("SELECT 1", config={"dataframe_module": "m:f"})
+    assert list(df.itertuples()) == [tuple(r) for r in _DF_ROWS]
+
+
+@pytest.mark.parametrize("api", [_api_required_limit, _api_no_limit, _api_kwargs])
+def test_미리보기_경로는_어떤_시그니처든_상한을_지킨다(monkeypatch, api):
+    from customs.query_funcs import trino_runner
+
+    monkeypatch.setattr(trino_runner, "_load_dotted", lambda dotted: api)
+    res = trino_runner.run("SELECT 1", config={"dataframe_module": "m:f"}, limit=2)
+    # API 가 limit 을 밀어 넣든(2행) 무시하든(3행 → _shape 가 자름) 결과는 2행이다.
+    assert res.row_count == 2 and res.columns == _DF_COLS
+
+
+def test_이관_경로는_limit_을_None_으로_넘긴다(monkeypatch):
+    """'상한 없음'을 값으로 알려 준다 — API 가 페이지 크기를 정할 때 판단 근거가 된다."""
+    from customs.query_funcs import trino_runner
+
+    seen = {}
+
+    def api(sql, *, config, limit):
+        seen["limit"] = limit
+        return _FakeDF(_DF_COLS, _DF_ROWS)
+
+    monkeypatch.setattr(trino_runner, "_load_dotted", lambda dotted: api)
+    trino_runner.fetch_all("SELECT 1", config={"dataframe_module": "m:f"})
+    assert seen["limit"] is None
+
+
+def test_시그니처를_읽을_수_없으면_limit_을_넘긴다():
+    """문서화된 계약이 limit 을 포함하므로, 못 읽었다고 빼면 오히려 어긋난다."""
+    from customs.query_funcs.trino_runner import _accepts_limit
+
+    assert _accepts_limit(_api_required_limit) is True
+    assert _accepts_limit(_api_kwargs) is True
+    assert _accepts_limit(_api_no_limit) is False
+    # 일부 C 구현은 inspect 가 시그니처를 읽지 못한다(ValueError). 이때는 받는 쪽으로 본다.
+    assert _accepts_limit(range) is True

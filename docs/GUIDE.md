@@ -846,8 +846,15 @@ query.func.config.dataframe_module=mycorp.trino_api:query
 ```
 ```python
 # 커스텀 API 계약 — run() 과 같은 모양이되 반환만 DataFrame
-def query(sql: str, *, config: dict, limit: int) -> pandas.DataFrame: ...
+def query(sql: str, *, config: dict, limit: int | None) -> pandas.DataFrame: ...
 ```
+
+> **`limit=None` 은 "상한 없음"이다.** 이 함수는 미리보기(`query.func.module`)뿐 아니라
+> **이관 소스 읽기**(`query.func.fetch_module`)에서도 불리는데, 이관은 전량이 필요해 넘길
+> 상한이 없으므로 `None` 이 들어온다. `df.head(limit)` 처럼 무조건 자르는 구현이라면
+> `limit is None` 을 먼저 걸러야 한다. 자르면 **조용히 일부만 적재**된다.
+> `limit` 을 아예 받지 않는 `def query(sql, *, config)` 로 구현해도 되며, 그때는 호출부가
+> 인자를 빼고 부른다(`_accepts_limit` 이 시그니처를 보고 정한다).
 
 DataFrame 을 손으로 풀 필요가 없다. `_shape(None, df, limit, started)` 에 그대로 넘기면 된다:
 
