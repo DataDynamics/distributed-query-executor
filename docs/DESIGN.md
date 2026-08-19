@@ -19,7 +19,7 @@ Impala의 큰 `SELECT` 한 건을 여러 executor에게 나눠 병렬로 읽히�
 - **검증 범위**: 기본 단순 `SELECT`(strict). `strict_validation=false`면 JOIN·서브쿼리·GROUP BY 등 복합 쿼리도 허용(파티션 `IN` 절을 트리 어디서든 탐색).
 - **적재 방식**(`exec_mode`): `copy`(기본) / `statement` / `stage_insert` / `local_stage`(§17).
 - **응답 모델**: Job 기반 **비동기** API — job_id 발급 후 polling.
-- **동시성**: 입구 admission control(동시 job 슬롯 + 대기 큐) + 디스패치/executor 단 task 상한으로 다층 제어.
+- **동시성**: admission control(동시 job 슬롯 + 대기 큐) + 디스패치/executor 단 task 상한으로 다층 제어.
 - **운영 형태**: 단일 또는 **멀티 coordinator**(공유 PostgreSQL) + executor N대. 별도 executor 없는 **local 모드**도 지원.
 
 ### 핵심 특징
@@ -106,7 +106,7 @@ coordinator는 Job 상태를, executor는 Task 상태를 관리한다.
 
 ![6.1 Coordinator — Job 상태](images/design-04.svg)
 
-검증·분할은 `POST /jobs` 핸들러에서 **동기로** 끝나므로 문제가 있으면 즉시 4xx로 거절되고, 통과하면 작업이 `SPLITTING`으로 생성돼 백그라운드 `run()`이 이어받는다. `run()`은 admission 실행 슬롯이 빌 때까지 job을 `PENDING`으로 두었다가 슬롯을 잡으면 `RUNNING`으로 전이한다(입구에서 용량 초과면 애초에 `429`로 거부돼 job이 생성되지 않는다 — §10). 최종 상태는 `finalize_job()`이 하위 task를 집계해 결정한다: **취소 우선 → 실패 없음=DONE → best_effort=PARTIAL → 그 외=FAILED**.
+검증·분할은 `POST /jobs` 핸들러에서 **동기로** 끝나므로 문제가 있으면 즉시 4xx로 거절되고, 통과하면 작업이 `SPLITTING`으로 생성돼 백그라운드 `run()`이 이어받는다. `run()`은 admission 실행 슬롯이 빌 때까지 job을 `PENDING`으로 두었다가 슬롯을 잡으면 `RUNNING`으로 전이한다(admission에서 용량 초과면 애초에 `429`로 거부돼 job이 생성되지 않는다 — §10). 최종 상태는 `finalize_job()`이 하위 task를 집계해 결정한다: **취소 우선 → 실패 없음=DONE → best_effort=PARTIAL → 그 외=FAILED**.
 
 관련 복구·멱등 동작은 다음과 같다.
 
@@ -177,7 +177,7 @@ WHERE dt IN ('2026-01-01','2026-01-02', ... ,'2026-06-25')   -- partition_column
 | `statement` | wrapper로 감싼 SQL(예: `INSERT ... SELECT`)을 대상 DB에서 **그대로 실행** | 소스/타깃이 같은 DB(Greenplum). INSERT 컬럼 목록이 매핑 담당 |
 | `stage_insert` | (선택적으로 `staging_ddl`로 staging 생성 →) Impala SELECT 결과를 Greenplum **staging에 COPY** → staging을 `FROM`으로 하는 **INSERT 실행** | SELECT은 Impala, INSERT은 Greenplum처럼 서로 다른 엔진을 INSERT로 연결 |
 | `local_stage` | 각 executor가 세그먼트 호스트 **로컬 디스크에 CSV**로 export → GP가 `file://` 외부테이블로 **세그먼트별 로컬 파일을 병렬 read**해 staging 적재 → target INSERT. 2-phase. 자세히는 **§17** | executor를 **GP 세그먼트 호스트에 co-locate**한 대량 이관. `copy`의 단일 COPY 소켓 병목을 세그먼트 병렬 read로 대체 |
-| `s3_stage` | (Phase 1) 각 executor가 Impala 결과를 **로컬 CSV**로 export → **S3에 업로드**(로컬 삭제) → (배리어) → (Phase 2) **coordinator가** GP master에 job 프리픽스로 **PXF 외부테이블 하나**를 만들어 세그먼트 병렬 read → target INSERT → S3 정리. `local_stage`와 같은 2-phase(외부테이블·INSERT는 coordinator 중앙). 자세히는 **§17.1** | executor를 GP 세그먼트에 **co-locate할 수 없는**(오브젝트 스토어를 쓰는) 대량 이관. S3는 위치 무관하게 읽혀 `local_stage`의 co-locate/파일예산 배분이 불필요 |
+| `s3_stage` | (Phase 1) 각 executor가 Impala 결과를 **로컬 CSV**로 export → **S3에 업로드**(로컬 삭제) → (barrier) → (Phase 2) **coordinator가** GP master에 job 프리픽스로 **PXF 외부테이블 하나**를 만들어 세그먼트 병렬 read → target INSERT → S3 정리. `local_stage`와 같은 2-phase(외부테이블·INSERT는 coordinator 중앙). 자세히는 **§17.1** | executor를 GP 세그먼트에 **co-locate할 수 없는**(오브젝트 스토어를 쓰는) 대량 이관. S3는 위치 무관하게 읽혀 `local_stage`의 co-locate/파일예산 배분이 불필요 |
 
 `stage_insert`에서 `staging_ddl`은 **선택**이다. 주면 COPY 전에 그 DDL(보통 `CREATE TEMP TABLE`)로 테이블을 만들고, 생략하면 생성을 건너뛰고 이미 존재하는 `staging_table`을 쓴다(이 경우 영구 테이블을 여러 task가 공유하지 않도록 격리에 유의).
 
@@ -200,7 +200,7 @@ WHERE dt IN ('2026-01-01','2026-01-02', ... ,'2026-06-25')   -- partition_column
 
 ## 10. 동시성 모델 (admission control)
 
-한계를 넘는 요청이 몰릴 때 모두가 함께 무너지지 않도록, admission control을 세 층위로 두어 입구부터 안쪽까지 단계적으로 과부하를 거른다.
+한계를 넘는 요청이 몰릴 때 모두가 함께 무너지지 않도록, admission control을 세 층위로 두어 바깥에서 안쪽으로 단계적으로 과부하를 거른다.
 
 ![10. 동시성 모델 (admission control)](images/design-08.svg)
 
@@ -210,8 +210,8 @@ WHERE dt IN ('2026-01-01','2026-01-02', ... ,'2026-06-25')   -- partition_column
 
 I/O 방식: **Coordinator**는 `httpx.AsyncClient` + `asyncio.gather`로 executor를 비동기 호출한다. **Executor 내부**의 impyla/psycopg는 동기 라이브러리라, 그대로 부르면 이벤트 루프가 멈추므로 `run_in_executor(thread_pool, ...)`로 감싸 별도 스레드에서 돌린다.
 
-> **적정값 산정**: 실제 천장은 coordinator 코어가 아니라 **Greenplum 동시 COPY 허용량·Impala 동시
-> 쿼리 슬롯·executor 풀 합**이다. 다운스트림 용량에 맞춰 `executor.max_concurrent_tasks`를 분배하고
+> **적정값 산정**: 실제 ceiling은 coordinator 코어가 아니라 **Greenplum 동시 COPY 허용량·Impala 동시
+> 쿼리 슬롯·executor 풀 합**이다. downstream 용량에 맞춰 `executor.max_concurrent_tasks`를 분배하고
 > `max_dispatch_concurrency`는 그 이상으로 두어 coordinator가 병목이 되지 않게 한다(→ [PERFORMANCE.md](PERFORMANCE.md)).
 
 ---
@@ -350,7 +350,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 
 **기동 배너 로그.** coordinator·executor는 뜰 때 Spring Boot 식 ASCII 배너(버전·역할·포트)와 함께 **실제 로딩한 설정 파일(`config.properties`·`config.yml`)의 절대 경로**를 콘솔에 찍는다(못 찾으면 그 줄 뒤에 `← 파일 없음(로딩 실패)!` 마커). 이 stdout은 런처(`bin/env.sh`)가 `logs/<name>.out`으로 리다이렉트하는 한편, **같은 배너 전체를 애플리케이션 로그(`.log`)에도 한 레코드로** 남긴다 (`banner.log_startup`, 첫 줄은 grep용 `<role> 기동 (version=… port=…)` 요약). `.out`을 못 봐도 어떤 버전이 어떤 설정 파일로 떴는지 `.log`에서 바로 확인할 수 있다. 순수 렌더 함수(`render_banner`/ `render_config_sources`)는 I/O 무관이라 테스트 대상(`tests/test_banner_version.py`)이다.
 
-**HTTP 요청/응답 로깅.** 로그 레벨이 **DEBUG일 때만**(`app.debug=true` 또는 `log.level=DEBUG`) 각 요청/응답을 `core.http` 로거로 자동 기록한다(별도 스위치 아님 — DEBUG여도 `logging.http.enabled=false`로 끔). 구현은 **순수 ASGI 미들웨어**(`core.http_logging`)로 `receive`/`send` 메시지를 **엿보기만** 해 다운스트림 본문 읽기를 깨지 않는다. 본문 복사본은 `max_body`(기본 2KB)까지만 보관하고 원본은 항상 그대로 흘려보내므로 스트리밍/대용량 응답도 로그만 절단될 뿐 정상 전달된다. 본문·헤더 자격증명 (DSN·`password`/`token`/`Authorization` 등)은 마스킹(`core.masking`)하고, 잡음 경로(`/health`· `/metrics`·`/assets`·`/docs` 등)는 기본 제외한다. 설정 `logging.http.{enabled,bodies,max_body, headers,exclude_paths}`, 순수 함수(`format_body`/`format_headers`/`is_excluded`)는 테스트 대상 (`tests/test_http_logging.py`).
+**HTTP 요청/응답 로깅.** 로그 레벨이 **DEBUG일 때만**(`app.debug=true` 또는 `log.level=DEBUG`) 각 요청/응답을 `core.http` 로거로 자동 기록한다(별도 스위치 아님 — DEBUG여도 `logging.http.enabled=false`로 끔). 구현은 **순수 ASGI 미들웨어**(`core.http_logging`)로 `receive`/`send` 메시지를 **엿보기만** 해 downstream 본문 읽기를 깨지 않는다. 본문 복사본은 `max_body`(기본 2KB)까지만 보관하고 원본은 항상 그대로 흘려보내므로 스트리밍/대용량 응답도 로그만 절단될 뿐 정상 전달된다. 본문·헤더 자격증명 (DSN·`password`/`token`/`Authorization` 등)은 마스킹(`core.masking`)하고, 잡음 경로(`/health`· `/metrics`·`/assets`·`/docs` 등)는 기본 제외한다. 설정 `logging.http.{enabled,bodies,max_body, headers,exclude_paths}`, 순수 함수(`format_body`/`format_headers`/`is_excluded`)는 테스트 대상 (`tests/test_http_logging.py`).
 
 **실행 SQL 로깅.** 데이터소스에 실제로 던진 SQL 은 **로그 레벨과 무관하게 INFO 로 모두** `core.sql` 로거에 남긴다(`core.sqllog.log_sql`). HTTP 로깅과 정책이 다른 이유는 목적이 다르기 때문이다 — HTTP 본문은 개발 중 디버깅 재료라 DEBUG 로 충분하지만, "어떤 엔진에 어떤 쿼리를 보내 무엇을 적재했는가"는 **사고 추적·감사의 1차 근거**라 운영 기본 레벨(INFO)에서 비어 있으면 안 된다. 끄려면 `logging.sql.enabled=false` 로 명시해야 한다.
 
@@ -370,7 +370,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 |---|---|
 | 일부 task 실패 | `failure_policy`: `fail_fast`(Job FAILED) / `best_effort`(Job PARTIAL, 성공 task 적재 유지) |
 | 적재 중 실패 | task 트랜잭션 rollback → 부분 적재 잔존 없음 |
-| 과부하 | admission이 입구에서 `429`로 거부(`Retry-After`) → 클라이언트 재시도 |
+| 과부하 | admission이 `429`로 거부(`Retry-After`) → 클라이언트 재시도 |
 | executor 동시 처리 full | executor가 `POST /tasks`를 **202로 즉시 접수**하고 task를 `QUEUED`로 내부 대기(세마포어). 에러 아님 — coordinator는 폴링하며 기다린다(백프레셔) |
 | executor 연결 실패 | 연결 계열 실패(`TransportError`/5xx)는 같은 executor에 `task_max_retries`회 지수 백오프 재시도 → 소진 시 **다른 살아있는 executor로 failover**(`task_failover`). 시작 전이라 항상 안전 |
 | 실행 중 executor 유실 | 폴링 중 연결 끊김: **멱등(`overwrite_partitions`)이고 후보가 남았을 때만** 다른 executor로 재실행. `append`는 중복 적재 위험이라 재배정 않고 FAILED |
@@ -422,7 +422,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 
 | 계층 | 위치 | 역할 |
 |---|---|---|
-| **Coordinator** | GP master와 분리된 **독립 컨트롤 노드** | Impala SELECT 검증·분할 → export task 팬아웃 → 배리어 → **GP master에 클라이언트로 접속**해 `file://` 외부테이블 load SQL 실행 → cleanup 지시. 대량 데이터는 통과 안 함 |
+| **Coordinator** | GP master와 분리된 **독립 컨트롤 노드** | Impala SELECT 검증·분할 → export task 팬아웃 → barrier → **GP master에 클라이언트로 접속**해 `file://` 외부테이블 load SQL 실행 → cleanup 지시. 대량 데이터는 통과 안 함 |
 | **Executor** | **각 GP 세그먼트 호스트에 co-locate**(호스트당 여러 개 가능) | 지정된 partition 슬라이스를 impyla로 읽어 **자기 호스트 로컬 디스크의 지정 경로**에 CSV write. cleanup 때 자기 로컬 파일 삭제 |
 | **GP Master** | 별개 노드 | coordinator가 던진 외부테이블 DDL/INSERT를 세그먼트에 분배. 각 세그먼트는 `file://호스트/...`로 자기 로컬 CSV를 읽음 |
 
@@ -444,11 +444,11 @@ coordinator가 export 팬아웃과 GP load를 모두 지휘하지만, 실제 DB 
 
 호스트당 executor가 여럿이면 그 호스트의 예산 `S_h`를 executor들에게 나눠 배정한다(예: `S_h=8`, executor 2개 → 각 4파일). 파일이 그 호스트 로컬에 있기만 하면 어느 executor가 썼는지는 무관하다. 그 결과 **Phase 1(export) 병렬도는 executor 수**, **Phase 2(load) 병렬도는 파일 수(=참여 세그먼트 수)** 로 각각 독립 최대화된다. 슬라이스가 disjoint하고 각 파일이 URI 하나에만 참조되므로 전체 데이터는 정확히 한 번 읽힌다(어느 호스트에 어떤 파티션이 담기든 무관 — staging→target INSERT에서 target 분배키로 재분배).
 
-### 17.3 Job 라이프사이클 — 2-phase(배리어)
+### 17.3 Job 라이프사이클 — 2-phase(barrier)
 
-`local_stage`는 **모든 export가 끝나기를 기다리는 배리어**와 그 뒤의 **job 단위 GP load 단계**가 추가된다.
+`local_stage`는 **모든 export가 끝나기를 기다리는 barrier**와 그 뒤의 **job 단위 GP load 단계**가 추가된다.
 
-![17.3 Job 라이프사이클 — 2-phase(배리어)](images/design-10.svg)
+![17.3 Job 라이프사이클 — 2-phase(barrier)](images/design-10.svg)
 
 Phase 2에서 coordinator가 GP master에 실행하는 SQL(한 트랜잭션):
 
@@ -465,7 +465,7 @@ INSERT INTO target SELECT ... FROM staging_{job};         -- 변환/분배키/�
 DROP EXTERNAL TABLE ext_{job};                            -- staging 은 TRUNCATE 또는 DROP
 ```
 
-- **Phase 1 — Export(병렬)**: `F`개 export task를 호스트별 executor에 디스패치. 각 executor는 §4의 impyla 배치 읽기를 그대로 쓰되 sink만 `COPY` 대신 로컬 CSV writer다. 완료되면 배리어에서 합류한다.
+- **Phase 1 — Export(병렬)**: `F`개 export task를 호스트별 executor에 디스패치. 각 executor는 §4의 impyla 배치 읽기를 그대로 쓰되 sink만 `COPY` 대신 로컬 CSV writer다. 완료되면 barrier에서 합류한다.
 - **Phase 2 — Load(1회)**: coordinator가 GP master에 위 SQL을 실행. 데이터는 coordinator를 통과하지 않고 세그먼트가 로컬 파일을 직접 읽는다.
 - **Phase 3 — Cleanup**: 각 executor에 로컬 `{job_id}` 디렉터리 삭제를 지시(`stage.cleanup=false`면 디버깅용 보존).
 
@@ -530,15 +530,15 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 - **host 매핑(gp_hostname)**: executor가 `_gp_hostname()`(`executor.gp_hostname` 우선, 없으면 OS hostname)을 `/metrics`·`/info`로 보고. coordinator `_resolve_hosts()`가 수집(HttpDispatcher는 `/metrics` 조회+URL별 캐시, 실패 시 URL 호스트 폴백)해 `file://` URI 호스트로 쓴다.
 - **파일 예산 배분(`files_per_host ≤ S_h`)**: Phase 1 디스패치 전 `_plan_local_stage()`가 `backend.segment_host_counts()`(`{host: S_h}`)와 executor→host 매핑으로 `stage.plan_file_budget()`을 돌려, 각 파일을 호스트당 `S_h`(또는 `min(S_h, stage.max_files_per_host)`)를 넘지 않게 배분하고 `executor_url`/`out_path` 재확정(호스트 내 executor 라운드로빈). 총 파일 수가 예산(Σ S_h)을 넘으면 배치 불가 → job FAILED. 토폴로지 미상(목·로컬)이면 기존 배정 유지.
 - **호스트 검증**: Phase 2 직전 `backend.segment_hosts()`로 매핑 호스트 실재 확인(`stage.validate_hosts`, 기본 on). 없으면 load 전 조기 실패.
-- **coordinator(Phase 2·3)**: 디스패처 `run()`의 배리어(`_execute` 반환) 뒤 `_run_stage_load()`가 GP master에 외부테이블 DDL→staging 적재→(멱등 선삭제)→target INSERT를 한 트랜잭션으로 실행하고 `_cleanup_stage()`로 로컬 파일 정리. URI·`FORMAT 'CSV'(...)`·파일 인덱스 조립은 `src/coordinator/stage.py`(순수 함수)가 담당. `finalize_job`은 local_stage를 원자 적재로 보아 실패 시 정책 무관 FAILED.
+- **coordinator(Phase 2·3)**: 디스패처 `run()`의 barrier(`_execute` 반환) 뒤 `_run_stage_load()`가 GP master에 외부테이블 DDL→staging 적재→(멱등 선삭제)→target INSERT를 한 트랜잭션으로 실행하고 `_cleanup_stage()`로 로컬 파일 정리. URI·`FORMAT 'CSV'(...)`·파일 인덱스 조립은 `src/coordinator/stage.py`(순수 함수)가 담당. `finalize_job`은 local_stage를 원자 적재로 보아 실패 시 정책 무관 FAILED.
 - **테스트**: `tests/test_local_stage.py` — stage.py 순수 함수, executor 라우팅/cleanup/metrics, LocalDispatcher 2-phase e2e, gp_hostname 매핑·검증까지 실 DB·실 디스크 없이 검증.
 
 ### 17.10 S3 경유 스테이징 파이프라인 (`s3_stage`, PXF/S3 기반)
 
-`local_stage`와 **완전히 같은 2-phase 구조**(executor Phase 1 → 배리어 → coordinator Phase 2 → Phase 3 정리)이고, 스테이징 매체만 세그먼트 로컬 파일(`file://`)이 아니라 **S3 객체**다. S3 객체는 세그먼트 로컬이 아니라 모든 세그먼트에서 위치 무관하게 읽히므로, `local_stage`가 겪는 배치 제약 — executor를 GP 세그먼트 호스트에 **co-locate**하고 파일 예산(호스트당 ≤ S_h)을 배분하는 것 — 이 **사라진다**. **외부테이블 생성과 target INSERT는 `local_stage`와 똑같이 coordinator가 GP master에서 중앙 수행**하고, executor는 Impala 읽기와 S3 업로드까지만 한다(GP를 건드리지 않는다).
+`local_stage`와 **완전히 같은 2-phase 구조**(executor Phase 1 → barrier → coordinator Phase 2 → Phase 3 정리)이고, 스테이징 매체만 세그먼트 로컬 파일(`file://`)이 아니라 **S3 객체**다. S3 객체는 세그먼트 로컬이 아니라 모든 세그먼트에서 위치 무관하게 읽히므로, `local_stage`가 겪는 co-location 제약 — executor를 GP 세그먼트 호스트에 **co-locate**하고 파일 예산(호스트당 ≤ S_h)을 배분하는 것 — 이 **사라진다**. **외부테이블 생성과 target INSERT는 `local_stage`와 똑같이 coordinator가 GP master에서 중앙 수행**하고, executor는 Impala 읽기와 S3 업로드까지만 한다(GP를 건드리지 않는다).
 
 - **Phase 1 (executor `backend.export_to_s3`, per-task 병렬)**: `IMPALA_SUBMIT`→`EXPORT_WRITE`(Impala SELECT → 로컬 임시 CSV, `export_to_local_csv` 재사용, `convert_types=False`) → `S3_UPLOAD`(로컬 CSV → S3 업로드 후 **로컬 즉시 삭제**). GP 접속 없음. coordinator가 확정한 S3 객체 키(`<prefix>/<job_id>/<task_id>.csv`)에 올린다. 모든 task 키가 `<prefix>/<job_id>/` 아래 모인다.
-- **배리어**: `_execute` 반환 = 모든 업로드 완료. 하나라도 FAILED면 Phase 2를 건너뛴다(job FAILED).
+- **barrier**: `_execute` 반환 = 모든 업로드 완료. 하나라도 FAILED면 Phase 2를 건너뛴다(job FAILED).
 - **Phase 2 (coordinator `_run_s3_load` → GP backend `load_external_s3`)**: coordinator가 GP master에 **job 프리픽스 하나를 가리키는 외부테이블 한 개**를 만들어 한 트랜잭션으로 적재한다:
   ```sql
   CREATE EXTERNAL TABLE s3ext_<job_id> (<external_columns>)
@@ -558,7 +558,7 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 - **fan-out 연동**: 날짜 fan-out(§18.8)도 `s3_stage`를 지원한다(하루=1 task 업로드 → coordinator가 job 프리픽스로 한 번에 적재, append).
 - **SQL 조립**: `src/core/s3_stage.py`(순수 함수 — 객체 키·job 프리픽스·외부테이블 이름·PXF LOCATION·외부테이블 DDL·선삭제·정리 DDL). 업로더는 `src/executor/s3_client.py`(boto3 지연 임포트, `delete_prefix` 포함).
 - **예제/설정**: `templates/sales_migration_s3/`, `config.yml`의 `executor.s3.*`(bucket/prefix/endpoint_url/자격증명/pxf_server/pxf_profile/external_schema). coordinator·executor가 같은 `settings`를 공유하므로 양쪽에서 `s3.*`를 읽는다(coordinator는 Phase 2 LOCATION·프리픽스, executor는 업로드). 배포 시 GP 세그먼트에 PXF SERVER를 구성해야 한다(DEPLOY.md).
-- **테스트**: `tests/test_s3_stage.py` — s3_stage.py 순수 함수, 가짜 S3/GP로 backend Phase 1/2/3(업로드+로컬 삭제·external→INSERT→cleanup·overwrite 선삭제·프리픽스 삭제·bucket 미설정 오류), executor 라우팅·`/s3/{job}/cleanup` 엔드포인트, coordinator 검증/dry-run, LocalDispatcher 2-phase e2e, 템플릿 렌더 + 날짜 fan-out. `tests/test_s3_stage_integration.py` + `tests/helpers.py`의 **`MockS3StageBackend`** — GP·S3 없이 **인메모리 S3로 "S3 루프 닫힘"**을 검증한다(`local_stage`의 `MockLocalStageBackend`에 대응): Phase 1이 인메모리 S3에 올린 객체를 Phase 2가 coordinator 조립 external_ddl의 프리픽스로 파싱·read해 target에 집계하고, `POST /jobs`→split→out_path(S3 키)→export→배리어→`_run_s3_load`(외부테이블/INSERT 치환)→load→cleanup→finalize 전 경로를 통과시킨다(루프 닫힘·overwrite 선삭제·업로드 실패 시 Phase 2 skip·cleanup 비활성).
+- **테스트**: `tests/test_s3_stage.py` — s3_stage.py 순수 함수, 가짜 S3/GP로 backend Phase 1/2/3(업로드+로컬 삭제·external→INSERT→cleanup·overwrite 선삭제·프리픽스 삭제·bucket 미설정 오류), executor 라우팅·`/s3/{job}/cleanup` 엔드포인트, coordinator 검증/dry-run, LocalDispatcher 2-phase e2e, 템플릿 렌더 + 날짜 fan-out. `tests/test_s3_stage_integration.py` + `tests/helpers.py`의 **`MockS3StageBackend`** — GP·S3 없이 **인메모리 S3로 "S3 루프 닫힘"**을 검증한다(`local_stage`의 `MockLocalStageBackend`에 대응): Phase 1이 인메모리 S3에 올린 객체를 Phase 2가 coordinator 조립 external_ddl의 프리픽스로 파싱·read해 target에 집계하고, `POST /jobs`→split→out_path(S3 키)→export→barrier→`_run_s3_load`(외부테이블/INSERT 치환)→load→cleanup→finalize 전 경로를 통과시킨다(루프 닫힘·overwrite 선삭제·업로드 실패 시 Phase 2 skip·cleanup 비활성).
 
 ### 17.11 이관 소스 엔진 선택 (`datasource` — Impala 커서 | 커서 없는 커스텀 API)
 
@@ -609,7 +609,7 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 
 ```
 <template_dir>/sales_migration/
-  manifest.yml          # 메타 + 파라미터 스키마 + 조각 파일 매핑
+  manifest.yml          # 메타 + 파라미터 스키마 + SQL 파일 매핑
   select.sql.j2         # SELECT (파티션 IN 포함)
   staging_ddl.sql.j2    # (선택) staging DDL
   insert.sql.j2         # (선택) staging→target INSERT
@@ -638,7 +638,7 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 1. **경로 탈출 차단**: `template_id`는 영숫자/`_`/`-`만 허용(`TEMPLATE_ID_INVALID`).
 2. **SQL 인젝션 방지**: 파라미터는 반드시 `sql_str`/`sql_in`/`sql_ident`/`sql_num` 필터를 거쳐 이스케이프·검증(`sql_num`은 비숫자 거부, `sql_in`은 빈 목록을 안전한 `NULL`로).
 3. **렌더 후 재검증**: 렌더된 SELECT는 이후에도 `validate_and_parse`를 통과해야 하므로 다중 문/비-SELECT 인젝션은 기존 검증(`MULTIPLE_STATEMENTS`/`NOT_A_SELECT`)에서 걸러진다.
-4. **DDL/INSERT 단일 문 검사**: parser를 안 타는 DDL/INSERT 조각은 `template.validate_ddl_single_stmt` (기본 on)로 `;` 다중 문을 차단(`TEMPLATE_MULTIPLE_STATEMENTS`).
+4. **DDL/INSERT 단일 문 검사**: parser를 안 타는 DDL/INSERT task는 `template.validate_ddl_single_stmt` (기본 on)로 `;` 다중 문을 차단(`TEMPLATE_MULTIPLE_STATEMENTS`).
 
 ### 18.5 API · 감사 · 재현
 
@@ -650,14 +650,14 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 
 `template_id`를 주지 않으면 기존 raw-SQL 방식이 완전히 그대로 동작한다. 두 방식 모두 공통 필수 필드 (`sql`·`partition_column`·`target_table`)가 렌더/병합 후 비어 있으면 `422 MISSING_REQUIRED_FIELDS`로 거부한다.
 
-**테스트**: `tests/test_template.py` — 커스텀 함수/인젝션 이스케이프, 엔진 렌더(파라미터 검증·exec_mode별 조각·단일 문 검사·경로 탈출), API 통합(예제 `sales_migration`), 하위 호환.
+**테스트**: `tests/test_template.py` — 커스텀 함수/인젝션 이스케이프, 엔진 렌더(파라미터 검증·exec_mode별 task·단일 문 검사·경로 탈출), API 통합(예제 `sales_migration`), 하위 호환.
 
 ### 18.7 결과 반환 실행 (`POST /query-execute`)
 
-`POST /jobs`가 이관(결과가 coordinator를 거치지 않음)인 반면, `POST /query-execute`는 같은 템플릿을 렌더한 SELECT를 실행해 **결과(상위 N행)를 클라이언트에 동기 반환**하는 미리보기성 실행이다(§18 템플릿 엔진 + `/datasources` 미리보기(`src/core/dbprobe.py`)의 결합).
+`POST /jobs`가 이관(결과가 coordinator를 거치지 않음)인 반면, `POST /query-execute`는 같은 템플릿을 렌더한 SELECT를 실행해 **결과(상위 N행)를 클라이언트에 동기 반환**하는 preview용 실행이다(§18 템플릿 엔진 + `/datasources` 미리보기(`src/core/dbprobe.py`)의 결합).
 
 - **요청**: `template_id` + `params`(이름-값 항목 **배열** `[{name, value}, ...]`) + `datasource`(선택, 미지정 시 `source.type`) + `limit`(1~10000). 배열은 내부에서 `{name: value}` dict로 접혀 기존 렌더 경로(`ParamSpec` 검증·`sql_in` 이스케이프)를 탄다. 같은 이름이 두 번 오면 `422 DUPLICATE_PARAM`.
-- **렌더**: `TemplateEngine.render_query()`가 **`select` 조각만** 렌더한다(이관용 `render()`와 달리 insert/staging 조각을 요구하지 않아 어떤 템플릿이든 동작). 렌더된 SELECT는 `validate_select_query()`로 단일 행 반환 SELECT인지 검증(다중 문·비-SELECT 차단; 구조 방어 한 겹 추가).
+- **렌더**: `TemplateEngine.render_query()`가 **`select` task만** 렌더한다(이관용 `render()`와 달리 insert/staging task를 요구하지 않아 어떤 템플릿이든 동작). 렌더된 SELECT는 `validate_select_query()`로 단일 행 반환 SELECT인지 검증(다중 문·비-SELECT 차단; 구조 방어 한 겹 추가).
 - **실행 라우팅 — 클라이언트는 executor를 지정하지 않는다(2갈래)**: `greenplum`/`history`(메타/타깃 DB)는 coordinator가 직접(psycopg) 실행하고, **그 외 소스(`impala`/`trino`/`source`)는 종류와 무관하게 executor의 `POST /query-run` 하나로 통일 위임**한다. 대상 executor는 coordinator가 `/jobs` 디스패치와 동일한 선택 정책(`coordinator.executor_select`)으로 고른다. 연결 실패 시 다음 executor로 failover하며 (SELECT는 멱등), executor가 도달 후 돌려준 4xx/5xx(SQL 오류·함수 미설정)는 확정 응답이라 failover 없이 그대로 전달한다. 실제 실행 executor는 응답 `executed_by`로 관측(직접 실행이면 null).
 - **소스 실행 = 커스텀 함수 위임(`/query-run`)**: executor가 소스(Trino 등)를 직접 접속하지 않고, 설정 지정 외부 Python 함수에 위임한다. `POST /query-run`이 `query.func.module`(dotted path, `importlib` 로딩·캐시)로 함수를 찾아 `run(sql, config=<query.func.config.* dict>, limit)`를 호출하고 반환된 `QueryResult`(또는 동일 키 dict)를 그대로 응답한다. **설정은 config.properties에서 자유 정의** — `query.func.config.<키>=<값>`을 프리픽스로 모아(코드/`config.yml` 수정 없이) dict로 넘긴다(값은 문자열, 형변환은 함수 책임; `src/core/config.py`의 `_collect_prefix`). 미설정 시 400, 로드/실행 실패 시 502. 참조 구현: `customs/query_funcs/trino_runner.py`. (임의 SQL 미리보기 `/datasources/{name}/query`는 별개로 built-in 유지. 이관의 소스 접속은 §17.11 참고 — 기본은 built-in Impala 커서이고, job 의 `datasource` 로 커스텀 API 위임을 고를 수 있다. **같은 소스라도 계약이 다르다**: 미리보기는 `run(limit)`, 이관은 `fetch`(전량).)
 - **결과 정형(`dbprobe._shape`)** — 커스텀 함수의 공용 도구다. 커서 결과(`fetchmany(limit+1)` 튜플 목록)뿐 아니라 **pandas DataFrame**도 받는다(사내 API가 DataFrame을 주는 경우). DataFrame은 `iloc[:limit+1]`로 잘라 `itertuples(index=False)`로 변환하고(`.values`는 혼합 dtype을 업캐스트해 int가 float가 된다) 컬럼명·`truncated`를 자동 추출한다. pandas는 의존성이 아니라 **덕타이핑**(`_is_dataframe`)으로 인식하므로 쓰는 배포에만 설치하면 된다. 값 정규화도 함께 한다 — `_json_safe`가 numpy 스칼라를 `tolist()`로 낮추고(안 하면 `np.int64`→`'7'`, `np.bool_`→`'True'`로 새는데 `np.float64`는 float 하위형이라 우연히 통과해 **컬럼 dtype별로 결과 타입이 갈린다**), `NaN`/`NaT`/`pd.NA`/`inf`를 `null`로 떨군다(표준 JSON에 표현이 없어 `json.dumps`가 내는 `NaN`/`Infinity` 리터럴을 엄격한 파서가 거부한다 — 모든 데이터소스 경로에 적용).
@@ -673,9 +673,9 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 
 - **요청**: `task_params`로 **구간의 두 끝을 담은 파라미터 두 개**를 지목한다. 예: `params:[{name:"from_date_no",value:7,sign:"-"},{name:"to_date_no",value:1,sign:"+"}]` + `task_params:["from_date_no","to_date_no"]` → 구간 `[-7,+1]` → 9 task. `partition_column`/`parallelism`/`split_strategy`는 이 모드에서 쓰이지 않는다(task 수 = 날짜 수).
 - **`sign` = 값의 부호가 아니라 SQL 연산자의 방향**: Impala `interval`은 절대값만 받으므로 `current_date() - interval 7 day`처럼 방향이 SQL 텍스트에 박힌다. 그래서 값(7)만으로는 "오늘 기준 -7일"을 복원할 수 없다. 그 방향을 클라이언트가 명시하는 자리가 `sign`이고, 렌더 컨텍스트에는 `<name>_sign`으로 노출되어 템플릿이 `{{ from_date_no_sign | sql_sign }}`으로 연산자를 찍는다. `sign`이 없으면 값 자체의 부호를 쓴다(`value:-7` == `value:7, sign:"-"`). `sign`을 값에 다시 적용하지는 **않는다**(이중 적용 방지).
-- **분할**(`src/coordinator/app.py` `_build_fanout`, IN 파싱·`split` 우회): 두 끝의 오프셋(`_param_offset`)에서 구간을 얻어 `_compute_task_offsets`가 하루 단위 쌍으로 자른다. task마다 두 파라미터를 **같은 날로 좁혀**(값=`|오프셋|`, 부호=방향 — `_offset_value_sign`) SELECT 조각만 `render_query()`로 렌더하므로 `BETWEEN`이 하루로 붕괴한다. 템플릿 SQL은 fan-out 여부와 무관하게 동일하다(fan-out이 아니면 요청이 보낸 값·부호 그대로 구간 전체를 읽는다). `INSERT`/`staging_ddl`은 날짜 독립이라 대표 구간으로 1회 렌더해 job-level로 공유하고, 각 task `partition_values`에 그 날짜를 담는다(관측용). 절대 날짜/오프셋(`task_date`·`task_date_end`·`task_offset`·`task_offset_end`)도 컨텍스트에 노출해, `WHERE dt = {{ task_date | sql_str }}`처럼 날짜 리터럴로 하루를 고르는 템플릿도 같은 경로로 지원한다.
-- **`task_bound` — task 하나의 폭**: `point`(기본) = `(d, d)`로 `BETWEEN a AND b`(양끝 포함)·`= a` 비교용, task 수 = 날짜 수. `pair` = `(d, d+1)`로 `>= a AND < b`(반열림) 비교용, task 수 = 날짜 수 - 1. 어느 쪽인지는 **컬럼 타입/비교식**이 정한다 — DATE + `BETWEEN`에 `pair`를 쓰면 경계 날짜가 두 task에 겹쳐 중복 적재되고, TIMESTAMP + 반열림에 `point`를 쓰면 자정 정각 행만 읽어 사실상 0행이 된다. manifest가 자기 SQL에 맞는 값을 못 박아 두는 것을 권한다.
-- **안전장치(`_validate_sign_contract`)**: select 조각이 task 파라미터를 참조하면서 `<name>_sign`을 쓰지 않으면 `422 TEMPLATE_MISSING_SIGN_VAR`로 거부한다. 부호가 SQL에 고정된 템플릿에 절대값을 넣으면 `d=-3` task가 `BETWEEN today-3 AND today+3`(7일치)을 읽어 **모든 task가 겹친 채 append**되는데, 오류 없이 데이터만 틀리는 실패라 접수 시점에 막는다. 문자열 grep이 아니라 Jinja2 AST(`TemplateEngine.referenced_variables`, `jinja2.meta`)를 본다. 파라미터를 아예 참조하지 않는 템플릿(날짜 리터럴 방식)은 구간 도출에만 쓰는 것이므로 통과.
+- **분할**(`src/coordinator/app.py` `_build_fanout`, IN 파싱·`split` 우회): 두 끝의 오프셋(`_param_offset`)에서 구간을 얻어 `_compute_task_offsets`가 하루 단위 쌍으로 자른다. task마다 두 파라미터를 **같은 날로 좁혀**(값=`|오프셋|`, 부호=방향 — `_offset_value_sign`) SELECT 부분만 `render_query()`로 렌더하므로 `BETWEEN`이 하루로 붕괴한다. 템플릿 SQL은 fan-out 여부와 무관하게 동일하다(fan-out이 아니면 요청이 보낸 값·부호 그대로 구간 전체를 읽는다). `INSERT`/`staging_ddl`은 날짜 독립이라 대표 구간으로 1회 렌더해 job-level로 공유하고, 각 task `partition_values`에 그 날짜를 담는다(관측용). 절대 날짜/오프셋(`task_date`·`task_date_end`·`task_offset`·`task_offset_end`)도 컨텍스트에 노출해, `WHERE dt = {{ task_date | sql_str }}`처럼 날짜 리터럴로 하루를 고르는 템플릿도 같은 경로로 지원한다.
+- **`task_bound` — task 하나의 폭**: `point`(기본) = `(d, d)`로 `BETWEEN a AND b`(양끝 포함)·`= a` 비교용, task 수 = 날짜 수. `pair` = `(d, d+1)`로 `>= a AND < b`(half-open) 비교용, task 수 = 날짜 수 - 1. 어느 쪽인지는 **컬럼 타입/비교식**이 정한다 — DATE + `BETWEEN`에 `pair`를 쓰면 경계 날짜가 두 task에 겹쳐 중복 적재되고, TIMESTAMP + half-open에 `point`를 쓰면 자정 정각 행만 읽어 사실상 0행이 된다. manifest가 자기 SQL에 맞는 값을 못 박아 두는 것을 권한다.
+- **안전장치(`_validate_sign_contract`)**: select 부분이 task 파라미터를 참조하면서 `<name>_sign`을 쓰지 않으면 `422 TEMPLATE_MISSING_SIGN_VAR`로 거부한다. 부호가 SQL에 고정된 템플릿에 절대값을 넣으면 `d=-3` task가 `BETWEEN today-3 AND today+3`(7일치)을 읽어 **모든 task가 겹친 채 append**되는데, 오류 없이 데이터만 틀리는 실패라 접수 시점에 막는다. 문자열 grep이 아니라 Jinja2 AST(`TemplateEngine.referenced_variables`, `jinja2.meta`)를 본다. 파라미터를 아예 참조하지 않는 템플릿(날짜 리터럴 방식)은 구간 도출에만 쓰는 것이므로 통과.
 - **상한**: task 수 > 366이면 `422 TASK_RANGE_TOO_LARGE`(오타로 수만 개의 task가 생기는 것을 차단).
 - **적재 방식**: fan-out은 `exec_mode=stage_insert` 또는 `s3_stage`를 지원한다(그 외는 `422 FANOUT_REQUIRES_STAGE_INSERT`). 둘 다 **append**다(그 날짜 SELECT → staging COPY 또는 S3 경유 → target INSERT). 하루 단위 재실행 멱등이 필요하면 대상 테이블을 job 밖에서 미리 비우거나 날짜별 물리 테이블을 쓴다 — 프레임워크는 대상에 DELETE를 하지 않는다.
 - **방언(dialect) 주의**: 렌더된 SELECT는 구조 검증(단일 SELECT)을 위해 sqlglot으로 한 번 파싱된다. sqlglot에 impala 방언이 없고 기본값 `hive`는 인자 1개짜리 `trunc(date)`를 거부하므로, `trunc()`+`interval`을 쓰는 템플릿은 manifest에 `sql_dialect`(예: `trino`)를 지정한다. 실행은 그대로 Impala가 하며 이 값은 파싱에만 쓰인다.

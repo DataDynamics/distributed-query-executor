@@ -8,12 +8,12 @@
 `docs/OPERATOR.md`(운영자 — 일상 점검·장애 추적·용량 조정·설정)가 각 역할의 문서이고, GUIDE·
 INTEGRATION·DEPLOY·PERFORMANCE·DESIGN 은 특정 주제의 심화 문서다.
 
-**이 두 문서는 의도적으로 자립형이다.** 링크를 따라다니지 않고 하나만 읽어도 일을 끝낼 수 있도록
-다른 문서의 내용을 가져와 담았으므로, 심화 문서와 겹치는 서술이 있는 것이 정상이다. 중복을
+**이 두 문서는 의도적으로 self-contained 문서다.** 링크를 따라다니지 않고 하나만 읽어도 일을 끝낼 수
+있도록 다른 문서의 내용을 가져와 담았으므로, 심화 문서와 겹치는 서술이 있는 것이 정상이다. 중복을
 없애겠다고 본문을 링크로 바꾸지 않는다(문서 안에 다른 문서로 가는 링크를 두지 않는 것이 규칙이다).
 대신 **겹치는 사실을 바꿀 때는 양쪽을 함께 고친다** — 오류 코드를 추가하면 USER.md 의 오류 절에,
-운영에 영향을 주는 설정을 바꾸면 OPERATOR.md 에, 실행 모드의 필수 필드를 바꾸면 USER.md 와
-GUIDE.md 양쪽에 반영한다.
+운영에 영향을 주는 설정을 바꾸면 OPERATOR.md 에, 실행 모드의 필수 필드를 바꾸면 USER.md 와 GUIDE.md
+양쪽에 반영한다.
 
 ## 프로젝트 개요
 
@@ -110,11 +110,11 @@ DELETE 한 뒤 넣으므로(`stage.py`/`backend.py`) 재실행해도 중복되�
 `- interval 7 day` 처럼 방향이 SQL 문에 박히기 때문이다. 템플릿에는 `<name>_sign` 으로 노출되고
 `sql_sign` 필터가 `+`/`-` 외의 값을 막는다. task 마다 두 파라미터를 같은 날로 좁혀 렌더하므로
 BETWEEN 이 하루로 붕괴하고 값은 언제나 절대값이 된다. `task_bound` 는 `point`(기본,
-`(d,d)` — BETWEEN 이나 `=` 처럼 양끝 포함)와 `pair`(`(d,d+1)` — 반열림 `>=`/`<`) 중 고른다.
+`(d,d)` — BETWEEN 이나 `=` 처럼 양끝 포함)와 `pair`(`(d,d+1)` — half-open `>=`/`<`) 중 고른다.
 
 부호 변수를 쓰지 않는 템플릿은 Jinja2 AST 검사로 422(`TEMPLATE_MISSING_SIGN_VAR`)를 낸다. 막지
 않으면 각 task 가 의도보다 넓은 구간을 읽어 **조용히 중복 적재**되기 때문이다. INSERT 와 staging
-조각은 날짜와 무관하므로 한 번만 렌더해 job 전체가 공유한다. 이 기능은 stage_insert 전용이고
+task 는 날짜와 무관하므로 한 번만 렌더해 job 전체가 공유한다. 이 기능은 stage_insert 전용이고
 append 로 적재하므로(프레임워크가 대상에 DELETE 를 하지 않는다) 멱등이 필요하면 대상을 미리
 비우거나 날짜별 물리 테이블을 쓴다. 예제는 `templates/daily_sales_interval/`(interval + sign)과
 `templates/daily_sales/`(날짜 리터럴)다.
@@ -138,8 +138,8 @@ gp_hostname 을 유도한다.
 
 ### 결과 반환 실행(`POST /query-execute`)
 
-같은 템플릿을 `render_query()` 로 select 조각만 렌더해 실행하고 상위 N행을 동기로 돌려주는
-미리보기성 API다. coordinator 는 `/jobs` 와 같은 정책으로 가장 한가한 executor 를 골라
+같은 템플릿을 `render_query()` 로 select 부분만 렌더해 실행하고 상위 N행을 동기로 돌려주는
+preview 용 API다. coordinator 는 `/jobs` 와 같은 정책으로 가장 한가한 executor 를 골라
 프록시하므로 클라이언트는 executor 의 존재를 모른다. greenplum 과 history 만 coordinator 가 직접
 실행한다. `params` 는 이름-값 항목 배열이고, 응답의 `executed_by` 에 실제 실행한 executor 가
 담긴다(직접 실행이면 null).
@@ -192,19 +192,19 @@ Impala 로 폴백하지 않고 명확히 실패시킨다.
 INSERT 는 coordinator 가 중앙에서 수행**한다(executor 는 GP 에 붙지 않는다).
 
 `s3_stage` 는 Phase 1 에서 executor 가 `export_to_s3` 로 소스 → 로컬 CSV → S3 업로드까지 하고,
-배리어 뒤 Phase 2 에서 coordinator 가 `load_external_s3` 로 job 프리픽스(`<prefix>/<job_id>/`)를
+barrier 뒤 Phase 2 에서 coordinator 가 `load_external_s3` 로 job 프리픽스(`<prefix>/<job_id>/`)를
 가리키는 PXF 외부테이블 하나를 만들어 target 으로 INSERT 한 뒤, Phase 3 에서 S3 를 정리한다.
 외부테이블이 staging 을 겸하므로 heap staging 없이 external → target 으로 곧장 넣는다. insert_sql
 의 staging 참조는 job 고유 외부테이블 `s3ext_<job_id>` 로 치환되고(`s3_stage.external_table_name`),
 설정 `s3.external_schema` 를 주면 스키마 한정(`dwtemp.s3ext_<job_id>`)으로 만들어진다(CREATE·
 INSERT 치환·DROP 이 같은 이름을 공유하며, 비우면 예전처럼 search_path 를 따른다).
 
-두 스테이징 모드의 결정적 차이는 배치 제약이다. `local_stage` 는 executor 와 GP 세그먼트가 같은
-호스트에 있어야 하지만, `s3_stage` 는 S3 가 위치와 무관하므로 co-locate 가 필요 없다(DESIGN
-§17.1). export 할 때는 impyla `convert_types=False` 로 형변환을 꺼서 timestamp/date 를 wire
-문자열 그대로 받아 CSV 에 쓴다(재파싱 비용 제거). S3 업로드·삭제는 `executor/s3_client.py`(boto3
-지연 임포트), SQL 조립은 `core/s3_stage.py` 의 순수 함수가 맡고 `s3.*` 설정은 coordinator 와
-executor 가 공유한다.
+두 스테이징 모드의 결정적 차이는 co-location 제약이다. `local_stage` 는 executor 와 GP 세그먼트가
+같은 호스트에 있어야 하지만, `s3_stage` 는 S3 가 위치와 무관하므로 co-locate 가 필요 없다(DESIGN
+§17.1). export 할 때는 impyla `convert_types=False` 로 형변환을 꺼서 timestamp/date 를 wire 문자열
+그대로 받아 CSV 에 쓴다(재파싱 비용 제거). S3 업로드·삭제는 `executor/s3_client.py` (boto3 지연
+임포트), SQL 조립은 `core/s3_stage.py` 의 순수 함수가 맡고 `s3.*` 설정은 coordinator 와 executor 가
+공유한다.
 
 **`app.py`** 는 task 상태머신(QUEUED → READING → WRITING → DONE/FAILED/CANCELLED)과
 `executor.max_concurrent_tasks` 세마포어를 담당한다.
@@ -232,7 +232,7 @@ executor 의 `POST /query-run` 이다. 검증은 `tests/test_sql_logging.py` 에
 **`core/http_logging.py`** 는 HTTP 요청/응답을 DEBUG 로 남기는 미들웨어다(`core.http` 로거).
 `logger.isEnabledFor(DEBUG)` 가드로 DEBUG 가 아니면 즉시 통과하므로 오버헤드가 사실상 없다.
 BaseHTTPMiddleware 가 아닌 **순수 ASGI 미들웨어**로 `receive`/`send` 를 엿보기만 하기 때문에
-다운스트림 본문 읽기를 깨지 않으며, 본문 복사본은 `max_body` 까지만 보관하고 원본은 그대로
+downstream 본문 읽기를 깨지 않으며, 본문 복사본은 `max_body` 까지만 보관하고 원본은 그대로
 전달한다. 본문과 헤더는 `core.masking` 으로 마스킹하고 health·metrics·정적·docs 같은 잡음 경로는
 기본 제외한다. 등록은 두 `create_app` 의 `install_http_logging(app, settings)` 이고, 순수 함수는
 `tests/test_http_logging.py` 에서 검증한다.
@@ -279,12 +279,12 @@ core.config_tui`, `bin/config-tui.sh`). `config.yml` 을 파싱해 항목·기�
 error** 로 쓴다 — 하한 아래는 대개 조용히 멈추는 값이기 때문이다. 대표적으로
 `max_dispatch_concurrency=0` 은 `asyncio.Semaphore(0)` 이 되어 디스패치가 영원히 대기한다.
 
-동시 처리량 손잡이는 coordinator·executor·greenplum·copy 로 흩어져 있어 조정하려면 탭을 옮겨
+동시 처리량 파라미터는 coordinator·executor·greenplum·copy 로 흩어져 있어 조정하려면 탭을 옮겨
 다녀야 했다. 그래서 `CONCURRENCY_KEYS` 의 키만 모은 **동시성 가상 탭**을 맨 앞에 두었다. 같은
 `Field` 를 공유하므로 원래 탭에서 고쳐도 결과는 같고, 화면 아래에는 `concurrency_summary` 가
-곱셈을 풀어 준다(입구 수용량, 플릿 동시 task 수, GP 연결 수, copy 버퍼 행 수). 값들 **사이의**
+곱셈을 풀어 준다(admission 수용량, fleet 동시 task 수, GP 연결 수, copy 버퍼 행 수). 값들 **사이의**
 정합은 `check_concurrency` 가 따로 보는데, 개별 항목이 저마다 유효해도 조합이 어긋나면 처리량이
-조용히 깎이기 때문이다(GP 풀이 동시 task 보다 작으면 연결 대기, 디스패치 상한이 플릿 용량보다
+조용히 깎이기 때문이다(GP 풀이 동시 task 보다 작으면 연결 대기, 디스패치 상한이 fleet 용량보다
 작으면 디스패치 병목).
 
 **`core/config_help.py`** 는 항목별로 "무엇이고 어떻게 쓰는가"를 담은 안내 사전이다(`?` 키로
@@ -317,7 +317,7 @@ curses 만 쓴다. 화면 그리기는 가짜 curses(화면 밖에 쓰면 단언
 잡혔다.
 
 업그레이드 때 설정을 반영하는 자동화는 두지 않는다. config/·templates/·customs/ 는 install.sh 의
-rsync 에서 제외되고 최초 1회만 시딩되므로 재설치만으로는 새 버전의 변경이 들어가지 않는데, 이를
+rsync 에서 제외되고 최초 1회만 seeding 되므로 재설치만으로는 새 버전의 변경이 들어가지 않는데, 이를
 `diff` 로 확인해 운영자가 직접 옮긴다(절차는 docs/DEPLOY.md). 여기서 놓치기 쉬운 것이
 **`config.yml` 을 교체해야 새 버전이 추가한 설정 구조가 반영된다**는 점이다. config.yml 은 값이
 아니라 `${변수:기본값}` 자리를 담은 구조라, 자리가 없으면 properties 에 값을 적어도 조용히

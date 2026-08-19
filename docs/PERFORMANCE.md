@@ -12,7 +12,7 @@
 
 ---
 
-## 0. 큰 그림 — 데이터 평면과 제어 평면 분리
+## 0. 큰 그림 — data plane과 제어 평면 분리
 
 성능을 이해하는 출발점은 하나입니다. **데이터가 coordinator 를 거치지 않는다.** 소스(Impala
 커서 또는 커서 없는 커스텀 API)에서 읽은 실제 행은 각 executor 가 흘려보내고, coordinator 에게는
@@ -22,23 +22,24 @@
 `stage_insert` 는 executor 가 GP 에 직접 붙어 적재하고, `local_stage`·`s3_stage` 는 executor 가
 스테이지(세그먼트 로컬 파일 또는 S3)에 CSV 만 떨어뜨린 뒤 **coordinator 가 외부테이블 DDL 과
 target INSERT 를 중앙에서 실행**합니다. 후자에서도 행 자체는 스테이지에서 GP 세그먼트로 직접
-병렬 유입되며 coordinator 는 SQL 만 보냅니다 — 데이터 평면은 여전히 coordinator 를 비껴갑니다.
+병렬 유입되며 coordinator 는 SQL 만 보냅니다 — data plane 은 여전히 coordinator 를 비껴갑니다.
 
-데이터가 coordinator 를 통과하지 않으므로 처리량 천장은 coordinator 가 아니라 executor 의 수와 그
+데이터가 coordinator 를 통과하지 않으므로 처리량 ceiling 은 coordinator 가 아니라 executor 의 수와 그
 뒤의 Impala·Greenplum 용량으로 정해집니다. coordinator 를 아무리 키워도 처리량은 늘지 않습니다.
 
-![0. 큰 그림 — 데이터 평면과 제어 평면 분리](images/performance-01.svg)
+![0. 큰 그림 — data plane과 제어 평면 분리](images/performance-01.svg)
 
-`(데이터)` 로 표시한 선은 모두 소스·executor·스테이지·Greenplum 사이에서만 오가고, coordinator
-에 걸린 선은 전부 `(제어)` — task 디스패치와 Phase 2 SQL 뿐입니다. 결론은 둘입니다. 처리량을 늘리려면 executor 수 또는 executor 당 동시 task 수를 늘리고(Scale Out),
-coordinator 는 처리량이 아니라 가용성을 위해 늘립니다(HA).
+`(데이터)` 로 표시한 선은 모두 소스·executor·스테이지·Greenplum 사이에서만 오가고, coordinator 에
+걸린 선은 전부 `(제어)` — task 디스패치와 Phase 2 SQL 뿐입니다. 결론은 둘입니다. 처리량을 늘리려면
+executor 수 또는 executor 당 동시 task 수를 늘리고(Scale Out), coordinator 는 처리량이 아니라
+가용성을 위해 늘립니다(HA).
 
 ---
 
 ## 1. Scale Out (수평 확장)
 
 확장의 축은 셋입니다. 효과가 크고 안전한 순서대로 ① executor 인스턴스 수, ② executor 한 대의
-동시 task 수, ③ coordinator 수입니다. 어느 축을 키워도 전체 처리량 천장은 모든 executor 의 동시
+동시 task 수, ③ coordinator 수입니다. 어느 축을 키워도 전체 처리량 ceiling 은 모든 executor 의 동시
 task 수 합을 넘지 못하고, 그마저 Impala 슬롯과 Greenplum 동시 COPY 한도 안에 머물러야 합니다.
 
 **축 1 — executor 인스턴스 추가(주력).** 가장 안전하고 확실합니다. 새 포트로 executor 를 하나 더
@@ -55,17 +56,17 @@ coordinator.executors=http://10.0.0.11:8087,http://10.0.0.11:8086,http://10.0.0.
 
 **축 2 — executor당 동시 task.** `executor.max_concurrent_tasks`(기본 8)가 한 executor 가 동시에
 처리하는 task 수를 제한하는 세마포어입니다. task 하나는 Impala 읽기 + Greenplum 적재 한 묶음이며,
-이 값을 올리면 노드당 처리량은 늘지만 메모리·DB 커넥션·다운스트림 부하도 비례해 함께 늘어납니다.
+이 값을 올리면 노드당 처리량은 늘지만 메모리·DB 커넥션·downstream 부하도 비례해 함께 늘어납니다.
 
 **축 3 — coordinator 추가.** 데이터가 coordinator 를 거치지 않으므로 목적은 처리량보다 가용성(HA)과
-입구 QPS 분산입니다. 여러 대를 띄우려면 각자의 상태를 공유 PostgreSQL 로 외부화해야 하며, 이는
+admission QPS 분산입니다. 여러 대를 띄우려면 각자의 상태를 공유 PostgreSQL 로 외부화해야 하며, 이는
 [2장](#2-고가용성-ha)에서 다룹니다.
 
 한 가지 주의점이 있습니다. 과부하를 막는 admission 한도는 coordinator 인스턴스마다 각자의 메모리
 안에서 관리됩니다.
 
 > ⚠️ **admission 한도는 coordinator 인스턴스별(인메모리)** 이다. coordinator 를 2대로 늘리면
-> 시스템 전체 동시 job 한도는 `max_concurrent_jobs × 2` 로 **합산**된다. 다운스트림 보호를 위해
+> 시스템 전체 동시 job 한도는 `max_concurrent_jobs × 2` 로 **합산**된다. downstream 보호를 위해
 > coordinator 수를 늘릴 땐 인스턴스별 한도를 그만큼 낮춰야 총량이 유지된다.
 
 ---
@@ -163,7 +164,7 @@ coordinator 의 결정을 서로 무관하게(탈상관) 만들어 쏠림을 막
 | `coordinator.max_dispatch_concurrency` | 32 | L2 한 coordinator 가 모든 job 통틀어 동시에 띄우는 task 수 | coordinator별 |
 | `executor.max_concurrent_tasks` | 8 | L3 executor 한 대의 동시 task 수. `0` 무제한 | executor별 |
 
-L1 은 job 단위 입구 통제로, 동시 RUNNING job 을 실행 슬롯으로 제한하고 슬롯이 차면 대기 큐에
+L1 은 job 단위 admission control로, 동시 RUNNING job 을 실행 슬롯으로 제한하고 슬롯이 차면 대기 큐에
 PENDING 으로 세우며 실행+대기 합마저 넘으면 429 로 거절합니다. L2 는 한 coordinator 가 모든 job 을
 통틀어 띄우는 task 수 상한, L3 는 executor 한 대의 동시 task 수 상한입니다.
 
@@ -182,7 +183,8 @@ coordinator 가 task 진행을 확인하고(폴링), 응답이 없을 때 얼마
 | `coordinator.task_failover` | true | 재시도 소진 시 다른 executor 로 재배정 |
 
 타임아웃은 두 종류입니다. `task_timeout_s` 는 task 전체가 끝날 때까지, `task_connect_timeout_s` 는
-연결을 맺는 순간까지만 기다립니다. 후자를 짧게 두면 죽은 executor 를 빨리 가려내 failover 를 앞당깁니다.
+연결을 맺는 순간까지만 기다립니다. 후자를 짧게 두면 죽은 executor 를 빨리 가려내 failover 를
+앞당깁니다.
 
 ### 3.3 HA / 선택 / 정합
 
@@ -226,7 +228,7 @@ executor 가 Greenplum 으로 데이터를 실제로 밀어 넣을 때의 처리
 | `greenplum.pool_max` | 0 | GP 커넥션 풀 크기(동시 GP 연결 상한). 0=`executor.max_concurrent_tasks` 와 동일 |
 | `copy.batch_size` | 10000 | COPY 배치 크기(행). 클수록 처리량↑·메모리↑ |
 | `copy.preflight` | true | COPY 전 컬럼 사전검증(불일치 조기 실패) |
-| `copy.pipeline` | true | Impala 읽기와 GP COPY 를 별도 스레드로 겹쳐 실행(벽시계 단축) |
+| `copy.pipeline` | true | Impala 읽기와 GP COPY 를 별도 스레드로 겹쳐 실행(wall-clock time 단축) |
 | `copy.queue_size` | 8 | 파이프라인 큐 크기(배치 개수). 메모리 ≈ `queue_size × batch_size` 행 |
 | `copy.format` | text | COPY 포맷 `text`\|`binary`. binary 는 인코딩 CPU 절감(타입 해석 실패 시 text 폴백) |
 | `impala.query_options` | (빈값) | Impala SET 전역 기본값. 예: `MEM_LIMIT=2g,REQUEST_POOL=etl` |
@@ -235,7 +237,7 @@ executor 가 Greenplum 으로 데이터를 실제로 밀어 넣을 때의 처리
 ### 3.6 SELECT→COPY 병목 진단·튜닝 (executor 단일 task 관점)
 
 한 task 의 `SELECT → COPY` 가 느릴 때는 **먼저 원인을 측정하고 그다음 손댑니다.** 대시보드의 단계
-타임라인(STREAM_COPY 행)과 `task_history` 컬럼이 벽시계를 네 갈래로 쪼개 보여 줍니다.
+타임라인(STREAM_COPY 행)과 `task_history` 컬럼이 wall-clock time 을 네 갈래로 쪼개 보여 줍니다.
 
 | 지표(컬럼) | 의미 | 이게 지배적이면 |
 |---|---|---|
@@ -244,8 +246,8 @@ executor 가 Greenplum 으로 데이터를 실제로 밀어 넣을 때의 처리
 | `write_wait_ms` | 라이터의 `write_row`(인코딩+송신) 시간 | **클라이언트 인코딩/네트워크** 병목 |
 | `finalize_wait_ms` | COPY 종료(서버 ingest 완료) 대기 | **Greenplum COPY 처리**(마스터 단일 스트림) 병목 |
 
-파이프라인 모드에서 벽시계 ≈ `read_starve + write_wait + finalize` 이므로 셋 중 가장 큰 항이 곧
-병목입니다. 처방은 병목별로 다릅니다.
+파이프라인 모드에서 wall-clock time ≈ `read_starve + write_wait + finalize` 이므로 셋 중 가장 큰
+항이 곧 병목입니다. 처방은 병목별로 다릅니다.
 
 - **`read_starve` 가 지배하면 Impala 가 느린 것입니다.** 파티션 분할(`parallelism`)을 늘려 여러
   executor 가 서로 다른 파티션을 동시에 읽게 하는 것이 가장 효과가 큽니다. 이어서
@@ -264,14 +266,14 @@ executor 가 Greenplum 으로 데이터를 실제로 밀어 넣을 때의 처리
 측정하는 식으로 진행합니다. `read_starve` 와 `write_wait` 가 비슷하면 이미 파이프라인이 잘 겹치는
 상태이므로, 다음 수는 수평 확장(`parallelism`↑ + executor 추가, §1)입니다.
 
-> `copy.pipeline=false` 로 두면 읽기·쓰기가 직렬 실행돼 `read_wait`/`write_wait` 가 순수 벽시계로
+> `copy.pipeline=false` 로 두면 읽기·쓰기가 직렬 실행돼 `read_wait`/`write_wait` 가 순수 wall-clock time 으로
 > 나뉩니다. 파이프라인이 의심스러울 때 원인 격리용으로 잠깐 꺼서 비교하면 유용합니다.
 
 ### 3.7 최후의 수단 — PXF 세그먼트 병렬 로딩 (COPY 마스터 병목 우회)
 
 파이프라인·바이너리·`batch_size`·수평 확장을 다 해도 `finalize_wait`(GP 서버 ingest)가 계속
 지배적이라면, 병목은 **COPY STDIN 이 Greenplum 마스터 한 노드로 몰리는 구조** 자체입니다. executor 를
-아무리 늘려도 각자 마스터로 COPY 하므로 마스터가 최종 천장이 됩니다. 정석은 데이터 평면을 "우리가
+아무리 늘려도 각자 마스터로 COPY 하므로 마스터가 최종 ceiling 이 됩니다. 정석은 data plane 을 "우리가
 밀어넣기(push COPY)"에서 "GP 가 당겨오기(pull)"로 바꾸는 것입니다.
 
 **PXF(Platform Extension Framework)** 는 GP 의 병렬 외부 데이터 프레임워크로, 모든 세그먼트가 외부
@@ -317,10 +319,10 @@ COPY 경로와 처리량 비교)으로 검증하고, 효과가 확인되면 외�
 
 앞 장이 "어떤 파라미터가 있는가"라면 이 장은 "그 값을 얼마로 잡는가"입니다.
 
-### 4.1 황금률 — 천장은 coordinator 가 아니라 다운스트림이다
+### 4.1 황금률 — ceiling 은 coordinator 가 아니라 downstream 이다
 
-전체 처리량 천장은 coordinator 가 아니라 그 뒤의 다운스트림(Impala·Greenplum)에서 정해집니다. 동시
-처리 가능한 task 수의 실효 상한은 다음 세 값 중 최솟값입니다.
+전체 처리량 ceiling 은 coordinator 가 아니라 그 뒤의 downstream(Impala·Greenplum)에서 정해집니다.
+동시 처리 가능한 task 수의 effective limit 은 다음 세 값 중 최솟값입니다.
 
 ```
 유효 동시 task ≈ min(
@@ -331,7 +333,7 @@ COPY 경로와 처리량 비교)으로 검증하고, 효과가 확인되면 외�
 ```
 
 executor 를 아무리 많이 띄워도 Greenplum 동시 COPY 세션이나 Impala 쿼리 슬롯이 더 작으면 거기서
-막힙니다. 그래서 순서를 거꾸로 잡습니다. 먼저 다운스트림이 안전하게 견디는 한도를 확정하고, 그
+막힙니다. 그래서 순서를 거꾸로 잡습니다. 먼저 downstream 이 안전하게 견디는 한도를 확정하고, 그
 한도를 executor 풀에 나누어 분배합니다. coordinator 쪽(`max_dispatch_concurrency`)은 이 한도보다
 넉넉히 크게 잡아 자신이 병목이 되지 않게 합니다.
 
@@ -343,20 +345,20 @@ Impala 커넥션 하나, Greenplum 커넥션 하나, `copy.batch_size` 만큼의
 이 값을 먼저 줄이는 것이 좋습니다.
 
 **`greenplum.pool_max`** 는 executor 가 재사용하는 GP 커넥션 풀 크기로, **Greenplum 의
-`max_connections` 를 직접 보호하는 손잡이**입니다. 풀이 동시 연결을 이 개수로 제한하고 유휴 연결을
+`max_connections` 를 직접 보호하는 파라미터**입니다. 풀이 동시 연결을 이 개수로 제한하고 유휴 연결을
 재사용합니다(stage_insert 의 세션 전용 TEMP 테이블은 반납 시 `DISCARD ALL` 로 비워져 재사용이 안전).
 기본값 0 이면 풀 크기가 `executor.max_concurrent_tasks` 와 같아져 "동시 task 당 GP 연결 하나"가
 됩니다. 클러스터 전체 동시 GP 연결은 `Σ greenplum.pool_max` 이므로 이 합이 Greenplum 허용 세션 수를
 넘지 않게 잡습니다. 동시 task 수보다 작게 두면 task 가 연결을 기다리며 throttle 되고, 크게 둬 봐야
-동시 task 수가 천장이라 의미가 없습니다.
+동시 task 수가 ceiling 이라 의미가 없습니다.
 
 **`coordinator.max_dispatch_concurrency`** 는 모든 executor 동시 task 수 합
 (`Σ executor.max_concurrent_tasks`) 이상으로 둡니다(기본 32). 너무 작으면 executor 가 노는데도
 coordinator 가 task 를 충분히 못 띄워 오히려 coordinator 가 병목이 됩니다.
 
-**`coordinator.max_concurrent_jobs`** 와 **`max_pending_jobs`** 는 입구 보호용입니다. 동시 job 수 ×
-평균 분할 task 수가 앞서 구한 유효 동시 task 를 크게 넘지 않게 잡습니다. 대기 큐는 버스트를 잠시
-흡수하는 완충이며, 길수록 429 거절은 줄지만 대기 지연이 늘어 오래된 요청이 쌓입니다. 멀티
+** `coordinator.max_concurrent_jobs` ** 와 ** `max_pending_jobs` ** 는 admission 보호용입니다. 동시
+job 수 × 평균 분할 task 수가 앞서 구한 유효 동시 task 를 크게 넘지 않게 잡습니다. 대기 큐는 버스트를
+잠시 흡수하는 buffer 이며, 길수록 429 거절은 줄지만 대기 지연이 늘어 오래된 요청이 쌓입니다. 멀티
 coordinator 면 이 값들을 인스턴스 수만큼 나눠 총량을 맞춥니다.
 
 > ⚠️ **커스텀 API 소스(`datasource`)의 메모리 특성은 다릅니다.** Impala 커서 경로는
@@ -367,7 +369,7 @@ coordinator 면 이 값들을 인스턴스 수만큼 나눠 총량을 맞춥니�
 > 이미 청크 형태를 받으므로 코드 수정 없이 스트리밍으로 전환됩니다). 자세히는
 > [DESIGN.md](DESIGN.md) §17.11 을 보세요.
 
-**`copy.batch_size`** 는 처리량과 메모리·트랜잭션 크기의 줄다리기입니다. 행이 넓거나 메모리가
+**`copy.batch_size`** 는 처리량과 메모리·트랜잭션 크기의 trade-off 입니다. 행이 넓거나 메모리가
 빠듯하면 낮추고(2000~5000), 좁고 넉넉하면 올립니다(20000 이상). 바꾼 뒤 `monitor` 메트릭으로 메모리
 사용량을 보며 조정합니다.
 
@@ -401,10 +403,10 @@ heartbeat_interval_s  ＜  reservation_ttl_s
 
 ### 4.4 튜닝 절차(권장)
 
-1. 다운스트림 안전 한도(Greenplum 동시 COPY, Impala 풀)부터 확정한다.
+1. downstream 안전 한도(Greenplum 동시 COPY, Impala 풀)부터 확정한다.
 2. `executor 수 × executor.max_concurrent_tasks` 가 그 한도에 맞도록 분배한다.
 3. `max_dispatch_concurrency` 를 그 합 이상으로, `max_concurrent_jobs`/`max_pending_jobs` 로
-   입구를 보호한다(멀티 coordinator 면 나눠서).
+   admission 을 보호한다(멀티 coordinator 면 나눠서).
 4. 부하를 걸고 `/metrics`·대시보드·`monitor` 메트릭(CPU/메모리/디스크, active_tasks)을 보며 병목
    지점(executor 메모리? Greenplum? coordinator 디스패치?)을 찾아 **한 번에 한 값씩** 조정한다.
 5. HA 면 4.3 부등식을 깨지 않는 선에서 감지 속도를 맞춘다.
@@ -428,5 +430,5 @@ heartbeat_interval_s  ＜  reservation_ttl_s
 | GP 마스터 COPY 병목(finalize_wait) 우회 | PXF 세그먼트 병렬 로딩(`exec_mode=statement` + PXF 외부 테이블) → §3.7 |
 | 가용성(SPOF 제거) | 멀티 coordinator + `store.backend=postgres` + `self_report=true` + `executor_select=p2c` + `orphan_reconcile_interval_s>0` |
 | 멀티 coordinator 부하 균형 강화 | `executor_reservation=true`(+ `reservation_ttl_s` 적정) |
-| 다운스트림 보호(과부하 차단) | `max_concurrent_jobs`/`max_pending_jobs` 를 다운스트림 한도에 맞춰 하향 |
+| downstream 보호(과부하 차단) | `max_concurrent_jobs`/`max_pending_jobs` 를 downstream 한도에 맞춰 하향 |
 | 빠른 장애 감지 | `task_connect_timeout_s` ↓, HA 타이밍 세트(4.3) 동반 ↓ |

@@ -68,7 +68,7 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status-executor.sh
 - TLS 자리표시 파일 `config/impala-ca.pem` 을 만든다.
 - 런처 스크립트를 `bin/` 에 배치하고 소유권과 권한을 설정한다.
 
-> **업그레이드 시 자산 반영**: `config/`·`templates/`·`customs/` 는 모두 운영자가 편집·추가하는 자산이라 rsync 에서 제외되고 "없을 때만" 시딩된다. 그래서 재설치해도 운영자 편집·인증서·직접 추가한 템플릿·커스텀 함수는 보존되지만, **새 버전이 추가·변경한 기본값·설정 구조·예제도 자동으로 반영되지 않는다.** 새 버전으로 올릴 때는 아래 절차로 직접 반영한다.
+> **업그레이드 시 자산 반영**: `config/`·`templates/`·`customs/` 는 모두 운영자가 편집·추가하는 자산이라 rsync 에서 제외되고 "없을 때만" seeding 된다. 그래서 재설치해도 운영자 편집·인증서·직접 추가한 템플릿·커스텀 함수는 보존되지만, **새 버전이 추가·변경한 기본값·설정 구조·예제도 자동으로 반영되지 않는다.** 새 버전으로 올릴 때는 아래 절차로 직접 반영한다.
 >
 > | 대상 | 어떻게 |
 > |---|---|
@@ -197,10 +197,10 @@ copy.batch_size=10000
 > 가 동작하고, 하나라도 비어 있으면 `MockBackend`(실제 I/O 없음)로 폴백한다.
 > 실제 연결 시에는 `requirements-executor.txt` 도 설치해야 한다(impyla, psycopg, SASL).
 
-동시성 값의 진짜 천장은 coordinator 성능이 아니라 뒤에 있는 데이터베이스의 수용량이다.
+동시성 값의 진짜 ceiling 은 coordinator 성능이 아니라 뒤에 있는 데이터베이스의 수용량이다.
 
-> **동시성 적정값**: 실제 천장은 coordinator 코어가 아니라 Greenplum 동시 COPY 허용량·
-> Impala 동시 쿼리 슬롯·executor 풀 합이다. 다운스트림 용량에 맞춰
+> **동시성 적정값**: 실제 ceiling 은 coordinator 코어가 아니라 Greenplum 동시 COPY 허용량·
+> Impala 동시 쿼리 슬롯·executor 풀 합이다. downstream 용량에 맞춰
 > `executor.max_concurrent_tasks` 를 분배하고, `max_dispatch_concurrency` 는 그 이상으로
 > 두어 coordinator 가 병목이 되지 않게 한다.
 

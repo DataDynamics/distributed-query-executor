@@ -11,8 +11,8 @@ Greenplum 으로 옮기는 일을 HTTP 로 요청하고, 진행 상황을 확인
 
 ## 어떤 일을 대신 해 주는가
 
-`SELECT` 한 건을 주면 그것을 파티션 컬럼의 `IN` 목록 기준으로 여러 조각으로 나눠 동시에 읽고, 각
-조각을 나눠 맡은 executor 가 곧바로 Greenplum 에 적재한다. 조각을 나누는 것도 병렬로 읽는 것도
+`SELECT` 한 건을 주면 그것을 파티션 컬럼의 `IN` 목록 기준으로 여러 task 로 나눠 동시에 읽고, 각
+task 를 나눠 맡은 executor 가 곧바로 Greenplum 에 적재한다. task 를 나누는 것도 병렬로 읽는 것도
 적재하는 것도 서버가 하므로, 요청하는 쪽은 무엇을 어디로 옮길지만 알려 주면 된다.
 
 데이터 자체는 coordinator 를 거치지 않는다. executor 가 소스에서 읽어 대상으로 바로 흘려보내고
@@ -21,7 +21,7 @@ coordinator 에는 진행 상태와 적재 행 수만 올라온다. 그래서 �
 
 작업은 비동기다. `POST /jobs` 는 접수만 하고 `job_id` 를 즉시 돌려주며 실제 실행은 그 뒤에
 백그라운드로 진행되므로, 제출과 완료 확인은 언제나 두 단계다. 결과 행을 그 자리에서 받아야 하는
-미리보기성 조회만 예외인데, 그것은 `POST /query-execute` 라는 별도 API 이며 뒤에서 따로 다룬다.
+preview 용 조회만 예외인데, 그것은 `POST /query-execute` 라는 별도 API 이며 뒤에서 따로 다룬다.
 
 ---
 
@@ -40,14 +40,15 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 ```
 
 여기서 `partition_column` 은 `IN` 목록으로 나눌 기준 컬럼이다. 위 요청은 `dt IN ('2026-01-01',
-'2026-01-02')` 를 두 조각으로 갈라 각각 하루씩 읽는다. 그러므로 이 컬럼에 대한 `IN` 절이 SQL 안에
+'2026-01-02')` 를 두 task 로 갈라 각각 하루씩 읽는다. 그러므로 이 컬럼에 대한 `IN` 절이 SQL 안에
 반드시 있어야 하고, 값이 `parallelism` 보다 적으면 그만큼만 나뉜다.
 
-자주 쓰는 나머지 필드를 훑어보면 이렇다. `parallelism` 은 몇 조각으로 나눌지를 1에서 128 사이로
-정하며 기본값은 4다. `split_strategy` 는 값을 잇달아 묶을지(`contiguous`, 기본) 번갈아 나눌지
-(`round_robin`)를 고르고, `write_mode` 를 `overwrite_partitions` 로 두면 적재하기 전에 그 조각이 맡은
-파티션을 먼저 지운다. `failure_policy` 는 한 조각이 실패했을 때 전체를 실패로 볼지(`fail_fast`, 기본)
-나머지는 계속할지(`best_effort`)를 정한다. 이력과 감사에 남으므로 `username` 은 채워 두는 편이 좋다.
+자주 쓰는 나머지 필드를 훑어보면 이렇다. `parallelism` 은 몇 task 로 나눌지를 1에서 128 사이로
+정하며 기본값은 4다. `split_strategy` 는 값을 잇달아 묶을지( `contiguous` , 기본) 번갈아 나눌지 (
+`round_robin` )를 고르고, `write_mode` 를 `overwrite_partitions` 로 두면 적재하기 전에 그 task 가
+맡은 파티션을 먼저 지운다. `failure_policy` 는 한 task 가 실패했을 때 전체를 실패로 볼지(
+`fail_fast` , 기본) 나머지는 계속할지( `best_effort` )를 정한다. 이력과 감사에 남으므로 `username`
+은 채워 두는 편이 좋다.
 
 파싱과 관련된 두 필드도 알아 둘 만하다. `sql_dialect` 는 SQL 을 해석할 방언(dialect)이며 기본값은
 `hive` 다. `strict_validation` 은 기본값이 `true` 로 단순한 SELECT 만 받는데, JOIN 이나 서브쿼리,
@@ -57,7 +58,7 @@ GROUP BY 가 섞인 복합 쿼리를 보내려면 `false` 로 둔다. 그러면 
 Greenplum 쪽 INSERT 에는 영향을 주지 않는다.
 
 처음 만드는 요청이라면 `dry_run` 을 켜 보는 편이 좋다. 실제로는 아무것도 옮기지 않으면서 `200` 과
-함께 분할 계획을 돌려주므로, 각 조각의 `sub_query` 와 `staging_ddl`, `insert_sql` 이 어떻게
+함께 분할 계획을 돌려주므로, 각 task 의 `sub_query` 와 `staging_ddl`, `insert_sql` 이 어떻게
 만들어지는지를 눈으로 확인할 수 있다.
 
 ### 같은 요청을 두 번 보내지 않으려면
@@ -87,7 +88,7 @@ target 을 두고 이 값만 바꾸면 COPY 로 넣을지 staging 을 거칠지 
 
 고를 수 있는 값은 다섯이다. `copy` 는 executor 가 소스에서 읽어 Greenplum 에 곧바로 COPY 하고,
 `statement` 는 받은 SQL 을 Greenplum 에서 그대로 실행한다. `stage_insert` 는 소스에서 읽은 결과를
-staging 테이블에 COPY 한 뒤 그것을 target 으로 INSERT 하는데, 이 과정을 조각 하나가 스스로 끝낸다.
+staging 테이블에 COPY 한 뒤 그것을 target 으로 INSERT 하는데, 이 과정을 task 하나가 스스로 끝낸다.
 나머지 둘은 executor 가 파일을 만들어 두면 Greenplum 이 그 파일을 읽어 가는 방식이다.
 `local_stage` 는 executor 가 자기 호스트에 CSV 를 떨어뜨리고 세그먼트가 `file://` 외부테이블로
 읽으므로 둘이 같은 호스트에 있어야 하고, `s3_stage` 는 CSV 를 S3 에 올린 뒤 PXF 외부테이블로 읽으므로
@@ -103,7 +104,7 @@ staging 테이블에 COPY 한 뒤 그것을 target 으로 INSERT 하는데, 이 
 
 소스에서 읽은 결과를 Greenplum 에 곧바로 COPY 한다. 추가 필드가 없어 `sql`·`partition_column`·
 `target_table` 만 있으면 되고, 위 "첫 작업 제출"의 예가 그대로 이 모드다. 분할된 sub-query 를 감싸야
-한다면 `wrapper_query` 에 감쌀 쿼리를 두고 `{{SUBQUERY}}` 자리에 각 조각이 치환되게 한다
+한다면 `wrapper_query` 에 감쌀 쿼리를 두고 `{{SUBQUERY}}` 자리에 각 task 가 치환되게 한다
 (자리표시자는 `wrapper_placeholder` 로 바꿀 수 있다).
 
 `write_mode: overwrite_partitions` 를 지원하므로 재실행 멱등이 성립한다.
@@ -138,9 +139,9 @@ INSERT 문은 `wrapper_query` 필드에 담는다. `copy` 모드와 달리 `{{SU
 staging 에서 읽어 target 으로 넣는 완성된 문장이어야 한다. `staging_table` 과 `wrapper_query` 가 둘 다
 없으면 `422 STAGE_INSERT_REQUIRES_FIELDS` 다.
 
-`staging_ddl` 은 선택이며, 비우면 테이블 생성을 건너뛰고 이미 존재하는 `staging_table` 을 쓴다. 이때는
-영구 staging 을 여러 조각이 공유하지 않도록 격리해야 한다. 그러지 않으면 동시 COPY 와 INSERT 가
-서로 간섭한다. TEMP 로 만들어 두면 세션 단위라 조각끼리 격리되고, 조각이 실패해도 그 세션의
+`staging_ddl` 은 선택이며, 비우면 테이블 생성을 건너뛰고 이미 존재하는 `staging_table` 을 쓴다.
+이때는 영구 staging 을 여러 task 가 공유하지 않도록 격리해야 한다. 그러지 않으면 동시 COPY 와 INSERT
+가 서로 간섭한다. TEMP 로 만들어 두면 세션 단위라 task 끼리 격리되고, task 가 실패해도 그 세션의
 staging 이 함께 사라져 깨끗한 상태에서 다시 시작된다. SELECT 컬럼과 staging 컬럼은 이름·개수·순서가
 일치해야 COPY 가 성공하며, `CREATE TEMP TABLE ... (LIKE 대상)` 이 가장 안전하다.
 
@@ -153,7 +154,8 @@ staging 이 함께 사라져 깨끗한 상태에서 다시 시작된다. SELECT 
 executor 가 소스에서 읽은 데이터를 세그먼트 호스트 로컬 CSV 로 떨어뜨리고(Phase 1), coordinator 가
 그 파일들을 Greenplum 의 `file://` 외부테이블로 걸어 각 세그먼트가 자기 호스트의 CSV 를 병렬로 읽어
 적재한다(Phase 2). 세그먼트 병렬성을 그대로 살리므로 대량 적재에 강하다. 대신 executor 를 각 GP
-세그먼트 호스트에 함께 두어야 한다는 배치 제약이 있으므로, 쓸 수 있는 환경인지 운영자에게 확인한다.
+세그먼트 호스트에 함께 두어야 한다는 co-location 제약이 있으므로, 쓸 수 있는 환경인지 운영자에게
+확인한다.
 
 ```jsonc
 POST /jobs
@@ -178,10 +180,10 @@ POST /jobs
 이 모드는 `write_mode` 를 지원하므로 `overwrite_partitions` 로 두면 적재 전 해당 파티션을 DELETE 로
 지워 재실행 멱등이 성립한다.
 
-### s3_stage — S3 를 거치므로 배치 제약이 없음
+### s3_stage — S3 를 거치므로 co-location 제약이 없음
 
 `local_stage` 와 같은 2-phase 구조이고 스테이징 매체만 세그먼트 로컬 파일이 아니라 S3 객체다.
-Phase 1 에서 각 executor 가 결과를 로컬 CSV 로 떨어뜨린 뒤 S3 에 올리고, 배리어 뒤 Phase 2 에서
+Phase 1 에서 각 executor 가 결과를 로컬 CSV 로 떨어뜨린 뒤 S3 에 올리고, barrier 뒤 Phase 2 에서
 coordinator 가 그 객체들을 PXF 외부테이블 하나로 걸어 target 에 INSERT 한다. S3 는 위치와 무관하게
 읽히므로 executor 를 세그먼트에 함께 둘 필요가 없다.
 
@@ -205,7 +207,7 @@ POST /jobs
 `staging_table` 은 `insert_sql` 의 `FROM` 이 참조하는 이름일 뿐이고, coordinator 가 Phase 2 에서 이를
 작업 고유 외부테이블 이름으로 치환한다.
 
-이 모드에는 `pre_delete` 라는 추가 손잡이가 있다. 기본값 `null` 이면 `write_mode` 를 따라
+이 모드에는 `pre_delete` 라는 추가 파라미터가 있다. 기본값 `null` 이면 `write_mode` 를 따라
 `overwrite_partitions` 는 지우고 `append` 는 지우지 않는다. `true` 면 `write_mode` 와 무관하게 강제로
 지우고, `false` 면 강제로 건너뛴다. `overwrite_partitions` 지만 대상이 이미 비어 있어 DELETE 를
 생략하고 싶을 때, 또는 `append` 인데도 멱등이 필요할 때 쓴다.
@@ -278,10 +280,10 @@ WHERE dt IN ( {{ date_range(start_dt, end_dt) | sql_in }} )
 전"인지 "7일 뒤"인지 알 수 없다. 그래서 방향을 따로 받아 템플릿에 `<name>_sign` 으로 넘긴다.
 생략하면 값 자체의 부호를 쓰므로 `value: -7` 과 `value: 7, sign: "-"` 은 같은 뜻이다.
 
-### 하루를 한 조각으로 나누기
+### 하루를 한 task 로 나누기
 
 기간을 다루는 이관에서는 `IN` 목록 대신 날짜별로 나누는 편이 자연스럽다. `task_params` 에 구간의 두
-끝을 담은 파라미터 이름 두 개를 지목하면 하루를 조각 하나로 펼쳐 실행한다.
+끝을 담은 파라미터 이름 두 개를 지목하면 하루를 task 하나로 펼쳐 실행한다.
 
 ```jsonc
 {
@@ -296,21 +298,21 @@ WHERE dt IN ( {{ date_range(start_dt, end_dt) | sql_in }} )
 }
 ```
 
-오늘이 2026-07-22 라면 구간 `[-7, +1]` 은 2026-07-15 부터 2026-07-23 까지이므로 9개의 조각이
+오늘이 2026-07-22 라면 구간 `[-7, +1]` 은 2026-07-15 부터 2026-07-23 까지이므로 9개의 task 가
 만들어진다. 이 모드에서는 `partition_column` 과 `parallelism`, `split_strategy` 를 쓰지 않는다.
-조각 수는 날짜 수가 정한다.
+task 수는 날짜 수가 정한다.
 
-조각마다 coordinator 가 두 파라미터를 같은 날로 좁혀 렌더하므로 `BETWEEN` 이 하루로 붕괴하고 값은
-언제나 절대값이 된다. 다섯 번째 조각이라면 `BETWEEN trunc(current_date() - interval 3 day) AND
+task 마다 coordinator 가 두 파라미터를 같은 날로 좁혀 렌더하므로 `BETWEEN` 이 하루로 붕괴하고 값은
+언제나 절대값이 된다. 다섯 번째 task 라면 `BETWEEN trunc(current_date() - interval 3 day) AND
 trunc(current_date() - interval 3 day)` 처럼 렌더된다.
 
-`task_bound` 는 조각 하나가 받는 구간의 모양이고, 대상 컬럼의 타입과 비교식이 무엇을 골라야 할지
+`task_bound` 는 task 하나가 받는 구간의 모양이고, 대상 컬럼의 타입과 비교식이 무엇을 골라야 할지
 정한다. `BETWEEN a AND b` 처럼 양끝을 포함하는 비교나 `= a`, 그리고 DATE 컬럼에는 기본값 `point`
-를 쓴다. 이것은 `(d, d)` 를 넘기며 위 예에서 9개 조각이 나온다. 반면 `>= a AND < b` 같은 반열림
-비교나 TIMESTAMP 컬럼에는 `pair` 를 쓰는데, `(d, d+1)` 을 넘기므로 조각은 8개가 된다.
+를 쓴다. 이것은 `(d, d)` 를 넘기며 위 예에서 9개 task 가 나온다. 반면 `>= a AND < b` 같은 half-open
+비교나 TIMESTAMP 컬럼에는 `pair` 를 쓰는데, `(d, d+1)` 을 넘기므로 task 는 8개가 된다.
 
-잘못 고르면 조용히 틀린다. 양끝 포함 비교에 `pair` 를 주면 경계 날짜가 두 조각에 겹쳐 중복
-적재되고, 반열림 비교에 `point` 를 주면 자정 정각 행만 읽어 사실상 0행이 된다. manifest 에
+잘못 고르면 조용히 틀린다. 양끝 포함 비교에 `pair` 를 주면 경계 날짜가 두 task 에 겹쳐 중복
+적재되고, half-open 비교에 `point` 를 주면 자정 정각 행만 읽어 사실상 0행이 된다. manifest 에
 `task_bound` 를 못 박아 두면 요청하는 쪽이 컬럼 타입을 몰라도 되므로, 가능하면 그렇게 해 달라고
 템플릿 작성자에게 요청하는 편이 안전하다.
 
@@ -321,12 +323,12 @@ trunc(current_date() - interval 3 day)` 처럼 렌더된다.
 
 ## 진행 상황 확인
 
-제출과 완료는 별개이므로 `job_id` 로 상태를 물어본다. 조회는 두 가지인데, 반복해서 물어볼 때는 조각
+제출과 완료는 별개이므로 `job_id` 로 상태를 물어본다. 조회는 두 가지인데, 반복해서 물어볼 때는 task
 목록이 빠진 가벼운 쪽을 쓴다.
 
 ```bash
 curl -s localhost:8088/jobs/$JOB_ID/status   # 가볍다 — 폴링에는 이쪽
-curl -s localhost:8088/jobs/$JOB_ID          # 조각(task) 목록까지 함께
+curl -s localhost:8088/jobs/$JOB_ID          # task 목록까지 함께
 ```
 
 경량 응답은 이렇게 생겼다.
@@ -351,8 +353,8 @@ curl -s localhost:8088/jobs/$JOB_ID          # 조각(task) 목록까지 함께
 문자열이다. 해당 사건이 아직 일어나지 않았으면 `null` 이다.
 
 상태는 `PENDING` 으로 시작한다. 접수는 됐지만 실행 슬롯을 기다리는 중이라는 뜻이다. 슬롯을 잡으면
-`SPLITTING` 으로 넘어가 쿼리를 검증하고 조각으로 나누며, 그다음 `RUNNING` 에서 executor 들이 조각을
-실행한다. 종료 상태는 넷이다. `DONE` 은 모든 조각이 성공한 것이고, `PARTIAL` 은 일부만 성공한
+`SPLITTING` 으로 넘어가 쿼리를 검증하고 task 로 나누며, 그다음 `RUNNING` 에서 executor 들이 task 를
+실행한다. 종료 상태는 넷이다. `DONE` 은 모든 task 가 성공한 것이고, `PARTIAL` 은 일부만 성공한
 것으로 `best_effort` 정책에서 나온다. `FAILED` 는 실패, `CANCELLED` 는 취소다. 이 넷에 도달하면 더
 변하지 않으므로 폴링을 멈추면 된다.
 
@@ -374,7 +376,7 @@ done
 
 ### 결과 확인
 
-`DONE` 에 도달하면 `GET /jobs/{job_id}/result` 로 전체 적재 행 수와 조각별 행 수를 가져온다.
+`DONE` 에 도달하면 `GET /jobs/{job_id}/result` 로 전체 적재 행 수와 task 별 행 수를 가져온다.
 
 ```json
 {
@@ -388,7 +390,7 @@ done
 }
 ```
 
-조각별 상태나 각 조각의 에러까지 보려면 `GET /jobs/{job_id}` 를 호출한다. 위 정보에 더해 각 조각의
+task 별 상태나 각 task 의 에러까지 보려면 `GET /jobs/{job_id}` 를 호출한다. 위 정보에 더해 각 task 의
 상태와 적재 행 수, 시도 횟수, 에러 메시지를 담은 `tasks` 배열이 함께 온다.
 
 ```json
@@ -410,27 +412,27 @@ done
 }
 ```
 
-`attempt` 는 그 조각이 몇 번 재시도됐는지를 알려 준다. 어떤 조각이 어떤 SQL 을 실행했는지까지 보려면
-`GET /jobs/{job_id}/tasks/{task_id}` 를 쓴다.
+`attempt` 는 그 task 가 몇 번 재시도됐는지를 알려 준다. 어떤 task 가 어떤 SQL 을 실행했는지까지
+보려면 `GET /jobs/{job_id}/tasks/{task_id}` 를 쓴다.
 
 ### 취소와 재실행
 
 ```bash
 curl -s -X POST localhost:8088/jobs/$JOB_ID/cancel   # 진행 중인 작업 중단
-curl -s -X POST localhost:8088/jobs/$JOB_ID/retry    # 실패한 조각만 다시
+curl -s -X POST localhost:8088/jobs/$JOB_ID/retry    # 실패한 task 만 다시
 ```
 
-취소는 각 executor 로 전파되어 실행 중인 조각을 멈추고 작업을 `CANCELLED` 로 표시한다. 응답은 경량
+취소는 각 executor 로 전파되어 실행 중인 task 를 멈추고 작업을 `CANCELLED` 로 표시한다. 응답은 경량
 진행 뷰와 같은 형태다. 이미 종료된 작업을 취소하려 하면 `409` 다.
 
-재실행은 `PARTIAL`·`FAILED`·`CANCELLED` 로 끝난 작업에서 실패하거나 취소된 조각만 모아 새 작업으로
-돌린다. 이미 성공한 조각은 건너뛰므로 중복 적재 걱정 없이 눌러도 된다.
+재실행은 `PARTIAL`·`FAILED`·`CANCELLED` 로 끝난 작업에서 실패하거나 취소된 task 만 모아 새 작업으로
+돌린다. 이미 성공한 task 는 건너뛰므로 중복 적재 걱정 없이 눌러도 된다.
 
 ```json
 { "job_id": "job_7a8b9c0d1e2f", "retry_of": "job_3f9c2a1b7d4e", "retried_tasks": 1 }
 ```
 
-새 `job_id` 가 `202` 와 함께 돌아오므로 이 식별자로 다시 폴링을 반복하면 된다. 다시 돌릴 조각이
+새 `job_id` 가 `202` 와 함께 돌아오므로 이 식별자로 다시 폴링을 반복하면 된다. 다시 돌릴 task 가
 없거나 작업이 아직 끝나지 않았으면 `409` 인데, 이것은 정상적인 거부 신호이지 치명적 오류가 아니다.
 
 ---
@@ -438,7 +440,7 @@ curl -s -X POST localhost:8088/jobs/$JOB_ID/retry    # 실패한 조각만 다�
 ## 결과를 바로 받아 보기
 
 이관이 아니라 지금 이 쿼리가 무엇을 돌려주는지 보고 싶을 때는 `POST /query-execute` 를 쓴다.
-템플릿의 SELECT 조각만 렌더해 실행하고 상위 몇 행을 동기로 돌려주므로 폴링이 필요 없다.
+템플릿의 SELECT 부분만 렌더해 실행하고 상위 몇 행을 동기로 돌려주므로 폴링이 필요 없다.
 
 ```bash
 curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
@@ -513,7 +515,7 @@ curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
 쓰려 한 것이다. `TASK_PARAMS_INVALID` 는 지목한 이름이 형식에 맞지 않거나 `params` 에 없는
 경우이고, `TASK_PARAM_NOT_NUMERIC` 은 값이 정수가 아닌 경우다. 구간이 비면 `TASK_RANGE_EMPTY`,
 너무 넓으면 `TASK_RANGE_TOO_LARGE` 가 나오므로 기간을 좁힌다. `TEMPLATE_MISSING_SIGN_VAR` 은 템플릿이
-부호 변수를 쓰지 않는다는 뜻인데, 이것을 막지 않으면 각 조각이 의도보다 넓은 구간을 읽어 조용히
+부호 변수를 쓰지 않는다는 뜻인데, 이것을 막지 않으면 각 task 가 의도보다 넓은 구간을 읽어 조용히
 중복 적재되므로 접수 단계에서 거절한다.
 
 ### 422 말고 다른 응답
@@ -542,7 +544,7 @@ coordinator 를 여러 대 두고 로드밸런서 뒤에 놓았는데 상태 저
 원인을 고친 뒤 재실행할 수 있다.
 
 원인이 서버 쪽으로 보이면 — 소스 접속 실패나 대상 테이블 없음, 권한 부족 같은 것들이다 — 운영자에게
-`job_id` 를 알려 주는 편이 빠르다. 서버 로그에는 작업과 조각 식별자가 모든 줄에 붙어 있고 실제로
+`job_id` 를 알려 주는 편이 빠르다. 서버 로그에는 작업과 task 식별자가 모든 줄에 붙어 있고 실제로
 실행한 SQL 도 함께 남아 있어서, 그 하나만으로 관련된 기록을 전부 모을 수 있다.
 
 ---
@@ -550,7 +552,7 @@ coordinator 를 여러 대 두고 로드밸런서 뒤에 놓았는데 상태 저
 ## 실수하기 쉬운 것들
 
 가장 자주 겪는 오해는 `202` 를 완료로 읽는 것이다. 그것은 접수했다는 뜻일 뿐이므로 반드시 폴링으로
-종료 상태를 확인해야 하고, 그 폴링도 경량 엔드포인트로 해야 한다. 조각 목록까지 담긴 전체 뷰는
+종료 상태를 확인해야 하고, 그 폴링도 경량 엔드포인트로 해야 한다. task 목록까지 담긴 전체 뷰는
 작업이 끝난 뒤 한 번이나 원인을 진단할 때만 부르면 충분하다. 이어서 헷갈리기 쉬운 것이 결과를 받는
 방식인데, 옮긴 데이터는 HTTP 응답에 담기지 않는다. executor 가 대상으로 직접 보내므로 확인은 대상
 테이블에서 해야 하고 API 가 돌려주는 것은 상태와 행 수뿐이다. 결과 행을 그 자리에서 보고 싶어
@@ -558,7 +560,7 @@ coordinator 를 여러 대 두고 로드밸런서 뒤에 놓았는데 상태 저
 데 쓰면 잘린 데이터가 적재된다.
 
 병렬도를 정할 때는 `IN` 목록의 값 개수가 곧 상한이라는 점을 기억한다. `parallelism` 을 32로 줘도
-`IN` 값이 셋이면 세 조각으로만 나뉘므로, 더 잘게 나누려면 나눌 값을 늘리거나 날짜 fan-out 을 쓴다.
+`IN` 값이 셋이면 세 task 로만 나뉘므로, 더 잘게 나누려면 나눌 값을 늘리거나 날짜 fan-out 을 쓴다.
 
 다시 돌릴 가능성이 있는 작업이라면 처음부터 그에 맞게 만들어 둔다. `append` 는 재실행한 만큼 그대로
 쌓이므로, 멱등이 필요하면 `write_mode: overwrite_partitions` 를 지원하는 모드인 `copy` 나
@@ -572,9 +574,9 @@ coordinator 를 여러 대 두고 로드밸런서 뒤에 놓았는데 상태 저
 ## API 한눈에 보기
 
 작업을 다루는 엔드포인트는 여섯이다. `POST /jobs` 로 제출하면 `202` 와 함께 `job_id` 가 오고,
-`GET /jobs/{job_id}/status` 로 진행률을 가볍게 폴링하며, `GET /jobs/{job_id}` 로 조각 목록까지 담긴
+`GET /jobs/{job_id}/status` 로 진행률을 가볍게 폴링하며, `GET /jobs/{job_id}` 로 task 목록까지 담긴
 전체 상태를 본다. 끝난 뒤에는 `GET /jobs/{job_id}/result` 로 적재 요약을,
-`GET /jobs/{job_id}/tasks/{task_id}` 로 조각 하나의 상세를 조회한다. 중단은
+`GET /jobs/{job_id}/tasks/{task_id}` 로 task 하나의 상세를 조회한다. 중단은
 `POST /jobs/{job_id}/cancel`, 실패분 재실행은 `POST /jobs/{job_id}/retry` 다.
 
 그 밖에 `GET /jobs` 로 작업 목록을, `GET /history` 로 지난 실행 이력을, `GET /templates` 로 쓸 수

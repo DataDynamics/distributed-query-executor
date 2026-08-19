@@ -4,23 +4,23 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분�
 일을 하는 대신, 요청을 받아 작업을 나눠 주는 **coordinator** 와 실제로 데이터를 읽고 쓰는
 여러 대의 **executor** 로 구성됩니다. 핵심 아이디어는 단순합니다. 하나의 Impala `SELECT` 을 그대로
 한 번에 실행하는 대신, 파티션 컬럼(날짜처럼 데이터를 미리 나눠 둔 컬럼)의 `IN` 목록을 기준으로
-쿼리를 N조각으로 쪼개고, 각 조각을 여러 executor 가 동시에 읽어 Greenplum/WarehousePG 에 적재합니다
+쿼리를 Ntask 로 쪼개고, 각 task 를 여러 executor 가 동시에 읽어 Greenplum/WarehousePG 에 적재합니다
 (**Impala → Greenplum/WarehousePG 이관**). 데이터 자체는 coordinator 를 거치지 않고 각 executor 가 Impala 에서
 직접 읽어 Greenplum/WarehousePG 으로 흘려보내며, coordinator 로는 상태와 행 수 같은 가벼운 정보만 오갑니다.
 
-이 문서는 **소개 + 빠른 시작 + 핵심 개념 요약**에 집중하는 입구입니다. 깊은 내용은 아래 문서로
+이 문서는 **소개 + 빠른 시작 + 핵심 개념 요약**에 집중하는 시작점입니다. 깊은 내용은 아래 문서로
 이어집니다.
 
 읽는 순서는 자기 역할에 따라 갈립니다. **작업을 맡기는 쪽**은
 [`docs/USER.md`](docs/USER.md), **서버를 돌보는 쪽**은 [`docs/OPERATOR.md`](docs/OPERATOR.md) 하나면
-됩니다. 이 두 문서는 다른 문서를 오가지 않아도 되도록 **필요한 내용을 모두 담은 자립형**이라,
+됩니다. 이 두 문서는 다른 문서를 오가지 않아도 되도록 **필요한 내용을 모두 담은 self-contained**이라,
 링크를 따라다니지 않고 위에서 아래로 읽으면 끝납니다. 나머지는 특정 주제를 더 깊이 파고들 때
 찾아보는 문서입니다.
 
 | 문서 | 내용 | 누구를 위한 것인가 |
 |---|---|---|
-| [`docs/USER.md`](docs/USER.md) | **사용자 가이드(자립형)** — 작업 제출·모드 선택·템플릿·조회·오류 대처 | 사용자 |
-| [`docs/OPERATOR.md`](docs/OPERATOR.md) | **운영자 가이드(자립형)** — 일상 점검·로그 추적·장애 대응·용량 조정·설정 | 운영자 |
+| [`docs/USER.md`](docs/USER.md) | **사용자 가이드(self-contained)** — 작업 제출·모드 선택·템플릿·조회·오류 대처 | 사용자 |
+| [`docs/OPERATOR.md`](docs/OPERATOR.md) | **운영자 가이드(self-contained)** — 일상 점검·로그 추적·장애 대응·용량 조정·설정 | 운영자 |
 | [`docs/GUIDE.md`](docs/GUIDE.md) | 실행 모드별 심화(2-phase 내부 흐름, 통합 테스트 하니스 등) | 사용자 |
 | [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | C# 클라이언트 전체 예제 코드 | 사용자 |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | 최초 설치·에어갭 오프라인 설치 절차 | 운영자 |
@@ -140,8 +140,8 @@ bin/s3-ops rmdir s3://dw-stage/dqe-stage/ --older-than 7d --yes
 `/data1/distributed-query-executor/config` 이고, 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 바꿉니다
 (개발 시 `config`). `config.properties` 는 손으로 고치는 대신 터미널 설정 편집기
 `bin/config-tui.sh` 로도 편집할 수 있습니다(항목·기본값·설명·enum 을 `config.yml` 에서 자동 추출,
-저장 시 `.bak` 백업 + 비밀값 마스킹). 첫 화면인 **동시성** 탭에는 처리량을 좌우하는 손잡이가
-섹션을 넘어 한자리에 모여 있고, `+`/`-` 로 값을 올리고 내리면 입구 용량·플릿 동시 task 수·GP
+저장 시 `.bak` 백업 + 비밀값 마스킹). 첫 화면인 **동시성** 탭에는 처리량을 좌우하는 파라미터가
+섹션을 넘어 한자리에 모여 있고, `+`/`-` 로 값을 올리고 내리면 admission 용량·fleet 동시 task 수·GP
 연결 수가 즉시 다시 계산되어 아래에 표시됩니다. 어떤 값인지 확실하지 않을 때는 `?` 를 누르면
 그 항목이 무엇을 정하는지와 얼마로 두어야 하는지, 함께 보아야 할 설정이 한 화면에 나옵니다.
 
@@ -303,7 +303,7 @@ coordinator·executor 가 같은 곳을 보게 하는 것입니다.
 | `GET /jobs/{job_id}/result` | 적재 결과 요약 |
 | `POST /jobs/{job_id}/cancel` | 작업 취소(각 executor 에 전파, 협조적). 이미 종료면 409 |
 | `POST /jobs/{job_id}/retry` | 실패 파티션만 재실행 → 새 `job_id` 반환 |
-| `POST /query-execute` | 템플릿+파라미터로 SELECT 실행 → 결과(상위 N행) 반환. 이관이 아닌 미리보기성 동기 실행 |
+| `POST /query-execute` | 템플릿+파라미터로 SELECT 실행 → 결과(상위 N행) 반환. 이관이 아닌 preview 용 동기 실행 |
 | `GET /cluster` | coordinator·executor 헬스/CPU·메모리·디스크 + 실행 중 job 수 통합 조회 |
 
 `POST /jobs` 에 `dry_run: true` 를 주면 executor 를 호출하지 않고 생성된 sub-query 만 돌려줍니다
@@ -400,7 +400,7 @@ drain(기본 25초)으로 진행 중 task 를 정리한 뒤 교체됩니다. sys
 의 유닛과 `install-systemd.sh` 를 씁니다.
 
 업그레이드 시 운영자 소유 자산(`config/`·`templates/`·`customs/`)은 rsync 에서 제외되고 없을 때만
-시딩되므로 편집·추가한 내용이 유지됩니다. 다만 새 버전이 추가한 기본값·설정 구조는 자동으로
+seeding 되므로 편집·추가한 내용이 유지됩니다. 다만 새 버전이 추가한 기본값·설정 구조는 자동으로
 들어오지 않으므로, 새 소스 트리와 `diff` 를 떠서 `config.yml`·스키마는 교체하고 새로 생긴
 properties 키만 옮깁니다(절차는 [`docs/DEPLOY.md`](docs/DEPLOY.md) 의 업그레이드 절).
 에어갭 설치는 미리 받아 둔 휠 묶음 디렉터리를 `WHEELHOUSE` 로 지정해 `--no-index` 로 설치합니다.
