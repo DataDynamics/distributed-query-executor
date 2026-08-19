@@ -18,7 +18,8 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 [class-diagram.md](class-diagram.md) 와 [sequence-diagram.md](sequence-diagram.md) 는 코드를 여는
 사람을 위한 것이다. 앞의 것은 기능별로 어느 파일에 무엇이 있는지를 일곱 장의 클래스 그림으로
 보여 주고, 뒤의 것은 요청 하나가 들어와 끝날 때까지 누가 누구를 언제 부르는지를 여섯 장의 시퀀스
-그림으로 좇는다.
+그림으로 좇는다. 두 문서 끝에는 같은 계열의 이관 도구인 DataDynamics/whpg-to-whpg 를 같은 방식으로
+그린 부록이 붙어 있다. 클래스 두 장과 local · s3 두 모드의 시퀀스 두 장이다.
 
 [tech-architecture.md](tech-architecture.md) 는 어떤 인프라 위에 올리고 어떻게 운영하는지를 다루는
 기술 아키텍처 정의서다. 소프트웨어 구성과 구성요소별 정의, 구성요소 매핑에 더해 백업·복구와 보안,

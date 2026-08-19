@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 958" width="1360" height="958" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1360" height="958" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">시퀀스 — whpg-to-whpg 의 local 모드 복사</text>
+<text x="28" y="60" font-size="13" fill="#64748b">소스에서 CSV 로 뽑아 로컬 디스크에 두었다가 타깃에 COPY 로 넣는다. 타깃을 건드리기 전에 막을 수 있는 것은 사전 점검에서 전부 막는다.</text>
+<line x1="105.0" y1="130" x2="105.0" y2="932" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="295.0" y1="130" x2="295.0" y2="932" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="475.0" y1="130" x2="475.0" y2="932" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="670.0" y1="130" x2="670.0" y2="932" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="882.5" y1="130" x2="882.5" y2="932" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="1065.0" y1="130" x2="1065.0" y2="932" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="1260.0" y1="130" x2="1260.0" y2="932" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<rect x="30" y="90" width="150" height="40" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="105.0" y="115" font-size="13" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">whpg-copy</text>
+<rect x="220" y="90" width="150" height="40" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="295.0" y="115" font-size="13" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">CopyPlan</text>
+<rect x="400" y="90" width="150" height="40" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="475.0" y="115" font-size="13" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">copyplan</text>
+<rect x="580" y="90" width="180" height="40" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.7"/>
+<text x="670.0" y="115" font-size="13" fill="#c2410c" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">소스 WarehousePG</text>
+<rect x="800" y="90" width="165" height="40" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="882.5" y="115" font-size="13" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">RecordWriter</text>
+<rect x="990" y="90" width="150" height="40" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="1065.0" y="115" font-size="13" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">로컬 디스크</text>
+<rect x="1170" y="90" width="180" height="40" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="1260.0" y="115" font-size="13" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">타깃 WarehousePG</text>
+<line x1="105.0" y1="152" x2="295.0" y2="152" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="200.0" y="145" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">build_plan(args) — 인자·설정·카탈로그를 합친다</text>
+<line x1="295.0" y1="180" x2="105.0" y2="180" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="200.0" y="173" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">CopyPlan (mode=local)</text>
+<line x1="105.0" y1="208" x2="475.0" y2="208" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="290.0" y="201" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">preflight(plan, source, target)</text>
+<line x1="475.0" y1="236" x2="670.0" y2="236" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="572.5" y="229" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">테이블·컬럼·권한 조회</text>
+<line x1="475.0" y1="264" x2="1260.0" y2="264" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="867.5" y="257" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">쓰기 권한 · 기존 행 수 · 분산키 확인</text>
+<line x1="475.0" y1="292" x2="105.0" y2="292" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="290.0" y="285" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">통과 또는 PreflightError</text>
+<rect x="30" y="318" width="700" height="24" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.2"/>
+<text x="40" y="334" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">여기서 막지 못하면 새벽에 절반쯤 적재된 타깃을 보게 된다. 실패는 종료 코드 6 이다.</text>
+<line x1="105.0" y1="396" x2="670.0" y2="396" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="387.5" y="389" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">COPY (SELECT …) TO STDOUT WITH (…)</text>
+<line x1="670.0" y1="424" x2="882.5" y2="424" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="776.25" y="417" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">CSV 바이트 스트림</text>
+<path d="M882.5,452 h46 v22 h-46" fill="none" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="938.5" y="462" font-size="12" fill="#334155" text-anchor="start" font-weight="400">인용부호 밖 개행에서만 잘라 파일을 바꾼다</text>
+<line x1="882.5" y1="498" x2="1065.0" y2="498" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="973.75" y="491" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">part-0000.csv · part-0001.csv …</text>
+<line x1="882.5" y1="526" x2="105.0" y2="526" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="493.75" y="519" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">UnloadResult (행 수 · 파일 · 바이트)</text>
+<rect x="20" y="362" width="1000" height="178" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="6 4"/>
+<rect x="20" y="362" width="52.5" height="18" rx="4" fill="#7c3aed"/>
+<text x="29" y="375" font-size="11.5" fill="#ffffff" text-anchor="start" font-weight="700">언로드</text>
+<line x1="105.0" y1="584" x2="1065.0" y2="584" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="585.0" y="577" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">파일 목록 읽기</text>
+<line x1="105.0" y1="612" x2="1260.0" y2="612" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="682.5" y="605" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">COPY 타깃 (컬럼…) FROM STDIN WITH (…)</text>
+<line x1="105.0" y1="640" x2="1260.0" y2="640" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="682.5" y="633" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">--jobs N 이면 스테이징 테이블에 병렬 적재</text>
+<line x1="105.0" y1="668" x2="1260.0" y2="668" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="682.5" y="661" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">BEGIN → TRUNCATE → INSERT SELECT → COMMIT</text>
+<rect x="20" y="550" width="1180" height="132" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="6 4"/>
+<rect x="20" y="550" width="292.27500000000003" height="18" rx="4" fill="#7c3aed"/>
+<text x="29" y="563" font-size="11.5" fill="#ffffff" text-anchor="start" font-weight="700">로드 — 병렬이면 스테이징을 거쳐 원자성을 지킨다</text>
+<path d="M105.0,724 h46 v22 h-46" fill="none" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="161.0" y="734" font-size="12" fill="#334155" text-anchor="start" font-weight="400">verify — 언로드 행 수와 로드 행 수 비교</text>
+<rect x="30" y="768" width="900" height="24" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.2"/>
+<text x="40" y="784" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">다르면 로드 트랜잭션을 롤백하고 종료 코드 7 로 끝낸다.</text>
+<line x1="105.0" y1="816" x2="1260.0" y2="816" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="682.5" y="809" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">COMMIT</text>
+<line x1="105.0" y1="844" x2="1065.0" y2="844" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="585.0" y="837" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">성공했을 때만 스테이징 파일을 지운다</text>
+<rect x="30" y="870" width="900" height="24" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.2"/>
+<text x="40" y="886" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">실패하면 남긴다. 원인을 봐야 하기 때문이며, 지우는 명령을 그대로 찍어 준다.</text>
+</svg>
