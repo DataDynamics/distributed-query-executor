@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1420 790" width="1420" height="790" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1420" height="790" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">물리 ER — WarehousePG(Greenplum 7) 판</text>
+<text x="28" y="60" font-size="13" fill="#64748b">같은 일곱 테이블이지만 MPP 규칙에 맞춰 분산키를 정하고 이력 테이블의 대리키를 뺐다. 앱 코드는 그대로 동작한다.</text>
+<rect x="40" y="116" width="320" height="131" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.7"/>
+<path d="M40,146 V124 a8,8 0 0 1 8,-8 H352 a8,8 0 0 1 8,8 V146 z" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="200.0" y="136" font-size="13.5" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.jobs</text>
+<text x="50" y="160" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="84" y="160" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="350" y="160" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="84" y="177" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">… 나머지 컬럼 동일</text>
+<text x="350" y="177" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="50" y="194" font-size="9.5" fill="#7c3aed" text-anchor="start" font-weight="700">U</text>
+<text x="84" y="194" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">data</text>
+<text x="350" y="194" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JSONB</text>
+<text x="50" y="217" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">DISTRIBUTED BY (job_id)</text>
+<text x="50" y="233" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">PK 를 그대로 분산키로 쓴다</text>
+<rect x="400" y="116" width="320" height="131" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.7"/>
+<path d="M400,146 V124 a8,8 0 0 1 8,-8 H712 a8,8 0 0 1 8,8 V146 z" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="560.0" y="136" font-size="13.5" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.job_history</text>
+<text x="444" y="160" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">id</text>
+<text x="710" y="160" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT IDENTITY</text>
+<text x="410" y="177" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="444" y="177" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="710" y="177" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="444" y="194" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">… 나머지 컬럼 동일</text>
+<text x="710" y="194" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="410" y="217" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">DISTRIBUTED BY (job_id)</text>
+<text x="410" y="233" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">대리키 PK 를 빼고 id 는 정렬용으로만 남긴다</text>
+<rect x="760" y="116" width="320" height="164" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.7"/>
+<path d="M760,146 V124 a8,8 0 0 1 8,-8 H1072 a8,8 0 0 1 8,8 V146 z" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="920.0" y="136" font-size="13.5" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.task_history</text>
+<text x="804" y="160" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">id</text>
+<text x="1070" y="160" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT IDENTITY</text>
+<text x="770" y="177" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="804" y="177" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="1070" y="177" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="770" y="194" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="804" y="194" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">task_id</text>
+<text x="1070" y="194" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="804" y="211" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">… 나머지 컬럼 동일</text>
+<text x="1070" y="211" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="770" y="234" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">DISTRIBUTED BY (job_id)</text>
+<text x="770" y="250" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">같은 job 의 행이 한 세그먼트에 모여</text>
+<text x="770" y="266" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">DISTINCT ON 이 motion 없이 끝난다</text>
+<rect x="1120" y="116" width="260" height="115" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.7"/>
+<path d="M1120,146 V124 a8,8 0 0 1 8,-8 H1372 a8,8 0 0 1 8,8 V146 z" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="1250.0" y="136" font-size="13.5" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">…health_metrics</text>
+<text x="1164" y="160" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">id</text>
+<text x="1370" y="160" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT IDENTITY</text>
+<text x="1130" y="177" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="1164" y="177" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url</text>
+<text x="1370" y="177" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="1164" y="194" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">… 나머지 컬럼 동일</text>
+<text x="1370" y="194" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="1130" y="217" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">DISTRIBUTED BY (executor_url)</text>
+<rect x="40" y="400" width="320" height="98" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.7"/>
+<path d="M40,430 V408 a8,8 0 0 1 8,-8 H352 a8,8 0 0 1 8,8 V430 z" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="200.0" y="420" font-size="13.5" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.executor_status</text>
+<text x="50" y="444" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="84" y="444" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_id</text>
+<text x="350" y="444" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="84" y="461" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">… 나머지 컬럼 동일</text>
+<text x="350" y="461" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="50" y="484" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">DISTRIBUTED BY (executor_id)</text>
+<rect x="400" y="400" width="320" height="131" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.7"/>
+<path d="M400,430 V408 a8,8 0 0 1 8,-8 H712 a8,8 0 0 1 8,8 V430 z" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="560.0" y="420" font-size="13.5" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.executor_reservation</text>
+<text x="410" y="444" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="444" y="444" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url</text>
+<text x="710" y="444" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="410" y="461" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="444" y="461" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="710" y="461" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="444" y="478" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">n · updated_at</text>
+<text x="710" y="478" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="410" y="501" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">DISTRIBUTED BY (executor_url)</text>
+<text x="410" y="517" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">분산키는 PK 의 부분집합이어야 한다</text>
+<rect x="760" y="400" width="320" height="98" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.7"/>
+<path d="M760,430 V408 a8,8 0 0 1 8,-8 H1072 a8,8 0 0 1 8,8 V430 z" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="920.0" y="420" font-size="13.5" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.coordinator_status</text>
+<text x="770" y="444" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="804" y="444" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="1070" y="444" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="804" y="461" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">updated_at</text>
+<text x="1070" y="461" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="770" y="484" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">DISTRIBUTED BY (coordinator_id)</text>
+<path d="M360,180 H398" stroke="#334155" stroke-width="1.5" fill="none" stroke-dasharray="6 4"/>
+<line x1="369" y1="174" x2="369" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="398" y1="180" x2="386" y2="174" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="398" y1="180" x2="386" y2="180" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="398" y1="180" x2="386" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="379" y="168" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">job_id</text>
+<path d="M720,180 H758" stroke="#334155" stroke-width="1.5" fill="none" stroke-dasharray="6 4"/>
+<line x1="729" y1="174" x2="729" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="758" y1="180" x2="746" y2="174" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="758" y1="180" x2="746" y2="180" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="758" y1="180" x2="746" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="739" y="168" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">job_id</text>
+<rect x="1120" y="400" width="260" height="188" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.4"/>
+<text x="1136" y="424" font-size="13" fill="#92400e" text-anchor="start" font-weight="700">왜 이렇게 바뀌는가</text>
+<text x="1136" y="448" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">분산키를 정하지 않으면 첫 컬럼이나</text>
+<text x="1136" y="467" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">랜덤으로 잡혀 데이터가 한쪽으로</text>
+<text x="1136" y="486" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">몰릴 수 있다.</text>
+<text x="1136" y="505" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400"></text>
+<text x="1136" y="524" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">이력 테이블에 대리키 PK 를 두면</text>
+<text x="1136" y="543" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">분산키가 (id) 로 강제되어 job 단위</text>
+<text x="1136" y="562" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">조회가 전 세그먼트로 흩어진다.</text>
+<text x="40" y="630" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">메타 저장소를 WarehousePG 에 둘 때는 config/warehousepg.sql 을 대신 적용한다. 앱이 쓰는 SQL 은 ON CONFLICT·JSONB·</text>
+<text x="40" y="650" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">DISTINCT ON 뿐이고 Greenplum 7 은 PostgreSQL 12 엔진이라 그대로 동작하므로, 바꿔야 하는 것은 이 스키마 파일뿐이다.</text>
+<text x="40" y="690" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">다만 executor_status 와 coordinator_status, executor_reservation 은 수 초 간격의 단일 행 UPSERT 라 MPP 의 강점과는</text>
+<text x="40" y="710" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">반대되는 워크로드다. 볼륨이 작아 동작은 하지만, 성능이 중요하면 메타 저장소는 일반 PostgreSQL 에 두고 WarehousePG 는</text>
+<text x="40" y="730" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">데이터 적재 대상으로만 쓰는 편이 낫다.</text>
+</svg>
