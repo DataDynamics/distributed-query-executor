@@ -24,7 +24,7 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 ER 한 장과, 실제 DDL 이 만드는 테이블을 그대로 보여 주는 물리 ER 두 장(PostgreSQL 판과 WarehousePG
 판)이 들어 있다. [tables.md](tables.md) 는 그 물리 테이블 일곱 개를 컬럼 단위로 적은 명세서다.
 컬럼마다 타입과 길이, NOT NULL, 키, 기본값, 설명, 예제값을 담았고 `config/postgresql.sql` 과
-자동으로 대조해 맞췄다.
+자동으로 대조해 맞췄다. 같은 내용을 테이블별 시트로 나눈 엑셀이 [tables.xlsx](tables.xlsx) 다.
 
 ## 무엇을 합쳤는가
 
