@@ -22,8 +22,8 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 그린 부록이 붙어 있다. 클래스 두 장과 local · s3 두 모드의 시퀀스 두 장이다.
 
 [sw-architecture.md](sw-architecture.md) 는 SW 의 구조와 그 적용을 다루는 SW 아키텍처 정의서다.
-표준 양식의 목차를 이 시스템에 맞게 고쳐 자리만 잡아 둔 빈 템플릿이며, 무엇을 어디에 적을지는
-절마다 한 줄로 적어 두었다.
+표준 양식의 목차를 이 시스템에 맞게 고쳐, SW 기술 구조를 API·제어와 실행·적재, CLI·운영 도구 세
+유형으로 나눠 정의하고 그것이 실제 코드에 어떻게 적용됐는지와 연계 아키텍처까지 담았다.
 
 [tech-architecture.md](tech-architecture.md) 는 어떤 인프라 위에 올리고 어떻게 운영하는지를 다루는
 기술 아키텍처 정의서다. 소프트웨어 구성과 구성요소별 정의, 구성요소 매핑에 더해 백업·복구와 보안,
@@ -57,7 +57,8 @@ ER 한 장과, 실제 DDL 이 만드는 테이블을 그대로 보여 주는 물
 전체 구성(`architecture.svg`), 작업 상태 전이(`job-lifecycle.svg`), 실행 모드별 데이터 경로
 (`exec-modes.svg`), 제출부터 확인까지의 흐름(`verify-loop.svg`), 과부하 방어 세 층(`admission.svg`),
 task 하나의 시간 분해(`task-timing.svg`), `s3_stage` 의 3단계(`s3-stage-phases.svg`), 백업
-구성도(`backup-topology.svg`), 그리고 이 디렉터리의 구성(`merge-map.svg`)이 있다.
+구성도(`backup-topology.svg`), 연계 논리 모델(`integration-model.svg`), 그리고 이 디렉터리의
+구성(`merge-map.svg`)이 있다.
 
 클래스 그림은 `class-*.svg`, 시퀀스 그림은 `seq-*.svg`, ER 그림은 `er-*.svg` 이며 이 셋은 같은
 이름의 PNG 도 함께 둔다.
