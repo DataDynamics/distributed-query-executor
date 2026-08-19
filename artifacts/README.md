@@ -20,6 +20,10 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 보여 주고, 뒤의 것은 요청 하나가 들어와 끝날 때까지 누가 누구를 언제 부르는지를 여섯 장의 시퀀스
 그림으로 좇는다.
 
+[tech-architecture.md](tech-architecture.md) 는 어떤 인프라 위에 올리고 어떻게 운영하는지를 다루는
+기술 아키텍처 정의서다. 소프트웨어 구성과 구성요소별 정의, 구성요소 매핑에 더해 백업·복구와 보안,
+가용성 방안이 들어 있다. 하드웨어와 네트워크처럼 아직 정하지 않은 절은 표 골격만 두고 비워 두었다.
+
 [er-diagram.md](er-diagram.md) 는 이 시스템이 무엇을 기억하는지를 다룬다. 개념과 관계만 보는 논리
 ER 한 장과, 실제 DDL 이 만드는 테이블을 그대로 보여 주는 물리 ER 두 장(PostgreSQL 판과 WarehousePG
 판)이 들어 있다. [tables.md](tables.md) 는 그 물리 테이블 일곱 개를 컬럼 단위로 적은 명세서다.
@@ -47,8 +51,8 @@ ER 한 장과, 실제 DDL 이 만드는 테이블을 그대로 보여 주는 물
 호스트를 참조하지 않고 저장소 안의 파일만 쓰며, 벡터라 확대해도 글자가 뭉개지지 않는다. 가이드 쪽에는
 전체 구성(`architecture.svg`), 작업 상태 전이(`job-lifecycle.svg`), 실행 모드별 데이터 경로
 (`exec-modes.svg`), 제출부터 확인까지의 흐름(`verify-loop.svg`), 과부하 방어 세 층(`admission.svg`),
-task 하나의 시간 분해(`task-timing.svg`), `s3_stage` 의 3단계(`s3-stage-phases.svg`), 그리고 이
-디렉터리의 구성(`merge-map.svg`)이 있다.
+task 하나의 시간 분해(`task-timing.svg`), `s3_stage` 의 3단계(`s3-stage-phases.svg`), 백업
+구성도(`backup-topology.svg`), 그리고 이 디렉터리의 구성(`merge-map.svg`)이 있다.
 
 클래스 그림은 `class-*.svg`, 시퀀스 그림은 `seq-*.svg`, ER 그림은 `er-*.svg` 이며 이 셋은 같은
 이름의 PNG 도 함께 둔다.
