@@ -150,7 +150,7 @@ coordinator 가 자기 생존을 알리는 heartbeat 테이블이다. 신호가 
 | NO | 컬럼ID | 컬럼명 | 타입 | 길이 | NOT NULL | KEY | DEFAULT | 설명 | 예제값 |
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | `coordinator_id` | coordinator 식별자 | TEXT | 가변 | Y | PK | | 설정값이나 자동 생성된 식별자 | `coordinator-482913` |
-| 2 | `updated_at` | 생존 신호 시각 | TIMESTAMP | 8B | Y | | `now() AT TIME ZONE 'Asia/Seoul'` | `coordinator.heartbeat_interval_s` 마다 갱신한다 | `2026-06-29 07:31:45.880` |
+| 2 | `updated_at` | heartbeat 시각 | TIMESTAMP | 8B | Y | | `now() AT TIME ZONE 'Asia/Seoul'` | `coordinator.heartbeat_interval_s` 마다 갱신한다 | `2026-06-29 07:31:45.880` |
 
 ## public.executor_health_metrics
 

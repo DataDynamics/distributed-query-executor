@@ -7,7 +7,7 @@
 [README.md](../README.md) 와 [DEPLOY.md](DEPLOY.md) 를 참고하세요.
 
 한 가지 약속만 기억하면 됩니다. 모든 파라미터는 `config/config.properties` 에 자바 스타일
-`key=value` 로 적고, 이 값이 `config.yml` 의 `${변수:기본값}` 자리표시자를 채웁니다. 아래 표의
+`key=value` 로 적고, 이 값이 `config.yml` 의 `${변수:기본값}` placeholder 를 채웁니다. 아래 표의
 기본값이란 `config.yml` 에서 콜론(`:`) 뒤에 적힌 값이며, 설정을 주지 않으면 이 값이 쓰입니다.
 
 ---

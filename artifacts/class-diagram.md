@@ -86,8 +86,8 @@ coordinator 를 여러 대 띄우면 서로를 확인할 방법이 필요하다.
 
 ## 공용 core 모듈
 
-설정은 `config.properties` 의 값이 `config.yml` 의 자리표시자를 채워 `Settings` 하나로 굳는다.
-자리표시자가 없으면 properties 에 값을 적어도 조용히 무시되므로, 새 버전으로 올릴 때 `config.yml`
+설정은 `config.properties` 의 값이 `config.yml` 의 placeholder 를 채워 `Settings` 하나로 굳는다.
+placeholder 가 없으면 properties 에 값을 적어도 조용히 무시되므로, 새 버전으로 올릴 때 `config.yml`
 을 반드시 교체해야 하는 이유가 여기에 있다.
 
 ![클래스 — 공용 core 모듈](images/class-core.svg)

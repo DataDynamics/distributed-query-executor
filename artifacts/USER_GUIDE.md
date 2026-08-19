@@ -117,7 +117,7 @@ append 다. `local_stage` 와 `s3_stage` 는 executor 가 CSV 를 만들어 두�
 소스에서 읽은 결과를 Greenplum 에 곧바로 COPY 한다. 추가 필드가 없어 `sql`·`partition_column`·
 `target_table` 만 있으면 되고, 위 "첫 작업 제출"의 예가 그대로 이 모드다. 분할된 sub-query 를 감싸야
 한다면 `wrapper_query` 에 감쌀 쿼리를 두고 `{{SUBQUERY}}` 자리에 각 task 가 치환되게 한다
-(자리표시자는 `wrapper_placeholder` 로 바꿀 수 있다). `write_mode: overwrite_partitions` 를
+(placeholder 는 `wrapper_placeholder` 로 바꿀 수 있다). `write_mode: overwrite_partitions` 를
 지원하므로 재실행 멱등이 성립한다.
 
 ### statement — 옮기지 않고 대상에서 실행

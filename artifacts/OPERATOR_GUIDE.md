@@ -102,7 +102,7 @@ coordinator 는 기본 의존성만으로 뜬다. executor 는 소스와 대상 
 # 3장. 설정
 
 설정은 두 파일로 나뉜다. 값은 `config.properties` 에 자바 스타일 `key=value` 로 적고, 그 값이
-`config.yml` 의 `${변수:기본값}` 자리표시자를 채워 최종 설정이 된다. 설정 디렉터리는 기본적으로
+`config.yml` 의 `${변수:기본값}` placeholder 를 채워 최종 설정이 된다. 설정 디렉터리는 기본적으로
 `/data1/distributed-query-executor/config` 이고 환경변수 `QUERY_EXECUTOR_CONFIG_DIR` 로 바꾼다.
 바꾼 뒤에는 서비스를 재기동해야 반영된다.
 

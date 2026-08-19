@@ -91,7 +91,7 @@ executor 가 COPY 전에 그 DDL 로 테이블을 만들고, **생략하면 테�
 `staging_ddl` 은 ①에서 그대로 실행되므로 뒤따르는 COPY 가 채울 컬럼을 가진 테이블을 만들어야
 합니다(예시의 `CREATE TEMP TABLE stg_sales (LIKE warehouse.sales)` 처럼 대상 컬럼을 복제하면
 간단). `wrapper_query` 는 ③에서 실행되는 INSERT 로, **`staging_table` 에서 읽어 `target_table`
-로 넣는 완성된 SQL** 이어야 합니다. copy 모드와 달리 sub-query 자리표시자(`{{SUBQUERY}}`)는
+로 넣는 완성된 SQL** 이어야 합니다. copy 모드와 달리 sub-query placeholder(`{{SUBQUERY}}`)는
 필요 없습니다.
 
 두 가지를 유의하세요. 첫째, COPY(②)는 SELECT 가 돌려준 컬럼 이름을 그대로 쓰므로 `sql` 의

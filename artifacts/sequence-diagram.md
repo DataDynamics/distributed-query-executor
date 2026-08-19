@@ -40,7 +40,7 @@ Greenplum 으로 COPY 하고, coordinator 로 올라오는 것은 상태와 적�
 ## s3_stage 의 2단계 적재
 
 `s3_stage` 는 executor 가 CSV 를 만들어 S3 에 올리는 Phase 1 과, coordinator 가 그 프리픽스를
-외부테이블로 걸어 target 에 넣는 Phase 2 로 갈린다. 사이에 배리어가 있어 모든 업로드가 끝나야 다음
+외부테이블로 걸어 target 에 넣는 Phase 2 로 갈린다. 사이에 barrier 가 있어 모든 업로드가 끝나야 다음
 단계로 넘어간다.
 
 ![시퀀스 — s3_stage 의 2단계 적재](images/seq-s3-stage.svg)

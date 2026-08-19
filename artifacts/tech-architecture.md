@@ -77,17 +77,17 @@ Executor 가 온다. 하나의 애플리케이션이지만 역할이 뚜렷이 �
 #### 1.4.1 사용자
 
 작업을 맡기는 쪽은 사람이 아니라 대개 배치 스케줄러나 업무 시스템이다. HTTP 클라이언트로
-coordinator 의 `8088` 포트에 작업을 제출하고 상태를 폴링하며, executor 의 존재를 알 필요가 없다.
+coordinator 의 `8088` 포트에 job 을 제출하고 상태를 폴링하며, executor 의 존재를 알 필요가 없다.
 브라우저로 같은 포트에 접속하면 읽기 전용 대시보드를 볼 수 있고, 터미널만 있는 환경에서는 같은
-API 를 읽는 curses 모니터를 쓴다. 운영자는 여기에 더해 `bin/gp-shell`·`bin/impala-shell`·
-`bin/s3-ops` 로 소스와 대상, 스테이징 저장소를 직접 다룬다.
+API 를 읽는 curses 모니터를 쓴다. 운영자는 여기에 더해
+`bin/gp-shell`·`bin/impala-shell`·`bin/s3-ops` 로 소스와 대상, 스테이징 저장소를 직접 다룬다.
 
 #### 1.4.2 Distributed Query Executor — Coordinator
 
-요청을 받아 검증하고 나누고 배분하는 제어 평면이다. `POST /jobs` 가 들어오면 멱등 키를 확인하고,
-템플릿을 쓰는 요청이면 서버에서 SQL 을 렌더한 뒤 파서로 검증하고 파티션 `IN` 목록 기준으로
-task 를 만든다. 이어서 admission 이 수용 여부를 판단해 넘치면 `429` 로 거절하고, 통과하면 job 을
-만들어 `202` 를 돌려준 뒤 백그라운드에서 실행한다.
+요청을 받아 검증하고 나누고 디스패치하는 control plane 이다. `POST /jobs` 가 들어오면 멱등 키를
+확인하고, 템플릿을 쓰는 요청이면 서버에서 SQL 을 렌더한 뒤 파서로 검증하고 파티션 `IN` 목록 기준으로
+task 를 만든다. 이어서 admission 이 받을지 판단해 넘치면 `429` 로 거절하고, 통과하면 job 을 만들어
+`202` 를 돌려준 뒤 백그라운드에서 실행한다.
 
 실행 중에는 각 executor 에 task 를 병렬로 디스패치하고 상태를 폴링하며, 종료되면 DONE·PARTIAL·
 FAILED·CANCELLED 중 하나로 집계한다. `local_stage` 와 `s3_stage` 에서는 모든 executor 가 파일을
@@ -97,7 +97,7 @@ FAILED·CANCELLED 중 하나로 집계한다. `local_stage` 와 `s3_stage` 에�
 
 #### 1.4.3 Distributed Query Executor — Executor
 
-실제로 데이터를 옮기는 데이터 평면이다. `POST /tasks` 로 task 를 받아 큐에 넣고, 소스에서 읽어
+실제로 데이터를 옮기는 data plane 이다. `POST /tasks` 로 task 를 받아 큐에 넣고, 소스에서 읽어
 (READING) 대상에 적재하는(WRITING) 동안 상태를 스스로 관리한다. 소스 읽기는 impyla 커서를 쓰고,
 커서가 없는 사내 API 는 커서처럼 감싸는 어댑터를 거치므로 읽기 루프는 같다. 적재는 `exec_mode` 에
 따라 갈려서 COPY 로 곧장 넣거나, staging 을 거치거나, CSV 파일을 만들어 Greenplum 이 외부테이블로
@@ -115,11 +115,11 @@ FAILED·CANCELLED 중 하나로 집계한다. `local_stage` 와 `s3_stage` 에�
 헬스 메트릭(`executor_health_metrics`) 일곱 테이블로 이루어진다.
 
 세 가지를 기억해 둔다. 첫째, 단일 coordinator 로 쓸 때는 이 저장소가 없어도 서비스가 돈다. 상태를
-메모리에 두기 때문이며, 이력만 남기고 싶으면 `history.db_dsn` 만 설정한다. 둘째, coordinator 를
-여러 대 띄우려면 이 저장소가 필수다. 그러지 않으면 작업을 접수한 인스턴스만 그 상태를 알아
-사용자가 자기 작업을 조회하지 못한다. 셋째, 앱이 테이블을 만들어 주기는 하지만 권한을 좁히거나
-미리 만들어 두려면 `config/postgresql.sql` 을 서비스 기동 전에 적용한다. 컬럼 단위 명세는 같은
-디렉터리의 `tables.md` 에 있다.
+메모리에 두기 때문이며, 이력만 남기고 싶으면 `history.db_dsn` 만 설정한다. 둘째, coordinator 를 여러
+대 띄우려면 이 저장소가 필수다. 그러지 않으면 job 을 접수한 인스턴스만 그 상태를 알아 사용자가 자기
+job 을 조회하지 못한다. 셋째, 앱이 테이블을 만들어 주기는 하지만 권한을 좁히거나 미리 만들어 두려면
+`config/postgresql.sql` 을 서비스 기동 전에 적용한다. 컬럼 단위 명세는 같은 디렉터리의
+`tables.md` 에 있다.
 
 #### 1.4.5 연계 시스템 — 소스와 적재 대상
 
@@ -181,8 +181,8 @@ Greenplum 쪽 PXF 구성이 더해진다.
 #### 2.1.2 구성요소
 
 백업 대상은 성격이 다른 셋으로 나뉜다. 첫째는 **운영자가 만든 자산**이다. 설정과 인증서, 쿼리
-템플릿, 사이트 커스텀 함수가 여기에 속하며 설치 스크립트가 덮지 않고 최초 한 번만 넣어 두는 것들
-이라 잃으면 손으로 다시 만들어야 한다. 둘째는 **메타 저장소**로, 작업 상태와 실행 이력이 담긴
+템플릿, 사이트 커스텀 함수가 여기에 속하며 설치 스크립트가 덮지 않고 최초 한 번만 넣어 두는
+것들 이라 잃으면 손으로 다시 만들어야 한다. 둘째는 **메타 저장소**로, job 상태와 실행 이력이 담긴
 PostgreSQL 이다. 셋째는 **로그**이며, 사고를 추적할 때만 필요하고 날짜별로 갈려 보존 기간이 지나면
 지워진다.
 
@@ -198,7 +198,7 @@ PostgreSQL 이다. 셋째는 **로그**이며, 사고를 추적할 때만 필요
 | 설정과 인증서 | `/data1/distributed-query-executor/config/` | 변경 시 | 파일 복사 | 3세대 이상 | 접속 정보와 TLS 인증서를 다시 채워야 한다 |
 | 쿼리 템플릿 | `/data1/distributed-query-executor/templates/` | 변경 시 | 파일 복사 | 3세대 이상 | 등록된 템플릿을 쓰는 요청이 모두 실패한다 |
 | 사이트 커스텀 함수 | `/data1/distributed-query-executor/customs/` | 변경 시 | 파일 복사 | 3세대 이상 | 커스텀 소스와 템플릿 함수가 동작하지 않는다 |
-| 메타 저장소 | PostgreSQL 데이터베이스 | 일 1회 | `pg_dump` | 기관 기준 | 진행 중 작업과 실행 이력을 잃는다 |
+| 메타 저장소 | PostgreSQL 데이터베이스 | 일 1회 | `pg_dump` | 기관 기준 | 진행 중 job 과 실행 이력을 잃는다 |
 | 애플리케이션 로그 | `/data1/distributed-query-executor/logs/` | 필요 시 | 파일 복사 | 30일(`log.backup_count`) | 지난 사고를 추적할 수 없다 |
 | 스테이징 CSV · S3 객체 | `stage.local_dir` · `s3.prefix` | — | 백업하지 않음 | — | 실행 중에만 쓰는 중간 산출물이라 영향이 없다 |
 | 애플리케이션 코드 · 가상환경 | 배포 트리 · `.venv` | — | 백업하지 않음 | — | `install.sh` 로 다시 만든다 |
@@ -239,9 +239,9 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/start-coordinator.sh
 psql "$PG" -f /data1/distributed-query-executor/config/postgresql.sql
 ```
 
-복구 뒤에는 상태가 어긋나 있을 수 있다는 점을 감안한다. 백업 시점에 RUNNING 이었던 job 은 그
-사이에 이미 끝났거나 중단됐을 수 있으므로, 복구 직후에는 진행 중으로 남은 작업을 확인하고 필요하면
-실패분만 다시 돌린다.
+복구 뒤에는 상태가 어긋나 있을 수 있다는 점을 감안한다. 백업 시점에 RUNNING 이었던 job 은 그 사이에
+이미 끝났거나 중단됐을 수 있으므로, 복구 직후에는 진행 중으로 남은 job 을 확인하고 필요하면 실패분만
+다시 돌린다.
 
 ### 2.2 보안 방안
 
@@ -262,9 +262,9 @@ coordinator 가 executor 화면을 대신 가져다줄 때는 임의 URL 을 프
 `dashboard.enabled=false` 로 끈다.
 
 **감사는 실행 SQL 로 한다.** 어떤 데이터소스에 어떤 문장을 던졌는지가 로그 레벨과 무관하게 항상
-남고, 모든 줄에 작업과 task 식별자가 붙는다. 사고가 났을 때 식별자 하나로 coordinator 와 executor
-의 기록을 이어 볼 수 있다. HTTP 본문까지 남기는 상세 로깅은 DEBUG 에서만 켜지며, 본문과 헤더는
-마스킹을 거친다.
+남고, 모든 줄에 job_id 와 task_id 가 붙는다. 사고가 났을 때 식별자 하나로 coordinator 와 executor 의
+기록을 이어 볼 수 있다. HTTP 본문까지 남기는 상세 로깅은 DEBUG 에서만 켜지며, 본문과 헤더는 마스킹을
+거친다.
 
 **에어갭을 전제로 한다.** Swagger UI 와 대시보드 폰트를 포함한 웹 에셋을 모두 트리 안에 넣어 두어
 런타임에 외부로 나가지 않고, 설치도 미리 받아 둔 휠 묶음으로 한다.
@@ -285,18 +285,17 @@ coordinator 가 executor 화면을 대신 가져다줄 때는 임의 URL 을 프
 표준 양식의 Web Server 와 WAS 이중화 자리다. 이 시스템은 두 층에서 서로 다른 방식으로 가용성을
 확보한다.
 
-**executor 는 여러 대를 두는 것이 곧 이중화다.** coordinator 가 task 를 배분할 때 살아 있고 한가한
-노드를 먼저 고르고, 연결에 실패하면 짧게 쉬었다가 몇 번 다시 걸어 본 뒤 다음 후보로 넘긴다
-(`coordinator.task_failover`). 한 대가 죽어도 나머지가 일을 나눠 받으므로 작업은 계속되고 용량만
-줄어든다. 다만 `local_stage` 는 executor 와 Greenplum 세그먼트가 짝지어 있어 다른 곳으로 넘어가면
-그 짝이 깨지므로, 이 모드에서는 failover 가 도는 것 자체가 배치나 호스트명 설정을 확인하라는
-신호다.
+**executor 는 여러 대를 두는 것이 곧 이중화다.** coordinator 가 task 를 디스패치할 때 살아 있고
+한가한 노드를 먼저 고르고, 연결에 실패하면 짧게 쉬었다가 몇 번 다시 걸어 본 뒤 다음 후보로 넘긴다
+(`coordinator.task_failover`). 한 대가 죽어도 나머지가 일을 나눠 받으므로 job 은 계속되고 용량만
+줄어든다. 다만 `local_stage` 는 executor 와 Greenplum 세그먼트가 짝지어 있어 다른 곳으로 넘어가면 그
+짝이 깨지므로, 이 모드에서는 failover 가 도는 것 자체가 배치나 호스트명 설정을 확인하라는 신호다.
 
 **coordinator 는 상태를 공유해야 여러 대를 둘 수 있다.** 기본 구성은 상태를 프로세스 메모리에 두
-므로, 그대로 두 대를 로드밸런서 뒤에 세우면 작업을 접수한 인스턴스만 그 상태를 알아 사용자가 자기
-작업을 조회하지 못한다. 그래서 Job 저장소와 이력을 공유 PostgreSQL 로 외부화하고, 각 coordinator 는
-자기 생존을 주기적으로 알린다. 신호가 끊긴 coordinator 가 쥐고 있던 작업은 다른 coordinator 가 거둬
-정합한다.
+므로, 그대로 두 대를 로드밸런서 뒤에 세우면 job 을 접수한 인스턴스만 그 상태를 알아 사용자가 자기
+job 을 조회하지 못한다. 그래서 Job 저장소와 이력을 공유 PostgreSQL 로 외부화하고, 각 coordinator 는
+자기 heartbeat 를 주기적으로 남긴다. heartbeat 가 끊긴 coordinator 가 쥐고 있던 job 은 다른
+coordinator 가 거둬 정합한다.
 
 ```properties
 store.backend=postgres                 # Job 저장소를 공유 PostgreSQL 로
@@ -305,13 +304,14 @@ executor.self_report=true              # executor 가 자기 상태를 직접 �
 coordinator.executor_select=p2c        # 여러 coordinator 에서의 쏠림 완화
 ```
 
-여러 대를 띄울 때 지켜야 하는 순서 관계가 있다. 장애를 판정하는 임계는 생존 신호 주기보다 넉넉히
+여러 대를 띄울 때 지켜야 하는 순서 관계가 있다. 장애를 판정하는 임계는 heartbeat 주기보다 넉넉히
 길어야 잠깐 늦은 것을 죽음으로 오판하지 않는다. `coordinator_stale_s` 를 `heartbeat_interval_s` 의
 두세 배로 두고, 예약 TTL 은 heartbeat 의 몇 배로 잡는다. 감지를 빠르게 하려면 이 값들을 한 세트로
 함께 줄인다.
 
-한 가지 더 기억할 것은 입구 한도가 인스턴스마다 따로 적용된다는 점이다. coordinator 를 두 대로
-늘리면 전체 수용량도 두 배가 되므로, 다운스트림이 감당할 수 있는 총량에 맞춰 값을 나눠 잡는다.
+한 가지 더 기억할 것은 admission 한도가 인스턴스마다 따로 적용된다는 점이다. coordinator 를 두 대로
+늘리면 전체 admission 용량도 두 배가 되므로, 다운스트림이 감당할 수 있는 총량에 맞춰 값을 나눠
+잡는다.
 
 #### 2.3.3 DB 이중화
 
