@@ -16,7 +16,7 @@ executor 가 소스에서 읽어 Greenplum 의 대상 테이블로 곧장 보내
 표기와 무관하게 언제나 `Y` 다.
 
 모든 시각 컬럼은 **타임존 없는 KST TIMESTAMP** 다. 이 시스템은 한국 단일 리전이라 UTC 변환을 두지
-않았고, 기본값도 `now() AT TIME ZONE 'Asia/Seoul'` 로 KST 벽시계를 넣는다. 앱이 직접 넣는 시각도
+않았고, 기본값도 `now() AT TIME ZONE 'Asia/Seoul'` 로 KST 기준 현재 시각을 넣는다. 앱이 직접 넣는 시각도
 같은 규칙의 문자열이다. `TEXT` 는 길이 제한을 두지 않으므로 SQL 전문처럼 긴 값도 그대로 들어간다.
 
 테이블 이름은 `db.schema` 설정으로 한정된다. 기본값이 `public` 이라 이 문서도 `public.` 을 붙여
