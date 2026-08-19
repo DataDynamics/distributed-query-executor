@@ -14,6 +14,11 @@
 직접 쓰는 쪽이라, 이관 결과가 제대로 들어갔는지 확인하거나 스테이징으로 남은 S3 객체를 정리할 때
 쓴다. 둘은 같은 설정 파일에서 접속 정보를 읽으므로 같은 값을 두 번 적을 필요가 없다.
 
+![분산 쿼리 실행기 전체 구성](images/architecture.svg)
+
+그림에서 눈여겨볼 것은 데이터가 coordinator 를 지나가지 않는다는 점이다. 요청과 상태만 굵지 않은
+점선을 타고 오가고, 실제 데이터는 executor 가 소스에서 읽어 대상으로 곧장 흘려보낸다.
+
 ---
 
 # 1장. 이관 작업 맡기기
@@ -90,13 +95,17 @@ curl -s localhost:8088/jobs \
 하나이고 어떤 파이프라인으로 실행할지는 `exec_mode` 필드 하나가 정한다. 같은 SELECT 와 파티션,
 target 을 두고 이 값만 바꾸면 COPY 로 넣을지 staging 을 거칠지 외부테이블로 넣을지가 갈린다.
 
-| `exec_mode` | 데이터가 흐르는 길 | 추가로 필요한 필드 | `write_mode` |
-|---|---|---|---|
-| `copy`(기본) | 소스 → executor → GP COPY | 없음 | 지원 |
-| `statement` | 대상에서 받은 SQL 실행(스트림 없음) | 없음 | 해당 없음 |
-| `stage_insert` | 소스 → staging COPY → target INSERT | `staging_table`, `wrapper_query` | 미적용(항상 append) |
-| `local_stage` | 소스 → 세그먼트 로컬 CSV → `file://` 외부테이블 | `staging_table`, `external_columns`, `insert_sql` | 지원 |
-| `s3_stage` | 소스 → 로컬 CSV → S3 → PXF 외부테이블 | `staging_table`, `external_columns`, `insert_sql` | 지원 |
+다섯 경로를 나란히 늘어놓으면 무엇이 다른지가 한눈에 들어온다.
+
+![exec_mode 다섯 가지 경로](images/exec-modes.svg)
+
+말로 옮기면 이렇다. `copy` 는 소스에서 읽은 결과를 executor 가 Greenplum 으로 곧장 COPY 하며 추가
+필드가 없고 `write_mode` 를 지원한다. `statement` 는 받은 SQL 을 대상이 그대로 실행하므로 executor
+를 지나는 COPY 스트림이 아예 없다. `stage_insert` 는 staging 을 거쳐 target 으로 INSERT 하는 표준
+경로이며 `staging_table` 과 `wrapper_query` 가 필수이고, `write_mode` 를 적용하지 않아 적재가 언제나
+append 다. `local_stage` 와 `s3_stage` 는 executor 가 CSV 를 만들어 두면 Greenplum 이 외부테이블로
+당겨 읽는 2-phase 구조여서 둘 다 `staging_table` 과 `external_columns`, `insert_sql` 이 필수이고
+`write_mode` 를 지원하며, 차이는 스테이징 매체와 배치 제약뿐이다.
 
 기본값은 `copy` 이며 대부분의 경우에 맞는다. 템플릿을 쓰면 manifest 의 `exec_mode` 가 기본값이
 되고, 요청에 명시하면 요청이 이긴다. 모드마다 요청에 더 넣어야 하는 필드가 다르고, 빠지면 접수
@@ -318,8 +327,12 @@ trunc(current_date() - interval 3 day)` 처럼 렌더된다.
 
 ## 진행 상황 확인
 
-제출과 완료는 별개이므로 `job_id` 로 상태를 물어본다. 조회는 두 가지인데, 반복해서 물어볼 때는 조각
-목록이 빠진 가벼운 쪽을 쓴다.
+제출과 완료는 별개이므로 `job_id` 로 상태를 물어본다. 작업 하나가 어떤 상태를 지나가는지 먼저
+보아 두면 폴링을 어디서 멈춰야 하는지가 분명해진다.
+
+![작업 하나가 지나가는 상태](images/job-lifecycle.svg)
+
+조회는 두 가지인데, 반복해서 물어볼 때는 조각 목록이 빠진 가벼운 쪽을 쓴다.
 
 ```bash
 curl -s localhost:8088/jobs/$JOB_ID/status   # 가볍다 — 폴링에는 이쪽
@@ -477,26 +490,34 @@ curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
 { "detail": [ { "loc": ["body", "parallelism"], "msg": "...", "type": "..." } ] }
 ```
 
-자주 만나는 `error_code` 는 다음과 같다.
+자주 만나는 `error_code` 는 갈래별로 읽으면 외우지 않아도 된다.
 
-| 갈래 | `error_code` | 뜻과 대처 |
-|---|---|---|
-| 분할 | `NO_PARTITION_IN_CLAUSE` | `partition_column` 의 `IN` 절이 SQL 에 없다 |
-| 분할 | `MISSING_PARTITION_COLUMN` | `partition_column` 필드 자체를 주지 않았다 |
-| 분할 | `EMPTY_IN_LIST` | `IN` 절은 있는데 값이 비었다 |
-| 분할 | `NEGATED_IN` / `SUBQUERY_IN_CLAUSE` | `NOT IN` 이거나 `IN (SELECT …)` 라 나눌 기준이 없다. 값 목록으로 바꾼다 |
-| 파싱 | `NOT_A_SELECT` / `MULTIPLE_STATEMENTS` | SELECT 가 아니거나 여러 문장을 한 번에 보냈다 |
-| 파싱 | `PARSE_ERROR` | SQL 을 해석하지 못했다. 문법이 맞는데도 나면 `sql_dialect` 를 지정해 본다 |
-| 파싱 | `UNSUPPORTED_JOIN` 외 4종 | `strict_validation: true` 가 단순 SELECT 만 받는다. `false` 로 두면 복합 쿼리도 받는다 |
-| 필드 | `MISSING_REQUIRED_FIELDS` | 공통 필수 필드가 빠졌다 |
-| 필드 | `STAGE_INSERT_REQUIRES_FIELDS` 외 2종 | 그 `exec_mode` 에만 필요한 필드가 빠졌다. 위 모드별 표를 본다 |
-| 템플릿 | `TEMPLATE_NOT_FOUND` | 그런 템플릿이 없다. `GET /templates` 로 이름을 확인한다 |
-| 템플릿 | `TEMPLATE_PARAM_ERROR` / `TEMPLATE_RENDER_ERROR` | 파라미터가 빠졌거나 렌더 도중 실패했다 |
-| fan-out | `FANOUT_REQUIRES_TEMPLATE` | `task_params` 를 줬는데 `template_id` 가 없다 |
-| fan-out | `FANOUT_REQUIRES_STAGE_INSERT` | 지원하지 않는 `exec_mode` 에서 쓰려 했다 |
-| fan-out | `TASK_PARAMS_INVALID` / `TASK_PARAM_NOT_NUMERIC` | 지목한 이름이 `params` 에 없거나 값이 정수가 아니다 |
-| fan-out | `TASK_RANGE_EMPTY` / `TASK_RANGE_TOO_LARGE` | 구간이 비었거나 너무 넓다. 기간을 좁힌다 |
-| fan-out | `TEMPLATE_MISSING_SIGN_VAR` | 템플릿이 부호 변수를 쓰지 않는다. 막지 않으면 각 조각이 넓은 구간을 읽어 조용히 중복 적재된다 |
+가장 흔한 것은 쿼리를 나눌 수 없는 경우다. `NO_PARTITION_IN_CLAUSE` 는 `partition_column` 으로 지정한
+컬럼의 `IN` 절이 SQL 에 없다는 뜻이고, `MISSING_PARTITION_COLUMN` 은 그 필드 자체를 주지 않은
+것이다. `IN` 절이 있어도 값이 비었으면 `EMPTY_IN_LIST` 가 나오고, `NOT IN` 처럼 부정형이거나
+(`NEGATED_IN`) `IN (SELECT ...)` 처럼 서브쿼리면(`SUBQUERY_IN_CLAUSE`) 나눌 기준이 없어 역시
+거절된다. 값 목록으로 바꿔 주면 된다.
+
+쿼리 자체가 받아들여지지 않는 경우도 있다. `NOT_A_SELECT` 는 SELECT 가 아니라는 뜻이고,
+`MULTIPLE_STATEMENTS` 는 여러 문장을 한 번에 보냈다는 뜻이다. `PARSE_ERROR` 는 SQL 을 해석하지
+못한 것인데, 문법이 맞는데도 나온다면 방언이 달라서일 수 있으므로 `sql_dialect` 를 지정해 본다.
+
+필드가 모자란 경우는 메시지가 무엇이 빠졌는지 짚어 준다. `MISSING_REQUIRED_FIELDS` 는 공통 필수
+필드가 빠진 것이고, `STAGE_INSERT_REQUIRES_FIELDS`·`LOCAL_STAGE_REQUIRES_FIELDS`·
+`S3_STAGE_REQUIRES_FIELDS` 는 그 모드에만 필요한 필드가 빠진 것이다. 무엇을 채워야 하는지는 앞의
+"exec_mode 고르기"에 모드별로 정리돼 있다.
+
+템플릿 쪽 오류도 비슷하게 읽으면 된다. `TEMPLATE_NOT_FOUND` 는 그런 템플릿이 없다는 뜻이라
+`GET /templates` 로 이름을 확인하고, `TEMPLATE_PARAM_ERROR` 는 템플릿이 요구하는 파라미터가 빠진
+것이며, `TEMPLATE_RENDER_ERROR` 는 렌더 도중 실패한 것이다.
+
+날짜 fan-out 에는 전용 코드가 몇 개 더 있다. `FANOUT_REQUIRES_TEMPLATE` 는 `task_params` 를 줬는데
+`template_id` 가 없다는 뜻이고, `FANOUT_REQUIRES_STAGE_INSERT` 는 지원하지 않는 `exec_mode` 에서
+쓰려 한 것이다. `TASK_PARAMS_INVALID` 는 지목한 이름이 형식에 맞지 않거나 `params` 에 없는
+경우이고, `TASK_PARAM_NOT_NUMERIC` 은 값이 정수가 아닌 경우다. 구간이 비면 `TASK_RANGE_EMPTY`,
+너무 넓으면 `TASK_RANGE_TOO_LARGE` 가 나오므로 기간을 좁힌다. `TEMPLATE_MISSING_SIGN_VAR` 은 템플릿이
+부호 변수를 쓰지 않는다는 뜻인데, 이것을 막지 않으면 각 조각이 의도보다 넓은 구간을 읽어 조용히
+중복 적재되므로 접수 단계에서 거절한다.
 
 `UNSUPPORTED_JOIN` 과 `UNSUPPORTED_GROUP_BY`, `UNSUPPORTED_HAVING`, `UNSUPPORTED_DISTINCT`,
 `UNSUPPORTED_AGGREGATE` 는 원인이 모두 하나다. 기본값인 `strict_validation: true` 가 단순한 SELECT
@@ -576,11 +597,9 @@ coordinator 를 여러 대 두고 로드밸런서 뒤에 놓았는데 상태 저
 제대로 들어갔는지 대상 테이블을 바로 확인하거나, 소스에서 표본을 뽑아 보거나, 스테이징으로 남은 S3
 객체를 들여다보고 정리할 때 쓴다.
 
-| 명령 | 하는 일 |
-|---|---|
-| `bin/gp-shell` | Greenplum 대화형 SQL 셸(`psql` 처럼 붙어서 주고받는다) |
-| `bin/impala-shell` | Impala 대화형 SQL 셸(`beeline` 처럼) |
-| `bin/s3-ops` | S3 객체 업로드·다운로드·복사·이동·삭제·목록·내용 확인 |
+도구는 셋이다. `bin/gp-shell` 은 Greenplum 대화형 SQL 셸로 `psql` 처럼 붙어서 주고받고,
+`bin/impala-shell` 은 같은 일을 Impala 에 대해 `beeline` 처럼 한다. `bin/s3-ops` 는 S3 객체를 올리고
+내리고 복사하고 옮기고 지우며 목록과 내용까지 들여다본다.
 
 ## 실행 방법과 설정
 
@@ -932,7 +951,9 @@ package` 라는 조금 이상한 메시지는 지금 있는 디렉터리에 `imp
 # 3장. 두 축을 함께 쓰기
 
 이관을 맡기고 결과를 확인하는 흐름은 대개 이렇게 이어진다. 작업을 넣고, 끝날 때까지 기다리고,
-대상 테이블에서 실제로 확인하는 세 걸음이다.
+대상 테이블에서 실제로 확인하는 세 걸음이다. 끝난 뒤 무엇을 해야 하는지는 종료 상태가 정한다.
+
+![제출하고, 기다리고, 실제로 확인하기](images/verify-loop.svg)
 
 ```bash
 # 1) 이관 작업 제출

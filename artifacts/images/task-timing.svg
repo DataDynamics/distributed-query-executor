@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 440" width="1100" height="440" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/></marker>
+<marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1100" height="440" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">조각 하나의 벽시계를 네 갈래로 나눠 본다</text>
+<text x="28" y="60" font-size="13" fill="#64748b">가장 큰 항이 곧 병목이다. 대시보드의 단계 타임라인과 task_history 가 같은 값을 준다</text>
+<text x="28" y="118" font-size="12" fill="#0f172a" text-anchor="start" font-weight="700">copy.pipeline = true</text>
+<text x="28" y="136" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">읽기와 쓰기가 겹친다</text>
+<rect x="250" y="96" width="250" height="58" rx="8" fill="#fed7aa" stroke="#ea580c" stroke-width="1.4"/>
+<text x="375.0" y="123.0" font-size="13" font-weight="700" fill="#0f172a" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read_starve</text>
+<text x="375.0" y="141.0" font-size="11.5" fill="#475569" text-anchor="middle">다음 배치를 기다린 시간</text>
+<rect x="504" y="96" width="250" height="58" rx="8" fill="#bbf7d0" stroke="#059669" stroke-width="1.4"/>
+<text x="629.0" y="123.0" font-size="13" font-weight="700" fill="#0f172a" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">write_wait</text>
+<text x="629.0" y="141.0" font-size="11.5" fill="#475569" text-anchor="middle">인코딩과 송신</text>
+<rect x="758" y="96" width="300" height="58" rx="8" fill="#ddd6fe" stroke="#7c3aed" stroke-width="1.4"/>
+<text x="908.0" y="123.0" font-size="13" font-weight="700" fill="#0f172a" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">finalize_wait</text>
+<text x="908.0" y="141.0" font-size="11.5" fill="#475569" text-anchor="middle">COPY 가 끝나기를 기다림</text>
+<text x="28" y="200" font-size="12" fill="#0f172a" text-anchor="start" font-weight="700">copy.pipeline = false</text>
+<text x="28" y="218" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">직렬이라 원인 격리에 좋다</text>
+<rect x="250" y="178" width="420" height="58" rx="8" fill="#bfdbfe" stroke="#2563eb" stroke-width="1.4"/>
+<text x="460.0" y="205.0" font-size="13" font-weight="700" fill="#0f172a" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read_wait</text>
+<text x="460.0" y="223.0" font-size="11.5" fill="#475569" text-anchor="middle">소스에서 읽는 순수 시간</text>
+<rect x="674" y="178" width="384" height="58" rx="8" fill="#bbf7d0" stroke="#059669" stroke-width="1.4"/>
+<text x="866.0" y="205.0" font-size="13" font-weight="700" fill="#0f172a" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">write_wait</text>
+<text x="866.0" y="223.0" font-size="11.5" fill="#475569" text-anchor="middle">인코딩과 송신</text>
+<rect x="28" y="268" width="336" height="104" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+<text x="196.0" y="295.8333333333333" font-size="13" font-weight="700" fill="#c2410c" text-anchor="middle">read_starve 가 지배적이면 — 소스가 느리다</text>
+<text x="196.0" y="314.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">parallelism 을 올려 여러 executor 가 서로 다른</text>
+<text x="196.0" y="333.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">파티션을 동시에 읽게 하고, copy.batch_size 와</text>
+<text x="196.0" y="352.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">impala.query_options 를 손본다</text>
+<rect x="382" y="268" width="336" height="104" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="550.0" y="295.8333333333333" font-size="13" font-weight="700" fill="#047857" text-anchor="middle">write_wait 가 지배적이면 — executor 가 느리다</text>
+<text x="550.0" y="314.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">copy.format=binary 로 텍스트 인코딩 CPU 를 줄이고,</text>
+<text x="550.0" y="333.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">executor 와 GP 사이 네트워크를 점검한 뒤</text>
+<text x="550.0" y="352.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">copy.batch_size 를 올린다</text>
+<rect x="736" y="268" width="336" height="104" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="904.0" y="295.8333333333333" font-size="13" font-weight="700" fill="#6d28d9" text-anchor="middle">finalize_wait 가 지배적이면 — GP 가 느리다</text>
+<text x="904.0" y="314.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">parallelism 과 greenplum.pool_max 를 조정하고,</text>
+<text x="904.0" y="333.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">그래도 남으면 마스터로 몰리는 COPY 대신</text>
+<text x="904.0" y="352.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">local_stage · s3_stage 로 경로를 바꾼다</text>
+<text x="28" y="404" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">파이프라인에서 벽시계는 대략 read_starve + write_wait + finalize_wait 이다. read_starve 와 write_wait 가 비슷하다면 이미 잘 겹치는 상태이므로 다음 수는 수평 확장이다.</text>
+</svg>

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 360" width="1020" height="360" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/></marker>
+<marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1020" height="360" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">작업 하나가 지나가는 상태</text>
+<text x="28" y="60" font-size="13" fill="#64748b">종료 상태는 넷이고, 온전한 성공은 DONE 하나뿐이다</text>
+<text x="28" y="146" font-size="13" fill="#0f172a" text-anchor="start" font-weight="700">POST /jobs</text>
+<text x="28" y="166" font-size="12" fill="#475569" text-anchor="start" font-weight="400">202 + job_id</text>
+<line x1="124" y1="156" x2="162" y2="156" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<rect x="164" y="126" width="150" height="60" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="239.0" y="150.66666666666666" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">PENDING</text>
+<text x="239.0" y="170.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">실행 슬롯 대기</text>
+<rect x="354" y="126" width="150" height="60" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="429.0" y="150.66666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">SPLITTING</text>
+<text x="429.0" y="170.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">검증과 분할</text>
+<rect x="544" y="126" width="150" height="60" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="619.0" y="150.66666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">RUNNING</text>
+<text x="619.0" y="170.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">조각 실행</text>
+<line x1="314" y1="156" x2="352" y2="156" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<line x1="504" y1="156" x2="542" y2="156" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<rect x="780" y="70" width="214" height="46" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="887.0" y="97.33333333333333" font-size="13" font-weight="700" fill="#047857" text-anchor="middle">DONE — 전부 성공</text>
+<rect x="780" y="126" width="214" height="46" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="887.0" y="153.33333333333334" font-size="13" font-weight="700" fill="#92400e" text-anchor="middle">PARTIAL — 일부만</text>
+<rect x="780" y="182" width="214" height="46" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.6"/>
+<text x="887.0" y="209.33333333333334" font-size="13" font-weight="700" fill="#b91c1c" text-anchor="middle">FAILED — 실패</text>
+<rect x="780" y="238" width="214" height="46" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.6"/>
+<text x="887.0" y="265.3333333333333" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">CANCELLED — 취소</text>
+<path d="M694,156 H734 V93 H777" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<path d="M694,156 H734 V149 H777" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<path d="M694,156 H734 V205 H777" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<path d="M694,156 H734 V261 H777" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<rect x="24" y="240" width="186" height="58" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.6"/>
+<text x="117.0" y="263.8333333333333" font-size="13" font-weight="700" fill="#b91c1c" text-anchor="middle">429 거절</text>
+<text x="117.0" y="282.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">슬롯과 대기 큐가 모두 참</text>
+<path d="M117,178 V234" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arm)"/>
+<path d="M994,261 H1006 V322 H154 V190" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arm)"/>
+<text x="566" y="314" font-size="12" fill="#475569" text-anchor="middle">POST /retry — 실패하거나 취소된 조각만 모아 새 job 으로 다시 돌린다</text>
+</svg>
