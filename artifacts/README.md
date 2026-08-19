@@ -29,13 +29,19 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 기술 아키텍처 정의서다. 소프트웨어 구성과 구성요소별 정의, 구성요소 매핑에 더해 백업·복구와 보안,
 가용성 방안이 들어 있다. 하드웨어와 네트워크처럼 아직 정하지 않은 절은 표 골격만 두고 비워 두었다.
 
-네 문서는 다른 문서에 옮겨 붙이기 좋도록 Word 판을 함께 둔다 — 두 가이드
-([USER_GUIDE.docx](USER_GUIDE.docx), [OPERATOR_GUIDE.docx](OPERATOR_GUIDE.docx))와 두 정의서
-([sw-architecture.docx](sw-architecture.docx), [tech-architecture.docx](tech-architecture.docx))다.
+다섯 문서는 다른 문서에 옮겨 붙이기 좋도록 Word 판을 함께 둔다 — 두 가이드
+([USER_GUIDE.docx](USER_GUIDE.docx), [OPERATOR_GUIDE.docx](OPERATOR_GUIDE.docx))와 세 정의서
+([sw-architecture.docx](sw-architecture.docx), [tech-architecture.docx](tech-architecture.docx),
+[data-architecture.docx](data-architecture.docx))다.
 Word 기본 내장 스타일만 써서 꾸밈을 넣지 않았으므로, 붙여 넣는 문서의 서식을 그대로 따라간다.
 원본은 어디까지나 `.md` 이고 Word 판은 그것을 옮긴 것이므로, 내용을 고칠 때는 `.md` 를 고친 뒤
 다시 변환한다. `docs/` 의 사용자·운영자 문서도 같은 방식으로 만든 `USER.docx`·`OPERATOR.docx` 를
 함께 둔다.
+
+[data-architecture.md](data-architecture.md) 는 같은 시스템을 데이터 관점에서 본 데이터 아키텍처
+정의서다. 데이터를 소유하지 않고 옮긴다는 전제에서 출발해 이관·메타·중간 세 갈래로 영역을 가르고,
+식별자와 시각·CSV 형식·타입 처리 표준, 메타 데이터 모델, 데이터가 갈라지고 합쳐지는 흐름, 재실행
+안전성과 분할의 정확성, 보안과 수명주기, 용량 산정까지 담았다.
 
 [er-diagram.md](er-diagram.md) 는 이 시스템이 무엇을 기억하는지를 다룬다. 개념과 관계만 보는 논리
 ER 한 장과, 실제 DDL 이 만드는 테이블을 그대로 보여 주는 물리 ER 두 장(PostgreSQL 판과 WarehousePG
@@ -65,13 +71,15 @@ ER 한 장과, 실제 DDL 이 만드는 테이블을 그대로 보여 주는 물
 전체 구성(`architecture.svg`), 작업 상태 전이(`job-lifecycle.svg`), 실행 모드별 데이터 경로
 (`exec-modes.svg`), 제출부터 확인까지의 흐름(`verify-loop.svg`), 과부하 방어 세 층(`admission.svg`),
 task 하나의 시간 분해(`task-timing.svg`), `s3_stage` 의 3단계(`s3-stage-phases.svg`), 백업
-구성도(`backup-topology.svg`), 연계 논리 모델(`integration-model.svg`), 그리고 이 디렉터리의
+구성도(`backup-topology.svg`), 연계 논리 모델(`integration-model.svg`), 데이터 세
+갈래(`data-domains.svg`)와 그 수명주기(`data-lifecycle.svg`), 그리고 이 디렉터리의
 구성(`merge-map.svg`)이 있다.
 
 클래스 그림은 `class-*.svg`, 시퀀스 그림은 `seq-*.svg`, ER 그림은 `er-*.svg` 이며 이 셋은 같은
-이름의 PNG 도 함께 둔다. 여기에 두 아키텍처 정의서의 Word 판이 쓰는 그림
+이름의 PNG 도 함께 둔다. 여기에 문서의 Word 판이 쓰는 그림
 (`architecture` · `admission` · `exec-modes` · `s3-stage-phases` · `backup-topology` ·
-`integration-model`)도 PNG 를 함께 둔다. Word 가 SVG 를 그리지 못하기 때문이다.
+`integration-model` · `data-domains` · `data-lifecycle` · `job-lifecycle` · `verify-loop` ·
+`task-timing`)도 PNG 를 함께 둔다. Word 가 SVG 를 그리지 못하기 때문이다.
 PNG 는 가로 두 배 해상도로 뽑아 두었으므로 SVG 를 받지 않는 발표 자료나 사내 위키에 그대로 쓸 수
 있다. 그림을 고칠 때는 SVG 를 고치고 PNG 를 다시 뽑아 둘을 함께 갱신한다.
 
