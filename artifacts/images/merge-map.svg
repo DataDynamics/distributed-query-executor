@@ -6,7 +6,7 @@
 </defs>
 <rect x="0" y="0" width="1020" height="396" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
 <text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">두 저장소를 독자별 문서 두 벌로 합쳤다</text>
-<text x="28" y="60" font-size="13" fill="#64748b">각 문서는 자립형이라 링크를 따라다니지 않고 하나만 읽어도 그 역할의 일이 끝난다</text>
+<text x="28" y="60" font-size="13" fill="#64748b">각 문서는 self-contained 문서라 링크를 따라다니지 않고 하나만 읽어도 그 역할의 일이 끝난다</text>
 <rect x="24" y="108" width="300" height="92" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
 <text x="174.0" y="138.66666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">distributed-query-executor</text>
 <text x="174.0" y="158.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">coordinator·executor 서비스</text>

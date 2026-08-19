@@ -10,7 +10,7 @@
 <text x="28" y="150" font-size="13" fill="#0f172a" text-anchor="start" font-weight="700">요청</text>
 <line x1="70" y1="145" x2="108" y2="145" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
 <rect x="110" y="100" width="268" height="132" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
-<text x="244.0" y="140.66666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">1층 — 입구(coordinator)</text>
+<text x="244.0" y="140.66666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">1층 — admission(coordinator)</text>
 <text x="244.0" y="160.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">max_concurrent_jobs = 16 (실행 슬롯)</text>
 <text x="244.0" y="180.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">max_pending_jobs = 100 (대기 큐)</text>
 <text x="244.0" y="200.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">합을 넘으면 429 + Retry-After</text>
@@ -18,18 +18,18 @@
 <text x="543.0" y="140.66666666666666" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">2층 — 디스패치</text>
 <text x="543.0" y="160.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">max_dispatch_concurrency = 32</text>
 <text x="543.0" y="180.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">coordinator 가 동시에 띄우는</text>
-<text x="543.0" y="200.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">조각 수의 상한</text>
+<text x="543.0" y="200.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">task 수의 상한</text>
 <rect x="708" y="100" width="320" height="132" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
 <text x="868.0" y="140.66666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">3층 — executor</text>
 <text x="868.0" y="160.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">executor.max_concurrent_tasks = 8</text>
-<text x="868.0" y="180.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">× executor 수 = 플릿 동시 조각 수</text>
+<text x="868.0" y="180.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">× executor 수 = fleet 동시 task 수</text>
 <text x="868.0" y="200.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">GP 연결은 greenplum.pool_max</text>
 <line x1="378" y1="166" x2="412" y2="166" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
 <line x1="672" y1="166" x2="706" y2="166" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
 <rect x="110" y="288" width="918" height="104" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
-<text x="569.0" y="324.6666666666667" font-size="14" font-weight="700" fill="#92400e" text-anchor="middle">유효 동시 조각 수 ≈ min( 플릿 합,  Greenplum 이 견디는 동시 COPY 세션,  Impala 쿼리 슬롯 )</text>
-<text x="569.0" y="344.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">천장은 coordinator 가 아니라 다운스트림이 정한다. 다운스트림의 안전 한도를 먼저 확정하고,</text>
+<text x="569.0" y="324.6666666666667" font-size="14" font-weight="700" fill="#92400e" text-anchor="middle">유효 동시 task 수 ≈ min( fleet 합,  Greenplum 이 견디는 동시 COPY 세션,  Impala 쿼리 슬롯 )</text>
+<text x="569.0" y="344.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">ceiling 은 coordinator 가 아니라 downstream 이 정한다. downstream 의 안전 한도를 먼저 확정하고,</text>
 <text x="569.0" y="364.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">그 한도를 executor 풀에 나눠 분배한 뒤, 디스패치 상한은 그 합보다 넉넉히 크게 둔다.</text>
 <path d="M868,232 V286" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
-<text x="28" y="430" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">executor 가 한가한데 429 가 난다면 1층이 좁고, 이미 포화라면 3층을 늘리거나 노드를 더한다. 2층이 플릿 용량보다 작으면 executor 가 놀아도 조각이 나가지 못한다.</text>
+<text x="28" y="430" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">executor 가 한가한데 429 가 난다면 1층이 좁고, 이미 포화라면 3층을 늘리거나 노드를 더한다. 2층이 fleet 용량보다 작으면 executor 가 놀아도 task 가 나가지 못한다.</text>
 </svg>

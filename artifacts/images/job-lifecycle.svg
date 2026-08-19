@@ -18,7 +18,7 @@
 <text x="429.0" y="170.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">검증과 분할</text>
 <rect x="544" y="126" width="150" height="60" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
 <text x="619.0" y="150.66666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">RUNNING</text>
-<text x="619.0" y="170.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">조각 실행</text>
+<text x="619.0" y="170.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">task 실행</text>
 <line x1="314" y1="156" x2="352" y2="156" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
 <line x1="504" y1="156" x2="542" y2="156" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
 <rect x="780" y="70" width="214" height="46" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
@@ -38,5 +38,5 @@
 <text x="117.0" y="282.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">슬롯과 대기 큐가 모두 참</text>
 <path d="M117,178 V234" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arm)"/>
 <path d="M994,261 H1006 V322 H154 V190" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arm)"/>
-<text x="566" y="314" font-size="12" fill="#475569" text-anchor="middle">POST /retry — 실패하거나 취소된 조각만 모아 새 job 으로 다시 돌린다</text>
+<text x="566" y="314" font-size="12" fill="#475569" text-anchor="middle">POST /retry — 실패하거나 취소된 task 만 모아 새 job 으로 다시 돌린다</text>
 </svg>

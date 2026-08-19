@@ -16,7 +16,7 @@
 
 운영 판단을 하려면 구조를 한 문단쯤은 알고 있어야 한다.
 
-coordinator 한 대가 요청을 받아 SQL 을 조각으로 나누고 executor 여러 대에 나눠 준다. 여기서 중요한
+coordinator 한 대가 요청을 받아 SQL 을 task 로 나누고 executor 여러 대에 나눠 준다. 여기서 중요한
 것은 데이터가 coordinator 를 지나가지 않는다는 점이다. executor 가 소스에서 읽어 Greenplum 으로
 곧장 보내고 coordinator 로는 상태와 행 수만 올라온다. 그래서 coordinator 가 병목이 되는 일은 드물고,
 처리량을 늘릴 때 손대는 것은 거의 언제나 executor 쪽이다.
@@ -24,11 +24,11 @@ coordinator 한 대가 요청을 받아 SQL 을 조각으로 나누고 executor 
 두 서비스 모두 상태를 프로세스 메모리에 들고 있어 단일 워커로 돈다. 워커 수를 늘리는 방식의 확장은
 하지 않으며, 늘릴 것은 executor 인스턴스 수다.
 
-과부하 방어는 세 층으로 겹겹이 이루어진다. 첫째 층은 작업 단위 입구 통제다. 동시에 RUNNING 일 수
-있는 작업 수를 실행 슬롯으로 제한하고, 슬롯이 차면 대기 큐에 세우며, 실행과 대기의 합마저 넘으면
-429 로 거절한다. 둘째 층은 한 coordinator 가 모든 작업을 통틀어 동시에 띄우는 조각 수의 상한이고,
-셋째 층은 executor 한 대가 동시에 실행하는 조각 수의 상한이다. 이 셋이 각각 어떤 설정에 대응하는지는
-"동시성과 용량"에서 다룬다.
+과부하 방어는 세 층으로 겹겹이 이루어진다. 첫째 층은 작업 단위 admission control 이다. 동시에
+RUNNING 일 수 있는 작업 수를 실행 슬롯으로 제한하고, 슬롯이 차면 대기 큐에 세우며, 실행과 대기의
+합마저 넘으면 429 로 거절한다. 둘째 층은 한 coordinator 가 모든 작업을 통틀어 동시에 띄우는 task
+수의 상한이고, 셋째 층은 executor 한 대가 동시에 실행하는 task 수의 상한이다. 이 셋이 각각 어떤
+설정에 대응하는지는 "동시성과 용량"에서 다룬다.
 
 ![분산 쿼리 실행기 전체 구성](images/architecture.svg)
 
@@ -62,11 +62,11 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status-coordinator.sh
 sudo -u gpadmin /data1/distributed-query-executor/bin/status-executor.sh
 ```
 
-`install.sh` 는 서비스 계정 `gpadmin` 을 만들고, 앱을 `/data1/distributed-query-executor` 로 복사하고,
-그 아래 `.venv` 에 의존성을 설치하고, 설정·템플릿·커스텀 함수를 **아직 없을 때만** 시딩하고, 런처
-스크립트와 권한을 정리한다. `config/`·`templates/`·`customs/` 를 rsync 에서 제외하는 이유는 운영자가
-채운 값과 인증서, 직접 추가한 템플릿을 지우지 않기 위해서다. 그 대가로 새 버전이 바꾼 기본값도
-자동으로 들어오지 않으므로, 업그레이드 절차는 마지막 장에서 따로 다룬다.
+`install.sh` 는 서비스 계정 `gpadmin` 을 만들고, 앱을 `/data1/distributed-query-executor` 로
+복사하고, 그 아래 `.venv` 에 의존성을 설치하고, 설정·템플릿·커스텀 함수를 **아직 없을 때만** seeding
+하고, 런처 스크립트와 권한을 정리한다. `config/` · `templates/` · `customs/` 를 rsync 에서 제외하는
+이유는 운영자가 채운 값과 인증서, 직접 추가한 템플릿을 지우지 않기 위해서다. 그 대가로 새 버전이
+바꾼 기본값도 자동으로 들어오지 않으므로, 업그레이드 절차는 마지막 장에서 따로 다룬다.
 
 설치 전후로 필요한 것이 갖춰졌는지 확인하고 싶으면 사전 점검 스크립트를 쓴다. OS 패키지와 파이썬
 휠이 준비됐는지 확인만 하고 설치는 하지 않으며, 종료 코드로도 알려 주므로 자동화에 끼워 넣을 수 있다.
@@ -94,7 +94,7 @@ coordinator 는 기본 의존성만으로 뜬다. executor 는 소스와 대상 
 
 `bin/systemd/` 에 coordinator 와 executor 유닛이 있고 `install-systemd.sh` 가 배치한다. executor 는
 포트별 인스턴스(`executor@8087.service`)로 뜬다. 여기서 하나만 기억하면 되는데, executor 는 SIGTERM
-을 받으면 진행 중인 조각이 끝나기를 `executor.shutdown_drain_timeout_s`(기본 25초)만큼 기다렸다
+을 받으면 진행 중인 task 가 끝나기를 `executor.shutdown_drain_timeout_s`(기본 25초)만큼 기다렸다
 내려가므로 **`TimeoutStopSec` 이 이보다 길어야** 그 대기가 의미를 갖는다.
 
 ---
@@ -264,7 +264,7 @@ tail -f $L/query-executor-server-8087-warn.log
 
 `*-warn.log` 는 경고와 오류만 모아 둔 것이라 문제를 좇을 때는 이쪽부터 훑는 편이 빠르다.
 
-모든 로그 줄에는 작업과 조각 식별자가 붙는다. 그래서 사용자가 `job_id` 를 알려 주면 그것만으로
+모든 로그 줄에는 작업과 task 식별자가 붙는다. 그래서 사용자가 `job_id` 를 알려 주면 그것만으로
 관련된 줄을 전부 모을 수 있고, coordinator 와 executor 의 로그를 같은 식별자로 이어 볼 수 있다.
 
 ```bash
@@ -290,15 +290,15 @@ HTTP 요청과 응답까지 보려면 로그 레벨을 DEBUG 로 내린다. 다�
 
 # 5장. 동시성과 용량
 
-값을 얼마로 잡을지는 이 장 하나로 판단할 수 있다. 손잡이가 어느 층에 붙어 있는지부터 그림으로
+값을 얼마로 잡을지는 이 장 하나로 판단할 수 있다. 어느 층에 어떤 파라미터가 붙어 있는지부터 그림으로
 잡아 두면 어디를 올려야 할지가 분명해진다.
 
 ![과부하 방어는 세 층으로 겹친다](images/admission.svg)
 
-## 천장은 coordinator 가 아니라 다운스트림이다
+## ceiling 은 coordinator 가 아니라 downstream 이다
 
-전체 처리량의 천장은 coordinator 가 아니라 그 뒤의 Impala 와 Greenplum 이 정한다. 동시에 처리할 수
-있는 조각 수의 실효 상한은 다음 세 값 중 가장 작은 것이다.
+전체 처리량의 ceiling 은 coordinator 가 아니라 그 뒤의 Impala 와 Greenplum 이 정한다. 동시에 처리할
+수 있는 task 수의 effective limit 은 다음 세 값 중 가장 작은 것이다.
 
 ```
 유효 동시 task ≈ min(
@@ -309,53 +309,53 @@ HTTP 요청과 응답까지 보려면 로그 레벨을 DEBUG 로 내린다. 다�
 ```
 
 executor 를 아무리 많이 띄워도 Greenplum 의 동시 COPY 세션이나 Impala 의 쿼리 슬롯이 더 작으면
-거기서 막힌다. 그래서 순서를 거꾸로 잡는다. 먼저 다운스트림이 안전하게 견디는 한도를 확정하고, 그
+거기서 막힌다. 그래서 순서를 거꾸로 잡는다. 먼저 downstream 이 안전하게 견디는 한도를 확정하고, 그
 한도를 executor 풀에 나누어 분배한 뒤, coordinator 쪽 디스패치 상한은 그보다 넉넉히 크게 잡아
 스스로 병목이 되지 않게 한다.
 
 ## 항목별로 정하는 기준
 
 `executor.max_concurrent_tasks` 는 노드 한 대 기준으로 대략 코어 수와, 안전한 GP 동시 COPY 를
-executor 수로 나눈 값과, 메모리를 조각 하나가 쓰는 메모리로 나눈 값 중 가장 작은 것으로 잡는다.
-조각 하나는 소스 커넥션 하나와 Greenplum 커넥션 하나, 그리고 `copy.batch_size` 만큼의 버퍼를 쓴다.
+executor 수로 나눈 값과, 메모리를 task 하나가 쓰는 메모리로 나눈 값 중 가장 작은 것으로 잡는다.
+task 하나는 소스 커넥션 하나와 Greenplum 커넥션 하나, 그리고 `copy.batch_size` 만큼의 버퍼를 쓴다.
 메모리가 빡빡하면 이 값을 가장 먼저 줄인다.
 
 `greenplum.pool_max` 는 executor 가 재사용하는 GP 커넥션 풀의 크기로, Greenplum 의
-`max_connections` 를 직접 보호하는 손잡이다. 기본값 0이면 풀 크기가 `executor.max_concurrent_tasks`
-와 같아져 동시 조각 하나당 연결 하나가 된다. 클러스터 전체의 동시 GP 연결은 이 값을 executor 수만큼
-곱한 것이므로, 그 합이 Greenplum 이 허용하는 세션 수를 넘지 않게 잡는다. 동시 조각 수보다 작게 두면
-조각이 연결을 기다리며 처리량만 깎이고, 크게 둬 봐야 동시 조각 수가 천장이라 의미가 없다.
+`max_connections` 를 직접 보호하는 파라미터다. 기본값 0이면 풀 크기가 `executor.max_concurrent_tasks`
+와 같아져 동시 task 하나당 연결 하나가 된다. 클러스터 전체의 동시 GP 연결은 이 값을 executor 수만큼
+곱한 것이므로, 그 합이 Greenplum 이 허용하는 세션 수를 넘지 않게 잡는다. 동시 task 수보다 작게 두면
+task 가 연결을 기다리며 처리량만 깎이고, 크게 둬 봐야 동시 task 수가 ceiling 이라 의미가 없다.
 
-`coordinator.max_dispatch_concurrency` 는 모든 executor 의 동시 조각 수 합 이상으로 둔다(기본 32).
-너무 작으면 executor 가 노는데도 조각을 충분히 띄우지 못해 오히려 coordinator 가 병목이 된다. 이
+`coordinator.max_dispatch_concurrency` 는 모든 executor 의 동시 task 수 합 이상으로 둔다(기본 32).
+너무 작으면 executor 가 노는데도 task 를 충분히 띄우지 못해 오히려 coordinator 가 병목이 된다. 이
 값은 0으로 두면 안 된다. 세마포어가 0이 되어 디스패치가 영원히 멈춘다.
 
-`coordinator.max_concurrent_jobs` 와 `max_pending_jobs` 는 입구 보호용이다. 동시 작업 수에 평균 분할
-조각 수를 곱한 값이 앞서 구한 유효 동시 조각 수를 크게 넘지 않게 잡는다. 대기 큐는 잠깐 몰리는
-요청을 흡수하는 완충이며, 길수록 429 거절은 줄지만 대기 지연이 늘어 오래된 요청이 쌓인다. 다만 0으로
-두면 완충이 아예 사라져 슬롯을 넘는 요청이 곧바로 429 가 된다는 점에 주의한다. coordinator 를 여러
-대 두면 이 값들이 인스턴스마다 따로 적용되므로 인스턴스 수만큼 나눠 총량을 맞춘다.
+`coordinator.max_concurrent_jobs` 와 `max_pending_jobs` 는 admission 보호용이다. 동시 작업 수에 평균
+분할 task 수를 곱한 값이 앞서 구한 유효 동시 task 수를 크게 넘지 않게 잡는다. 대기 큐는 잠깐 몰리는
+요청을 흡수하는 buffer 이며, 길수록 429 거절은 줄지만 대기 지연이 늘어 오래된 요청이 쌓인다. 다만
+0으로 두면 buffer 가 아예 사라져 슬롯을 넘는 요청이 곧바로 429 가 된다는 점에 주의한다. coordinator
+를 여러 대 두면 이 값들이 인스턴스마다 따로 적용되므로 인스턴스 수만큼 나눠 총량을 맞춘다.
 
-`copy.batch_size` 는 처리량과 메모리의 줄다리기다. 행이 넓거나 메모리가 빠듯하면 2000에서 5000
+`copy.batch_size` 는 처리량과 메모리의 trade-off 다. 행이 넓거나 메모리가 빠듯하면 2000에서 5000
 사이로 낮추고, 좁고 넉넉하면 20000 이상으로 올린다. 파이프라인을 쓴다면 `copy.queue_size` 를 곱한
-만큼이 조각 하나가 메모리에 들고 있는 최대 행 수다.
+만큼이 task 하나가 메모리에 들고 있는 최대 행 수다.
 
-`coordinator.task_timeout_s` 는 가장 큰 단일 조각의 예상 실행 시간에 여유를 더해 잡는다. 너무 짧으면
-정상 조각이 타임아웃으로 실패하고 너무 길면 멈춘 조각을 뒤늦게 감지한다. 반면
+`coordinator.task_timeout_s` 는 가장 큰 단일 task 의 예상 실행 시간에 여유를 더해 잡는다. 너무 짧으면
+정상 task 가 타임아웃으로 실패하고 너무 길면 멈춘 task 를 뒤늦게 감지한다. 반면
 `task_connect_timeout_s` 는 연결을 맺는 순간만의 타임아웃이라 짧게(기본 5초) 둘수록 죽은 노드를 빨리
 걸러 failover 를 앞당긴다.
 
 한 가지 예외가 있다. 커서 없는 커스텀 API 를 소스로 쓰는 경우 메모리 특성이 다르다. Impala 커서
-경로는 진짜 스트리밍이라 메모리가 배치 크기에 묶이지만, 커스텀 API 가 결과를 한 번에 돌려주면 조각
-하나의 결과 전체가 executor 메모리에 올라간다. 이때는 `parallelism` 을 늘려 조각당 파티션을 잘게
+경로는 진짜 스트리밍이라 메모리가 배치 크기에 묶이지만, 커스텀 API 가 결과를 한 번에 돌려주면 task
+하나의 결과 전체가 executor 메모리에 올라간다. 이때는 `parallelism` 을 늘려 task 당 파티션을 잘게
 쪼개는 것이 1차 완화책이고, 근본 해결은 그 API 에 페이징을 넣어 청크를 넘겨주게 하는 것이다.
 프레임워크는 이미 청크 형태를 받으므로 코드 수정 없이 스트리밍으로 전환된다.
 
 ## 튜닝하는 순서
 
-다운스트림의 안전 한도부터 확정한다. 그다음 executor 수와 executor 당 동시 조각 수의 곱이 그 한도에
-맞도록 분배하고, 디스패치 상한을 그 합 이상으로 두며, 입구 값으로 과부하를 막는다. 그 상태에서 부하를
-걸고 메트릭을 보며 병목 지점을 찾아 값을 조정한다.
+downstream 의 안전 한도부터 확정한다. 그다음 executor 수와 executor 당 동시 task 수의 곱이 그 한도에
+맞도록 분배하고, 디스패치 상한을 그 합 이상으로 두며, admission 값으로 과부하를 막는다. 그 상태에서
+부하를 걸고 메트릭을 보며 병목 지점을 찾아 값을 조정한다.
 
 여기서 반드시 지킬 것은 한 번에 한 값씩 바꾸는 것이다. 여러 값을 동시에 바꾸면 어떤 변경이 효과를
 냈는지 알 수 없어 튜닝이 미궁에 빠진다.
@@ -373,31 +373,32 @@ executor 수로 나눈 값과, 메모리를 조각 하나가 쓰는 메모리로
 curl -s localhost:8088/cluster    # jobs.running / jobs.active 와 executor 부하를 함께 본다
 ```
 
-executor 는 한가한데 429 가 난다면 입구가 좁은 것이다. `coordinator.max_concurrent_jobs` 로 동시 실행
-슬롯을, `coordinator.max_pending_jobs` 로 대기 큐를 올린다. executor 가 이미 포화라면 입구만 넓혀 봐야
-대기만 길어진다. 이때는 executor 를 늘리거나 `executor.max_concurrent_tasks` 를 올리는데, 후자는 앞
-장의 기준대로 소스와 대상의 여력을 함께 봐야 한다. 디스패치가 병목일 수도 있다.
-`coordinator.max_dispatch_concurrency` 가 플릿 전체 용량, 그러니까 executor 수에 동시 조각 수를 곱한
-값보다 작으면 executor 가 놀아도 조각이 나가지 못한다. 설정 TUI 의 동시성 탭이 이 어긋남을 경고로
-짚어 준다.
+executor 는 한가한데 429 가 난다면 admission 이 좁은 것이다. `coordinator.max_concurrent_jobs` 로
+동시 실행 슬롯을, `coordinator.max_pending_jobs` 로 대기 큐를 올린다. executor 가 이미 포화라면
+admission 만 넓혀 봐야 대기만 길어진다. 이때는 executor 를 늘리거나 `executor.max_concurrent_tasks`
+를 올리는데, 후자는 앞 장의 기준대로 소스와 대상의 여력을 함께 봐야 한다. 디스패치가 병목일 수도
+있다. `coordinator.max_dispatch_concurrency` 가 fleet 전체 용량, 그러니까 executor 수에 동시 task
+수를 곱한 값보다 작으면 executor 가 놀아도 task 가 나가지 못한다. 설정 TUI 의 동시성 탭이 이
+어긋남을 경고로 짚어 준다.
 
 ## 느릴 때
 
 먼저 어디가 느린지 가른다. 소스에서 못 읽고 있는지, 대상에 못 넣고 있는지, 그 사이가 막혔는지를
-나눠야 손댈 곳이 정해진다. executor 상세에서 조각이 `READING` 에 오래 머물면 소스 쪽이고 `WRITING`
+나눠야 손댈 곳이 정해진다. executor 상세에서 task 가 `READING` 에 오래 머물면 소스 쪽이고 `WRITING`
 이면 Greenplum 쪽이다. 대시보드나 `GET /executors/{idx}/metrics` 로 볼 수 있고, 로그의 SQL 기록에서
 `datasource` 를 봐도 같은 판단을 할 수 있다.
 
-### 조각 하나를 네 갈래로 쪼개 보기
+### task 하나를 네 갈래로 쪼개 보기
 
-더 정확히 짚으려면 대시보드의 단계 타임라인과 `task_history` 테이블이 벽시계를 네 갈래로 나눠 준다.
+더 정확히 짚으려면 대시보드의 단계 타임라인과 `task_history` 테이블이 wall-clock time 을 네 갈래로
+나눠 준다.
 
-![조각 하나의 벽시계를 네 갈래로 나눠 본다](images/task-timing.svg)
+![task 하나의 wall-clock time 을 네 갈래로 나눠 본다](images/task-timing.svg)
 
 `read_wait_ms` 는 소스에서 결과를 읽는 순수 시간이고, `read_starve_ms` 는 쓰는 쪽이 다음 배치를
 기다린 시간이며, `write_wait_ms` 는 인코딩과 송신에 쓴 시간, `finalize_wait_ms` 는 COPY 가 서버에서
-끝나기를 기다린 시간이다. 파이프라인 모드에서 벽시계는 대략 뒤의 세 항의 합이므로 그중 가장 큰 것이
-곧 병목이다.
+끝나기를 기다린 시간이다. 파이프라인 모드에서 wall-clock time 은 대략 뒤의 세 항의 합이므로 그중
+가장 큰 것이 곧 병목이다.
 
 `read_starve` 가 지배적이면 소스가 느린 것이다. `parallelism` 을 늘려 여러 executor 가 서로 다른
 파티션을 동시에 읽게 하는 것이 가장 효과가 크고, 이어서 `copy.batch_size` 를 올려 왕복을 줄이거나
@@ -405,26 +406,27 @@ executor 는 한가한데 429 가 난다면 입구가 좁은 것이다. `coordin
 다투고 있다면 이 옵션으로 서로 밀어내지 않게 할 수 있다.
 
 `write_wait` 가 지배적이면 executor 쪽의 인코딩과 전송이 병목이다. `copy.format=binary` 로 텍스트
-인코딩 CPU 를 줄이고(타입 해석에 실패하면 자동으로 text 로 되돌아간다), executor 와 GP 사이 네트워크를
-점검한 뒤 `copy.batch_size` 를 올린다.
+인코딩 CPU 를 줄이고(타입 해석에 실패하면 자동으로 text 로 fallback 한다), executor 와 GP 사이
+네트워크를 점검한 뒤 `copy.batch_size` 를 올린다.
 
 `finalize_wait` 가 지배적이면 Greenplum 의 COPY 처리가 병목이다. 한 스트림이 마스터로 몰리는 구조라
 `parallelism` 을 늘려 여러 executor 가 동시에 COPY 하게 하는 것이 가장 효과적이고, 동시 GP 연결은
 `greenplum.pool_max` 로 조절한다. 대상 테이블의 인덱스와 트리거, 분산키도 함께 재검토한다.
 
-원인을 격리하고 싶으면 `copy.pipeline=false` 로 잠깐 꺼 본다. 읽기와 쓰기가 직렬로 돌아
-`read_wait` 와 `write_wait` 가 순수 벽시계로 나뉘므로 비교하기 쉽다. `read_starve` 와 `write_wait` 가
-비슷하다면 이미 파이프라인이 잘 겹치는 상태이므로 다음 수는 수평 확장이다.
+원인을 격리하고 싶으면 `copy.pipeline=false` 로 잠깐 꺼 본다. 읽기와 쓰기가 직렬로 돌아 `read_wait`
+와 `write_wait` 가 순수 wall-clock time 으로 나뉘므로 비교하기 쉽다. `read_starve` 와 `write_wait`
+가 비슷하다면 이미 파이프라인이 잘 겹치는 상태이므로 다음 수는 수평 확장이다.
 
 ### 경로 자체를 바꿔야 할 때
 
 파이프라인과 배치 크기, 수평 확장을 다 해도 `finalize_wait` 가 계속 지배적이라면 병목은 COPY 가
 Greenplum 마스터 한 노드로 몰리는 구조 자체다. executor 를 아무리 늘려도 각자 마스터로 COPY 하므로
-마스터가 최종 천장이 된다. 이때는 데이터 평면을 "우리가 밀어넣기"에서 "GP 가 당겨오기"로 바꾼다.
+마스터가 최종 ceiling 이 된다. 이때는 data plane 을 우리가 push 하는 방식에서 GP 가 pull 하는
+방식으로 바꾼다.
 
 `local_stage` 나 `s3_stage` 로 옮기면 Greenplum 의 모든 세그먼트가 파일을 나눠 동시에 읽으므로 단일
-소켓 병목이 사라진다. 어느 쪽이 가능한지는 배치 제약이 정하는데, `local_stage` 는 executor 와 GP
-세그먼트가 같은 호스트에 있어야 하고 `s3_stage` 는 그 제약이 없는 대신 버킷과 PXF 설정이 필요하다
+소켓 병목이 사라진다. 어느 쪽이 가능한지는 co-location 제약이 정하는데, `local_stage` 는 executor 와
+GP 세그먼트가 같은 호스트에 있어야 하고 `s3_stage` 는 그 제약이 없는 대신 버킷과 PXF 설정이 필요하다
 (9장에서 다룬다).
 
 세 번째 길도 있다. `exec_mode=statement` 로 두고 PXF 외부테이블을 읽는 `INSERT … SELECT` 를 넘기면
@@ -441,9 +443,9 @@ COPY 도 executor 를 통한 스트리밍도 전혀 없이 GP 가 스스로 읽�
 curl -s localhost:8088/jobs/$JOB_ID | python3 -m json.tool
 ```
 
-`error` 에 이유가 있고 `tasks` 배열에서 어느 조각이 어느 executor 에서 실패했는지, 몇 번 재시도됐는지
-보인다. `PARTIAL` 이면 일부만 들어간 것이므로 사용자에게 `POST /jobs/{id}/retry` 를 안내한다. 이미
-성공한 조각은 건너뛰므로 중복 적재 걱정은 없다.
+`error` 에 이유가 있고 `tasks` 배열에서 어느 task 가 어느 executor 에서 실패했는지, 몇 번
+재시도됐는지 보인다. `PARTIAL` 이면 일부만 들어간 것이므로 사용자에게 `POST /jobs/{id}/retry` 를
+안내한다. 이미 성공한 task 는 건너뛰므로 중복 적재 걱정은 없다.
 
 그다음 그 식별자로 로그를 모은다. 실행한 SQL 이 함께 남아 있으므로 소스 쿼리가 실패했는지 적재
 문장이 실패했는지가 드러난다.
@@ -485,13 +487,14 @@ grep MockBackend $L/query-executor-server-*-warn.log
 
 이 두 모드는 2단계로 돌기 때문에 실패 지점이 더 나뉜다.
 
-`local_stage` 에서 "파일 예산 초과"가 뜨면 요청의 `parallelism` 이 호스트별 세그먼트 수의 합보다 크다는
-뜻이다. 값을 낮추거나 executor 호스트를 늘린다. "gp_segment_configuration 에 없습니다"는
+`local_stage` 에서 "파일 예산 초과"가 뜨면 요청의 `parallelism` 이 호스트별 세그먼트 수의 합보다
+크다는 뜻이다. 값을 낮추거나 executor 호스트를 늘린다. "gp_segment_configuration 에 없습니다"는
 `executor.gp_hostname` 이 실제 세그먼트 호스트명과 다르다는 뜻이므로, executor 의 `/metrics` 가
 보고하는 값과 `SELECT DISTINCT hostname FROM gp_segment_configuration` 결과를 대조한다. Phase 2 에서
 파일을 못 읽는다면 세그먼트 호스트에서 그 파일이 실제로 있는지, GP 세그먼트 프로세스가 읽을 권한이
-있는지, `stage.local_dir` 이 모든 호스트에 같은 경로로 있는지 확인한다. CSV 파싱이 어긋난다면 데이터에
-구분자로 쓰는 문자가 들어 있을 수 있으므로 `stage.csv_delimiter` 를 데이터에 없는 문자로 바꾼다.
+있는지, `stage.local_dir` 이 모든 호스트에 같은 경로로 있는지 확인한다. CSV 파싱이 어긋난다면
+데이터에 구분자로 쓰는 문자가 들어 있을 수 있으므로 `stage.csv_delimiter` 를 데이터에 없는 문자로
+바꾼다.
 
 `s3_stage` 에서 Phase 1 업로드가 실패하면 자격증명과 엔드포인트를 본다. `s3.bucket` 이 아예 설정되지
 않았다면 그 취지의 예외가 난다. Phase 2 에서 실패하면 PXF SERVER 와 프로파일, GP 쪽 권한을 확인한다.
@@ -521,9 +524,9 @@ sudo -u gpadmin $B/start-executor.sh 8086     # 특정 포트만
 sudo -u gpadmin $B/stop-executor.sh  8086
 ```
 
-executor 는 SIGTERM 을 받으면 진행 중인 조각이 끝나기를 기다렸다 내려간다. 기다리는 시간은
-`executor.shutdown_drain_timeout_s` 이며 기본값은 25초다. 재기동 중에 조각이 잘리는 것이 곤란하다면
-평소 조각 하나가 걸리는 시간보다 넉넉히 잡아 둔다.
+executor 는 SIGTERM 을 받으면 진행 중인 task 가 끝나기를 기다렸다 내려간다. 기다리는 시간은
+`executor.shutdown_drain_timeout_s` 이며 기본값은 25초다. 재기동 중에 task 가 잘리는 것이 곤란하다면
+평소 task 하나가 걸리는 시간보다 넉넉히 잡아 둔다.
 
 기동할 때 콘솔과 로그에 찍히는 배너에는 실제로 읽은 설정 파일의 절대 경로가 나온다. 설정을 바꿨는데
 반영이 안 된 것 같으면 여기부터 본다. 엉뚱한 디렉터리를 읽고 있는 경우가 많다.
@@ -550,11 +553,11 @@ sudo -u gpadmin $B/start-executor.sh 8003
 ```
 
 executor 목록은 기동할 때 읽으므로 coordinator 를 재기동한다. 마지막으로
-`curl -s localhost:8088/cluster` 에서 새 executor 가 healthy 로 잡히는지 확인한다. 줄일 때는 역순이다.
-`coordinator.executors` 에서 빼고 coordinator 를 재기동해 새 조각이 가지 않게 한 뒤, 그 executor 에서
-돌던 조각이 끝나기를 기다렸다 내린다.
+`curl -s localhost:8088/cluster` 에서 새 executor 가 healthy 로 잡히는지 확인한다. 줄일 때는
+역순이다. `coordinator.executors` 에서 빼고 coordinator 를 재기동해 새 task 가 가지 않게 한 뒤, 그
+executor 에서 돌던 task 가 끝나기를 기다렸다 내린다.
 
-늘린 뒤에는 함께 움직여야 하는 값이 있다. executor 가 늘면 플릿 전체 용량이 커지므로
+늘린 뒤에는 함께 움직여야 하는 값이 있다. executor 가 늘면 fleet 전체 용량이 커지므로
 `coordinator.max_dispatch_concurrency` 가 그보다 작지 않은지 보고, Greenplum 의 `max_connections` 가
 executor 수에 `pool_max` 를 곱한 만큼을 감당하는지 확인한다. 설정 TUI 의 동시성 탭이 이 곱셈을 풀어
 보여 준다.
@@ -593,8 +596,8 @@ executor.status_interval_s=10
 취소해도 똑같이 동작한다. 이 설정을 하지 않은 채 로드밸런서 뒤에 여러 대를 두면, 작업을 접수한
 인스턴스만 그 상태를 알기 때문에 제출과 폴링이 서로 다른 인스턴스로 가면 사용자가 404 를 받는다.
 
-이력은 두 계층으로 나뉜다. 작업의 시작과 종료는 coordinator 가 `job_history` 에 남기고, 각 조각의
-상태 변화는 executor 가 `task_history` 에 남긴다. 조각 이력은 executor 가 직접 쓰므로 executor
+이력은 두 계층으로 나뉜다. 작업의 시작과 종료는 coordinator 가 `job_history` 에 남기고, 각 task 의
+상태 변화는 executor 가 `task_history` 에 남긴다. task 이력은 executor 가 직접 쓰므로 executor
 호스트에서도 이 DB 에 닿아야 한다. 사용자가 작업을 낼 때 `username` 을 채우면 두 테이블에 함께
 기록되어 대시보드에서 누가 낸 작업인지 보인다.
 
@@ -612,13 +615,13 @@ psql "$PG" -f /data1/distributed-query-executor/config/postgresql.sql
 저장소는 일반 PostgreSQL 에 두고 WarehousePG 는 데이터 적재 대상으로만 쓰는 편이 낫다.
 
 단일 coordinator 라면 기본값 그대로 두면 되고, 이력만 남기고 싶으면 `history.db_dsn` 만 설정해도
-된다. 참고로 입구 한도는 coordinator 인스턴스마다 따로 적용되므로, 여러 대를 띄우면 전체 한도가 그
-수만큼 곱해진다는 점을 감안해 값을 나눠 잡는다.
+된다. 참고로 admission 한도는 coordinator 인스턴스마다 따로 적용되므로, 여러 대를 띄우면 전체 한도가
+그 수만큼 곱해진다는 점을 감안해 값을 나눠 잡는다.
 
 ### HA 타이밍 값의 순서 관계
 
 여러 대를 띄운다면 타이밍 값들 사이에 반드시 지켜야 하는 순서가 있다. 핵심은 장애를 판정하는 임계가
-생존 신호를 보내는 주기보다 넉넉히 길어야 잠깐 신호가 늦은 것을 죽음으로 오판하지 않는다는 것이다.
+heartbeat 를 보내는 주기보다 넉넉히 길어야 잠깐 신호가 늦은 것을 죽음으로 오판하지 않는다는 것이다.
 
 ```
 status_interval_s  ≤  heartbeat_interval_s  ＜  coordinator_stale_s  ≤  orphan_reconcile 주기
@@ -635,7 +638,7 @@ heartbeat_interval_s  ＜  reservation_ttl_s
 생긴다.
 
 부하 배분과 관련해서는 `coordinator.executor_select` 를 본다. `round_robin` 은 단순히 돌아가며 주므로
-executor 성능이 고르고 조각 길이가 비슷할 때 무난하고, `least_loaded` 는 가장 한가한 곳을 고르지만
+executor 성능이 고르고 task 길이가 비슷할 때 무난하고, `least_loaded` 는 가장 한가한 곳을 고르지만
 여러 coordinator 가 같은 판단을 동시에 내려 한쪽으로 몰릴 수 있다. 그래서 멀티 coordinator 에서는 두
 곳만 비교해 덜 바쁜 쪽을 고르는 `p2c` 를 권한다. 배분이 실제로 쏠린다면
 `coordinator.executor_reservation` 을 켜서 디스패치하는 동안 자리를 미리 잡아 둔다.
@@ -675,7 +678,7 @@ psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_perc
 
 `s3_stage` 가 어떤 순서로 도는지를 먼저 보아 두면 무엇을 준비해야 하는지가 저절로 갈린다.
 
-![s3_stage 는 배리어를 사이에 둔 3단계로 돈다](images/s3-stage-phases.svg)
+![s3_stage 는 barrier 를 사이에 둔 3단계로 돈다](images/s3-stage-phases.svg)
 
 `s3_stage` 는 executor 와 GP 세그먼트를 같은 호스트에 두지 않아도 되는 대신, 운영자가 미리 갖춰
 두어야 할 것이 두 가지다. executor 가 객체를 올릴 **S3 접근**과, Greenplum 이 그 객체를 읽을 **PXF
@@ -709,7 +712,7 @@ coordinator 와 executor, 그리고 `bin/s3-ops` 가 함께 쓰므로 값은 한
 와 `PutObject` 조합이다(`mv` 는 복사 후 삭제라 삭제 권한도 함께 필요하다).
 
 여기서 가장 자주 사고가 나는 곳이 **멀티파트 업로드**다. 8MB 가 넘는 파일은 boto3 가 알아서 여러
-조각으로 나눠 올리는데, 이때는 `PutObject` 가 아니라 `CreateMultipartUpload` 부터 나간다.
+task 로 나눠 올리는데, 이때는 `PutObject` 가 아니라 `CreateMultipartUpload` 부터 나간다.
 `s3:PutObject` 만 열어 둔 계정에서는 작은 파일은 잘 올라가는데 큰 파일만 `AccessDenied` 로 실패하는,
 진단하기 까다로운 증상이 된다. 도구는 멀티파트 개시가 거부되면 단일 `PutObject` 로 한 번 더 시도해
 이 상황을 어느 정도 흡수하지만, 단일 `PutObject` 는 5GB 까지만 올라가므로 그보다 큰 파일을 다루는
@@ -756,7 +759,8 @@ pxf cluster sync
 
 자격증명이 평문으로 들어가므로 권한을 좁힌다. EC2 에서 IAM 역할을 쓴다면 키를 비우고
 `fs.s3a.aws.credentials.provider` 를 인스턴스 프로파일 제공자로 지정한다. 버킷마다 자격증명이 다르면
-`servers/s3-prod`, `servers/s3-dev` 처럼 디렉터리를 나누고 작업마다 다른 `s3.pxf_server` 를 쓰면 된다.
+`servers/s3-prod` , `servers/s3-dev` 처럼 디렉터리를 나누고 작업마다 다른 `s3.pxf_server` 를 쓰면
+된다.
 
 구성이 끝났는지 확인하는 가장 빠른 길은 손으로 외부테이블을 하나 만들어 읽어 보는 것이다. 서비스가
 Phase 2 에서 만드는 것과 같은 모양이다.
@@ -771,7 +775,7 @@ FORMAT 'CSV';
 SELECT count(*) FROM dwtemp.ext_check;
 ```
 
-접두사는 디렉터리처럼 동작해 그 아래 파일을 세그먼트가 나눠 읽고, `.gz` 는 확장자를 보고 알아서
+prefix 는 디렉터리처럼 동작해 그 아래 파일을 세그먼트가 나눠 읽고, `.gz` 는 확장자를 보고 알아서
 풀어 읽는다. 파일이 세그먼트 수만큼 고르게 나뉘었는지는 `bin/s3-ops ls --summary` 로 개수와 크기
 분포를 보면 된다. 한 파일이 지나치게 크면 그 파일을 읽는 세그먼트만 오래 걸린다.
 
@@ -914,8 +918,8 @@ stderr 로 나간다.** stdout 은 조회 결과 몫이라 파이프로 넘기�
 
 ## 접속이 안 될 때
 
-접속 단계에서 `TSocket read 0 bytes` 나 `end of file` 이 나오면 서버가 핸드셰이크 도중 연결을 끊었다는
-뜻이다. 인증 실패가 아니라 포트·전송 방식·TLS·인증 방식 중 하나가 서버 설정과 어긋난 경우가
+접속 단계에서 `TSocket read 0 bytes` 나 `end of file` 이 나오면 서버가 핸드셰이크 도중 연결을
+끊었다는 뜻이다. 인증 실패가 아니라 포트·전송 방식·TLS·인증 방식 중 하나가 서버 설정과 어긋난 경우가
 대부분이며, 도구가 현재 설정과 함께 점검 목록을 출력하므로 위에서부터 하나씩 맞춰 본다.
 
 ```bash

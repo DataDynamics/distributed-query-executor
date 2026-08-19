@@ -1,8 +1,8 @@
 # artifacts
 
 두 저장소에 흩어져 있던 문서를 독자별로 하나씩 정리해 둔 디렉터리다. 여기 있는 두 문서는 각각
-자립형이라, 링크를 따라다니지 않고 하나만 읽어도 그 역할의 일을 끝낼 수 있게 필요한 내용을 모두
-담았다.
+self-contained 문서라, 링크를 따라다니지 않고 하나만 읽어도 그 역할의 일을 끝낼 수 있게 필요한
+내용을 모두 담았다.
 
 ![두 저장소를 독자별 문서 두 벌로 합쳤다](images/merge-map.svg)
 
@@ -18,7 +18,7 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 ## 무엇을 합쳤는가
 
 **DataDynamics/distributed-query-executor** 에서는 coordinator·executor 서비스와 그 운영을 가져왔다.
-요청 흐름과 실행 모드, 템플릿 엔진, 동시성 손잡이, 멀티 coordinator, 모니터링과 로그가 여기에
+요청 흐름과 실행 모드, 템플릿 엔진, 동시성 파라미터, 멀티 coordinator, 모니터링과 로그가 여기에
 해당한다. **DataDynamics/impala-to-whpg** 에서는 사람이 터미널에서 직접 쓰는 도구와 그 운영을
 가져왔다. 쿼리 실행과 CSV 출력, 대화형 셸, S3 객체 조작, 자격증명과 크론, 종료 코드, PXF 와 S3
 외부테이블 구성, 분산키 선정이 여기에 해당한다.
@@ -36,7 +36,7 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 호스트를 참조하지 않고 저장소 안의 파일만 쓰며, 벡터라 확대해도 글자가 뭉개지지 않는다. 전체
 구성(`architecture.svg`), 작업 상태 전이(`job-lifecycle.svg`), 실행 모드별 데이터 경로
 (`exec-modes.svg`), 제출부터 확인까지의 흐름(`verify-loop.svg`), 과부하 방어 세 층(`admission.svg`),
-조각 하나의 시간 분해(`task-timing.svg`), `s3_stage` 의 3단계(`s3-stage-phases.svg`), 그리고 이
+task 하나의 시간 분해(`task-timing.svg`), `s3_stage` 의 3단계(`s3-stage-phases.svg`), 그리고 이
 디렉터리의 구성(`merge-map.svg`)이 있다.
 
 ## `docs/` 와의 관계

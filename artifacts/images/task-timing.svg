@@ -5,7 +5,7 @@
 <marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
 </defs>
 <rect x="0" y="0" width="1100" height="440" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
-<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">조각 하나의 벽시계를 네 갈래로 나눠 본다</text>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">task 하나의 wall-clock time 을 네 갈래로 나눠 본다</text>
 <text x="28" y="60" font-size="13" fill="#64748b">가장 큰 항이 곧 병목이다. 대시보드의 단계 타임라인과 task_history 가 같은 값을 준다</text>
 <text x="28" y="118" font-size="12" fill="#0f172a" text-anchor="start" font-weight="700">copy.pipeline = true</text>
 <text x="28" y="136" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">읽기와 쓰기가 겹친다</text>
@@ -41,5 +41,5 @@
 <text x="904.0" y="314.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">parallelism 과 greenplum.pool_max 를 조정하고,</text>
 <text x="904.0" y="333.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">그래도 남으면 마스터로 몰리는 COPY 대신</text>
 <text x="904.0" y="352.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">local_stage · s3_stage 로 경로를 바꾼다</text>
-<text x="28" y="404" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">파이프라인에서 벽시계는 대략 read_starve + write_wait + finalize_wait 이다. read_starve 와 write_wait 가 비슷하다면 이미 잘 겹치는 상태이므로 다음 수는 수평 확장이다.</text>
+<text x="28" y="404" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">파이프라인에서 wall-clock time 은 대략 read_starve + write_wait + finalize_wait 이다. read_starve 와 write_wait 가 비슷하다면 이미 잘 겹치는 상태이므로 다음 수는 수평 확장이다.</text>
 </svg>
