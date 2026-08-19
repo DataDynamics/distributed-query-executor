@@ -22,7 +22,9 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 
 [er-diagram.md](er-diagram.md) 는 이 시스템이 무엇을 기억하는지를 다룬다. 개념과 관계만 보는 논리
 ER 한 장과, 실제 DDL 이 만드는 테이블을 그대로 보여 주는 물리 ER 두 장(PostgreSQL 판과 WarehousePG
-판)이 들어 있다.
+판)이 들어 있다. [tables.md](tables.md) 는 그 물리 테이블 일곱 개를 컬럼 단위로 적은 명세서다.
+컬럼마다 타입과 길이, NOT NULL, 키, 기본값, 설명, 예제값을 담았고 `config/postgresql.sql` 과
+자동으로 대조해 맞췄다.
 
 ## 무엇을 합쳤는가
 
