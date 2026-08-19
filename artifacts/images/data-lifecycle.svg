@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 540" width="1240" height="540" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/></marker>
+<marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1240" height="540" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">각 데이터는 언제 생겨 언제 사라지는가</text>
+<text x="28" y="60" font-size="13" fill="#64748b">가로축은 job 하나가 도는 동안의 시간이고, 막대는 그 데이터가 존재하는 구간이다</text>
+<line x1="232" y1="100" x2="232" y2="470" stroke="#e2e8f0" stroke-width="1"/>
+<text x="240" y="116" font-size="12" fill="#94a3b8" text-anchor="start" font-weight="700">접수</text>
+<line x1="384" y1="100" x2="384" y2="470" stroke="#e2e8f0" stroke-width="1"/>
+<text x="392" y="116" font-size="12" fill="#94a3b8" text-anchor="start" font-weight="700">분할</text>
+<line x1="536" y1="100" x2="536" y2="470" stroke="#e2e8f0" stroke-width="1"/>
+<text x="544" y="116" font-size="12" fill="#94a3b8" text-anchor="start" font-weight="700">읽기</text>
+<line x1="688" y1="100" x2="688" y2="470" stroke="#e2e8f0" stroke-width="1"/>
+<text x="696" y="116" font-size="12" fill="#94a3b8" text-anchor="start" font-weight="700">적재</text>
+<line x1="840" y1="100" x2="840" y2="470" stroke="#e2e8f0" stroke-width="1"/>
+<text x="848" y="116" font-size="12" fill="#94a3b8" text-anchor="start" font-weight="700">정리</text>
+<line x1="992" y1="100" x2="992" y2="470" stroke="#e2e8f0" stroke-width="1"/>
+<text x="1000" y="116" font-size="12" fill="#94a3b8" text-anchor="start" font-weight="700">그 뒤</text>
+<line x1="1188" y1="100" x2="1188" y2="470" stroke="#e2e8f0" stroke-width="1"/>
+<text x="40" y="168" font-size="13" fill="#0f172a" text-anchor="start" font-weight="700">이관 데이터</text>
+<rect x="536" y="140" width="304" height="44" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+<text x="550" y="166.0" font-size="12" fill="#c2410c">소스에서 읽어 대상에 넣는 동안만 흐른다</text>
+<text x="40" y="236" font-size="13" fill="#0f172a" text-anchor="start" font-weight="700">중간 데이터</text>
+<rect x="580" y="208" width="300" height="44" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.6"/>
+<text x="594" y="234.0" font-size="12" fill="#334155">만들어 두었다가 적재 뒤 지운다</text>
+<text x="40" y="304" font-size="13" fill="#0f172a" text-anchor="start" font-weight="700">job 상태</text>
+<rect x="232" y="276" width="956" height="44" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="246" y="302.0" font-size="12" fill="#1d4ed8">종료 뒤에도 조회할 수 있게 남는다</text>
+<text x="40" y="372" font-size="13" fill="#0f172a" text-anchor="start" font-weight="700">이력·계측</text>
+<rect x="688" y="344" width="500" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.6" stroke-dasharray="7 5"/>
+<text x="702" y="370.0" font-size="12" fill="#334155">지우기 전까지 남는다 — 보존은 운영에서 건다</text>
+<text x="40" y="440" font-size="13" fill="#0f172a" text-anchor="start" font-weight="700">로그</text>
+<rect x="232" y="412" width="956" height="44" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="246" y="438.0" font-size="12" fill="#92400e">일 단위 롤링 · 기본 30일 보존</text>
+<text x="40" y="502" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">옮긴 데이터가 대상에 남는 것은 이 시스템의 수명주기 밖이다. 그쪽 보존 정책을 따른다.</text>
+</svg>
