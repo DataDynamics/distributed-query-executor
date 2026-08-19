@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 600" width="1240" height="600" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/></marker>
+<marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1240" height="600" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">연계 논리 모델</text>
+<text x="28" y="60" font-size="13" fill="#64748b">이 시스템이 무엇과 어떤 방식으로 주고받는지. 굵은 선은 데이터, 점선은 제어와 상태다.</text>
+<line x1="880" y1="44" x2="914" y2="44" stroke="#0f172a" stroke-width="2.6"/>
+<text x="920" y="48" font-size="12" fill="#475569" text-anchor="start" font-weight="400">데이터</text>
+<line x1="984" y1="44" x2="1018" y2="44" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="1024" y="48" font-size="12" fill="#475569" text-anchor="start" font-weight="400">제어·상태</text>
+<rect x="24" y="92" width="300" height="340" rx="12" fill="none" stroke="#475569" stroke-width="1.3" stroke-dasharray="7 5"/>
+<text x="36" y="111" font-size="12" font-weight="700" fill="#475569">요청 주체</text>
+<rect x="40" y="122" width="268" height="66" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="174.0" y="149.66666666666666" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">업무 시스템 · 배치 스케줄러</text>
+<text x="174.0" y="169.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">HTTP · JSON</text>
+<rect x="40" y="326" width="268" height="66" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="174.0" y="353.6666666666667" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">운영자</text>
+<text x="174.0" y="373.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">브라우저 · 터미널</text>
+<rect x="370" y="92" width="300" height="340" rx="12" fill="none" stroke="#2563eb" stroke-width="1.3" stroke-dasharray="7 5"/>
+<text x="382" y="111" font-size="12" font-weight="700" fill="#2563eb">이관 서비스</text>
+<rect x="386" y="122" width="268" height="76" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="520.0" y="144.66666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">coordinator</text>
+<text x="520.0" y="164.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">:8088 — 검증 · 분할</text>
+<text x="520.0" y="184.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">수용 · 배분 · 집계</text>
+<rect x="386" y="224" width="268" height="76" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="520.0" y="246.66666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">executor</text>
+<text x="520.0" y="266.66666666666663" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">:8087 · :8086 …</text>
+<text x="520.0" y="286.66666666666663" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">소스 읽기 · 적재</text>
+<rect x="386" y="326" width="268" height="76" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.6"/>
+<text x="520.0" y="358.6666666666667" font-size="14" font-weight="700" fill="#334155" text-anchor="middle">운영자 CLI</text>
+<text x="520.0" y="378.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">gp-shell · impala-shell · s3-ops</text>
+<rect x="730" y="92" width="486" height="380" rx="12" fill="none" stroke="#ea580c" stroke-width="1.3" stroke-dasharray="7 5"/>
+<text x="742" y="111" font-size="12" font-weight="700" fill="#ea580c">연계 대상</text>
+<rect x="752" y="122" width="210" height="72" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+<text x="857.0" y="142.66666666666666" font-size="14" font-weight="700" fill="#c2410c" text-anchor="middle">소스 엔진</text>
+<text x="857.0" y="162.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">Impala HS2</text>
+<text x="857.0" y="182.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">TLS + LDAP</text>
+<rect x="986" y="122" width="210" height="72" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+<text x="1091.0" y="142.66666666666666" font-size="14" font-weight="700" fill="#c2410c" text-anchor="middle">소스 커스텀 API</text>
+<text x="1091.0" y="162.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">Trino · 사내 API</text>
+<text x="1091.0" y="182.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">함수 위임</text>
+<rect x="752" y="214" width="210" height="72" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="857.0" y="234.66666666666666" font-size="14" font-weight="700" fill="#6d28d9" text-anchor="middle">적재 대상</text>
+<text x="857.0" y="254.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">Greenplum</text>
+<text x="857.0" y="274.66666666666663" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">COPY · INSERT</text>
+<rect x="986" y="214" width="210" height="72" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="1091.0" y="234.66666666666666" font-size="14" font-weight="700" fill="#6d28d9" text-anchor="middle">외부테이블</text>
+<text x="1091.0" y="254.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">file:// · PXF</text>
+<text x="1091.0" y="274.66666666666663" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">세그먼트 병렬 읽기</text>
+<rect x="752" y="306" width="444" height="66" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.6"/>
+<text x="974.0" y="333.6666666666667" font-size="14" font-weight="700" fill="#334155" text-anchor="middle">스테이징 매체</text>
+<text x="974.0" y="353.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">S3 객체 · 세그먼트 로컬 CSV</text>
+<rect x="752" y="398" width="444" height="66" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="974.0" y="425.6666666666667" font-size="14" font-weight="700" fill="#6d28d9" text-anchor="middle">메타 저장소</text>
+<text x="974.0" y="445.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">PostgreSQL — job · 이력 · 상태 · 예약 · 메트릭</text>
+<line x1="308" y1="152" x2="384" y2="152" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="346.0" y="142.0" font-size="12" fill="#475569" text-anchor="middle">POST /jobs</text>
+<line x1="308" y1="356" x2="384" y2="356" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="346.0" y="346.0" font-size="12" fill="#475569" text-anchor="middle">실행</text>
+<path d="M308,340 H346 V162 H384" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<line x1="520" y1="198" x2="520" y2="222" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<path d="M656,244 H702 V158 H746" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<text x="708" y="150" font-size="12" fill="#475569" text-anchor="start" font-weight="400">읽기</text>
+<path d="M656,262 H724 V250 H746" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<text x="700" y="268" font-size="12" fill="#475569" text-anchor="start" font-weight="400">적재</text>
+<path d="M656,282 H714 V342 H746" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<text x="700" y="330" font-size="12" fill="#475569" text-anchor="start" font-weight="400">업로드</text>
+<path d="M654,142 H690 V226 H746" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="676" y="210" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">Phase 2 SQL</text>
+<path d="M654,178 H672 V434 H746" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="676" y="428" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">job · 이력</text>
+<path d="M656,366 H730 V386 H746" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arm)"/>
+<text x="690" y="382" font-size="11.5" fill="#94a3b8" text-anchor="start" font-weight="400">조작 · 확인</text>
+<path d="M962,158 H982" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<path d="M962,250 H982" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<rect x="24" y="496" width="1192" height="80" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="620.0" y="520.6666666666666" font-size="14" font-weight="700" fill="#92400e" text-anchor="middle">연계 원칙</text>
+<text x="620.0" y="540.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">데이터는 coordinator 를 지나지 않는다. executor 가 소스에서 읽어 대상이나 스테이징으로 곧장 보내고, coordinator 로는 상태와 행 수만 올라온다.</text>
+<text x="620.0" y="560.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">소스 접속은 executor 만 하고, 외부테이블을 걸어 세그먼트가 스테이징을 당겨 읽게 하는 Phase 2 SQL 은 coordinator 가 중앙에서 실행한다.</text>
+</svg>

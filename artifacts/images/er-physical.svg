@@ -1,0 +1,269 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1000" width="1500" height="1000" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1500" height="1000" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">물리 ER — PostgreSQL 메타 저장소</text>
+<text x="28" y="60" font-size="13" fill="#64748b">config/postgresql.sql 이 만드는 일곱 테이블. 모든 시각 컬럼은 타임존 없는 KST TIMESTAMP 다.</text>
+<rect x="40" y="110" width="350" height="213" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.7"/>
+<path d="M40,155 V118 a8,8 0 0 1 8,-8 H382 a8,8 0 0 1 8,8 V155 z" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="215.0" y="128" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">«store.backend=postgres»</text>
+<text x="215.0" y="145" font-size="13.5" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.jobs</text>
+<text x="50" y="169" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="84" y="169" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="380" y="169" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="84" y="186" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="380" y="186" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="50" y="203" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="84" y="203" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status</text>
+<text x="380" y="203" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="84" y="220" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cancel_requested</text>
+<text x="380" y="220" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BOOLEAN</text>
+<text x="50" y="237" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="84" y="237" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">updated_at</text>
+<text x="380" y="237" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="50" y="254" font-size="9.5" fill="#7c3aed" text-anchor="start" font-weight="700">U</text>
+<text x="84" y="254" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">data</text>
+<text x="380" y="254" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JSONB</text>
+<text x="50" y="277" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">부분 UNIQUE: (data-&gt;&gt;'idempotency_key')</text>
+<text x="50" y="293" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">  WHERE 그 키가 NULL 이 아닐 때만</text>
+<text x="50" y="309" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">Job 스냅샷 전체가 data 안에 들어간다</text>
+<rect x="40" y="353" width="350" height="214" rx="8" fill="#ffffff" stroke="#ca8a04" stroke-width="1.7"/>
+<path d="M40,398 V361 a8,8 0 0 1 8,-8 H382 a8,8 0 0 1 8,8 V398 z" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="215.0" y="371" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">«JSONB 문서»</text>
+<text x="215.0" y="388" font-size="13.5" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">jobs.data 안에 담기는 것</text>
+<text x="84" y="412" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id · status · username</text>
+<text x="380" y="412" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="84" y="429" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">original_sql · target_table</text>
+<text x="380" y="429" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="84" y="446" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">exec_mode · write_mode</text>
+<text x="380" y="446" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="84" y="463" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">idempotency_key</text>
+<text x="380" y="463" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="84" y="480" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">request_fingerprint</text>
+<text x="380" y="480" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="84" y="497" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">retry_of · cancel_requested</text>
+<text x="380" y="497" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="84" y="514" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">tasks[ ] — task 스냅샷 배열</text>
+<text x="380" y="514" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="50" y="537" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">Task 는 별도 테이블이 없다. Job 문서 안에</text>
+<text x="50" y="553" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">배열로 담겨 함께 저장되고 함께 복원된다.</text>
+<rect x="40" y="620" width="350" height="283" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.7"/>
+<path d="M40,665 V628 a8,8 0 0 1 8,-8 H382 a8,8 0 0 1 8,8 V665 z" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="215.0" y="638" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">«executor.self_report=true»</text>
+<text x="215.0" y="655" font-size="13.5" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.executor_status</text>
+<text x="50" y="679" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="84" y="679" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_id</text>
+<text x="380" y="679" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="84" y="696" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url</text>
+<text x="380" y="696" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="84" y="713" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cpu_percent</text>
+<text x="380" y="713" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE PRECISION</text>
+<text x="84" y="730" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">memory_percent</text>
+<text x="380" y="730" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE PRECISION</text>
+<text x="84" y="747" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">memory_used_mb</text>
+<text x="380" y="747" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE PRECISION</text>
+<text x="84" y="764" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">memory_total_mb</text>
+<text x="380" y="764" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE PRECISION</text>
+<text x="84" y="781" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">disk_percent</text>
+<text x="380" y="781" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE PRECISION</text>
+<text x="84" y="798" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">disk_used_gb</text>
+<text x="380" y="798" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE PRECISION</text>
+<text x="84" y="815" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">disk_total_gb</text>
+<text x="380" y="815" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE PRECISION</text>
+<text x="84" y="832" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">active_tasks</text>
+<text x="380" y="832" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">INTEGER</text>
+<text x="84" y="849" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">max_concurrent_tasks</text>
+<text x="380" y="849" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">INTEGER</text>
+<text x="84" y="866" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">updated_at</text>
+<text x="380" y="866" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="50" y="889" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">executor 가 주기적으로 UPSERT 한다</text>
+<rect x="430" y="110" width="360" height="351" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.7"/>
+<path d="M430,155 V118 a8,8 0 0 1 8,-8 H782 a8,8 0 0 1 8,8 V155 z" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="610.0" y="128" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">«history.db_dsn»</text>
+<text x="610.0" y="145" font-size="13.5" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.job_history</text>
+<text x="440" y="169" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="474" y="169" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">id</text>
+<text x="780" y="169" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGSERIAL</text>
+<text x="440" y="186" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="474" y="186" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">recorded_at</text>
+<text x="780" y="186" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="440" y="203" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="474" y="203" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="780" y="203" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="474" y="220" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">username</text>
+<text x="780" y="220" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="474" y="237" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status</text>
+<text x="780" y="237" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="474" y="254" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">partition_column</text>
+<text x="780" y="254" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="474" y="271" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">target_table</text>
+<text x="780" y="271" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="474" y="288" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">parallelism</text>
+<text x="780" y="288" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">INTEGER</text>
+<text x="474" y="305" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">total_tasks</text>
+<text x="780" y="305" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">INTEGER</text>
+<text x="474" y="322" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">completed_tasks</text>
+<text x="780" y="322" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">INTEGER</text>
+<text x="474" y="339" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">total_rows_written</text>
+<text x="780" y="339" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT</text>
+<text x="474" y="356" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">error</text>
+<text x="780" y="356" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="474" y="373" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">created_at</text>
+<text x="780" y="373" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="474" y="390" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">started_at</text>
+<text x="780" y="390" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="474" y="407" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">finished_at</text>
+<text x="780" y="407" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="474" y="424" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">original_sql</text>
+<text x="780" y="424" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="440" y="447" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">상태가 바뀔 때마다 coordinator 가 append</text>
+<rect x="430" y="610" width="360" height="163" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.7"/>
+<path d="M430,655 V618 a8,8 0 0 1 8,-8 H782 a8,8 0 0 1 8,8 V655 z" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="610.0" y="628" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">«coordinator.executor_reservation=true»</text>
+<text x="610.0" y="645" font-size="13.5" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.executor_reservation</text>
+<text x="440" y="669" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="474" y="669" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url</text>
+<text x="780" y="669" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="440" y="686" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="474" y="686" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="780" y="686" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="474" y="703" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">n</text>
+<text x="780" y="703" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">INTEGER</text>
+<text x="440" y="720" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="474" y="720" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">updated_at</text>
+<text x="780" y="720" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="440" y="743" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">updated_at 으로 TTL 을 판정해</text>
+<text x="440" y="759" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">죽은 coordinator 의 예약을 무시한다</text>
+<rect x="430" y="800" width="360" height="113" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.7"/>
+<path d="M430,845 V808 a8,8 0 0 1 8,-8 H782 a8,8 0 0 1 8,8 V845 z" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="610.0" y="818" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">«heartbeat»</text>
+<text x="610.0" y="835" font-size="13.5" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.coordinator_status</text>
+<text x="440" y="859" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="474" y="859" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="780" y="859" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="474" y="876" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">updated_at</text>
+<text x="780" y="876" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="440" y="899" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">신선도로 coordinator 생존을 판정한다</text>
+<rect x="830" y="110" width="380" height="453" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.7"/>
+<path d="M830,155 V118 a8,8 0 0 1 8,-8 H1202 a8,8 0 0 1 8,8 V155 z" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="1020.0" y="128" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">«history.db_dsn — executor 가 직접 기록»</text>
+<text x="1020.0" y="145" font-size="13.5" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.task_history</text>
+<text x="840" y="169" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="874" y="169" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">id</text>
+<text x="1200" y="169" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGSERIAL</text>
+<text x="840" y="186" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="874" y="186" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">recorded_at</text>
+<text x="1200" y="186" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="840" y="203" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="874" y="203" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="1200" y="203" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="840" y="220" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="874" y="220" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">task_id</text>
+<text x="1200" y="220" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="237" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">username</text>
+<text x="1200" y="237" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="254" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_id</text>
+<text x="1200" y="254" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="271" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status</text>
+<text x="1200" y="271" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="288" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">rows_written</text>
+<text x="1200" y="288" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT</text>
+<text x="874" y="305" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">rows_read</text>
+<text x="1200" y="305" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT</text>
+<text x="874" y="322" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">error</text>
+<text x="1200" y="322" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="339" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">started_at</text>
+<text x="1200" y="339" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="874" y="356" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">finished_at</text>
+<text x="1200" y="356" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="874" y="373" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">impala_done_at</text>
+<text x="1200" y="373" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="874" y="390" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">sub_query</text>
+<text x="1200" y="390" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="407" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">exec_mode</text>
+<text x="1200" y="407" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="424" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">staging_ddl</text>
+<text x="1200" y="424" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="441" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">insert_sql</text>
+<text x="1200" y="441" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="874" y="458" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read_wait_ms</text>
+<text x="1200" y="458" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT</text>
+<text x="874" y="475" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">write_wait_ms</text>
+<text x="1200" y="475" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT</text>
+<text x="874" y="492" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read_starve_ms</text>
+<text x="1200" y="492" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT</text>
+<text x="874" y="509" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">finalize_wait_ms</text>
+<text x="1200" y="509" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGINT</text>
+<text x="874" y="526" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">phases</text>
+<text x="1200" y="526" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JSONB</text>
+<text x="840" y="549" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">느릴 때 보는 네 갈래가 여기 있다</text>
+<rect x="1250" y="110" width="220" height="249" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.7"/>
+<path d="M1250,155 V118 a8,8 0 0 1 8,-8 H1462 a8,8 0 0 1 8,8 V155 z" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="1360.0" y="128" font-size="11" fill="#64748b" text-anchor="middle" font-weight="400">«monitor.db_dsn»</text>
+<text x="1360.0" y="145" font-size="13.5" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">public.executor_health_metrics</text>
+<text x="1260" y="169" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="1294" y="169" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">id</text>
+<text x="1460" y="169" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BIGSERIAL</text>
+<text x="1260" y="186" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="1294" y="186" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">recorded_at</text>
+<text x="1460" y="186" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TIMESTAMP</text>
+<text x="1260" y="203" font-size="9.5" fill="#059669" text-anchor="start" font-weight="700">IDX</text>
+<text x="1294" y="203" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url</text>
+<text x="1460" y="203" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="1294" y="220" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">healthy</text>
+<text x="1460" y="220" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">BOOLEAN</text>
+<text x="1294" y="237" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cpu_percent</text>
+<text x="1460" y="237" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE</text>
+<text x="1294" y="254" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">memory_percent</text>
+<text x="1460" y="254" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE</text>
+<text x="1294" y="271" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">memory_used_mb</text>
+<text x="1460" y="271" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE</text>
+<text x="1294" y="288" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">memory_total_mb</text>
+<text x="1460" y="288" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE</text>
+<text x="1294" y="305" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">disk_percent</text>
+<text x="1460" y="305" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DOUBLE</text>
+<text x="1294" y="322" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">error</text>
+<text x="1460" y="322" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TEXT</text>
+<text x="1260" y="345" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">coordinator 가 주기적으로 append</text>
+<path d="M390,190 H428" stroke="#334155" stroke-width="1.5" fill="none" stroke-dasharray="6 4"/>
+<line x1="399" y1="184" x2="399" y2="196" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="428" y1="190" x2="416" y2="184" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="428" y1="190" x2="416" y2="190" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="428" y1="190" x2="416" y2="196" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="409" y="178" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">job_id</text>
+<path d="M790,200 H828" stroke="#334155" stroke-width="1.5" fill="none" stroke-dasharray="6 4"/>
+<line x1="799" y1="194" x2="799" y2="206" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="828" y1="200" x2="816" y2="194" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="828" y1="200" x2="816" y2="200" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="828" y1="200" x2="816" y2="206" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="809" y="188" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">job_id</text>
+<path d="M390,700 H428" stroke="#334155" stroke-width="1.5" fill="none" stroke-dasharray="6 4"/>
+<line x1="399" y1="694" x2="399" y2="706" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="428" y1="700" x2="416" y2="694" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="428" y1="700" x2="416" y2="700" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="428" y1="700" x2="416" y2="706" stroke="#334155" stroke-width="1.5" fill="none"/>
+<path d="M215,910 V952 H1360 V360" stroke="#334155" stroke-width="1.5" fill="none" stroke-dasharray="6 4"/>
+<line x1="209" y1="919" x2="221" y2="919" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1360" y1="360" x2="1354" y2="372" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1360" y1="360" x2="1360" y2="372" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1360" y1="360" x2="1366" y2="372" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="880" y="944" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">executor_url</text>
+<path d="M610,800 V772" stroke="#334155" stroke-width="1.5" fill="none" stroke-dasharray="6 4"/>
+<line x1="610" y1="800" x2="604" y2="788" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="610" y1="800" x2="610" y2="788" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="610" y1="800" x2="616" y2="788" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="604" y1="781" x2="616" y2="781" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="700" y="790" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">coordinator_id</text>
+<text x="830" y="626" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">표기: PK 는 기본키, U 는 유일 인덱스, IDX 는 조회용 인덱스다. 점선은 값으로만</text>
+<text x="830" y="646" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">이어지는 논리 관계이며 실제 외래키 제약은 걸지 않는다.</text>
+<text x="830" y="686" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">이력 테이블은 append 만 하므로 같은 job_id 아래 상태 전이마다 행이 쌓이고,</text>
+<text x="830" y="706" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">조회는 DISTINCT ON 으로 최신 행만 고른다.</text>
+<text x="830" y="746" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">앱이 CREATE TABLE IF NOT EXISTS 로 만들기는 하지만, 권한을 좁히거나 미리</text>
+<text x="830" y="766" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">만들어 두려면 config/postgresql.sql 을 서비스 기동 전에 적용한다.</text>
+<text x="830" y="786" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">테이블명은 db.schema 로 한정되므로 스키마를 바꾸면 설정과 DDL 두 파일을</text>
+<text x="830" y="806" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">함께 고쳐야 한다.</text>
+</svg>

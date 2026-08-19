@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 664" width="1200" height="664" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1200" height="664" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">클래스 — 헬스 모니터링과 여러 coordinator</text>
+<text x="28" y="60" font-size="13" fill="#64748b">누가 살아 있고 얼마나 바쁜지를 모아 executor 를 고르고, coordinator 끼리는 heartbeat 로 서로를 확인한다.</text>
+<rect x="784" y="94" width="372" height="490" rx="12" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="798" y="114" font-size="12.5" font-weight="700" fill="#7c3aed">여러 coordinator 의 정합 (ha.py)</text>
+<rect x="404" y="94" width="372" height="404" rx="12" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="418" y="114" font-size="12.5" font-weight="700" fill="#2563eb">executor 선택 (selector.py · reservation.py)</text>
+<rect x="24" y="94" width="372" height="384" rx="12" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="38" y="114" font-size="12.5" font-weight="700" fill="#2563eb">헬스 폴링과 메트릭 기록 (coordinator/monitor.py)</text>
+<rect x="40" y="120" width="340" height="164" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="210.0" y="140" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">HealthMonitor</text>
+<line x1="40" y1="150" x2="380" y2="150" stroke="#2563eb" stroke-width="1"/>
+<text x="52" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">health_interval_s / record_interval_s</text>
+<text x="52" y="182" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_snapshot: dict[str, ExecutorHealth]</text>
+<line x1="40" y1="196" x2="380" y2="196" stroke="#2563eb" stroke-width="1"/>
+<text x="52" y="210" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">start() / stop()</text>
+<text x="52" y="228" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">snapshot() / poll_now()</text>
+<text x="52" y="246" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_poll_one(url)</text>
+<text x="52" y="264" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_write_pg(metrics)</text>
+<rect x="40" y="300" width="340" height="162" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="210.0" y="320" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«dataclass»</text>
+<text x="210.0" y="336" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ExecutorHealth</text>
+<line x1="40" y1="346" x2="380" y2="346" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="360" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url / healthy</text>
+<text x="52" y="378" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cpu_percent / memory_percent</text>
+<text x="52" y="396" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">disk_percent / active_tasks</text>
+<text x="52" y="414" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">max_concurrent_tasks / error</text>
+<line x1="40" y1="428" x2="380" y2="428" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="442" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">as_view()</text>
+<rect x="420" y="120" width="340" height="146" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="590.0" y="140" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ExecutorSelector</text>
+<line x1="420" y1="150" x2="760" y2="150" stroke="#2563eb" stroke-width="1"/>
+<text x="432" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">policy: round_robin | least_loaded | p2c</text>
+<text x="432" y="182" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_view</text>
+<line x1="420" y1="196" x2="760" y2="196" stroke="#2563eb" stroke-width="1"/>
+<text x="432" y="210" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">order(executors) → list</text>
+<text x="432" y="228" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">assign(count) → list</text>
+<text x="432" y="246" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_p2c_first()</text>
+<rect x="420" y="282" width="340" height="92" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="590.0" y="302" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">SharedLoadView</text>
+<line x1="420" y1="312" x2="760" y2="312" stroke="#2563eb" stroke-width="1"/>
+<text x="432" y="326" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status_repo</text>
+<line x1="420" y1="340" x2="760" y2="340" stroke="#2563eb" stroke-width="1"/>
+<text x="432" y="354" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">by_url() → dict</text>
+<rect x="420" y="390" width="340" height="92" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="590.0" y="410" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ReservingLoadView</text>
+<line x1="420" y1="420" x2="760" y2="420" stroke="#2563eb" stroke-width="1"/>
+<text x="432" y="434" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">base_view / reservations</text>
+<line x1="420" y1="448" x2="760" y2="448" stroke="#2563eb" stroke-width="1"/>
+<text x="432" y="462" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">by_url() → 예약 반영</text>
+<rect x="800" y="120" width="340" height="128" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="970.0" y="140" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">CoordinatorHeartbeat</text>
+<line x1="800" y1="150" x2="1140" y2="150" stroke="#2563eb" stroke-width="1"/>
+<text x="812" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="812" y="182" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">interval_s / stale_s</text>
+<line x1="800" y1="196" x2="1140" y2="196" stroke="#2563eb" stroke-width="1"/>
+<text x="812" y="210" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">beat()</text>
+<text x="812" y="228" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">fresh_ids() → set</text>
+<rect x="800" y="264" width="340" height="98" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="970.0" y="284" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="970.0" y="300" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ha</text>
+<line x1="800" y1="310" x2="1140" y2="310" stroke="#7c3aed" stroke-width="1"/>
+<text x="812" y="324" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">select_orphans(owned, fresh)</text>
+<text x="812" y="342" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">reconcile_orphaned_jobs(store, hb)</text>
+<rect x="800" y="378" width="340" height="110" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="970.0" y="398" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ReservationRepository</text>
+<line x1="800" y1="408" x2="1140" y2="408" stroke="#2563eb" stroke-width="1"/>
+<text x="812" y="422" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ttl_s</text>
+<line x1="800" y1="436" x2="1140" y2="436" stroke="#2563eb" stroke-width="1"/>
+<text x="812" y="450" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">reserve(url) / release(url)</text>
+<text x="812" y="468" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_by_url()</text>
+<rect x="800" y="504" width="340" height="64" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="970.0" y="524" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ExecutorStatusRepository</text>
+<line x1="800" y1="534" x2="1140" y2="534" stroke="#2563eb" stroke-width="1"/>
+<text x="812" y="548" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read_all() → 상태 스냅샷</text>
+<path d="M380,190 H418" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M590.0,266 V282" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#open)"/>
+<path d="M590.0,374 V390" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#open)"/>
+<path d="M760,306 H796" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M760,414 H780 V408 H796" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="28" y="644" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">executor.self_report 를 켜면 executor 가 직접 상태를 쓰고 coordinator 는 읽기만 한다.</text>
+</svg>

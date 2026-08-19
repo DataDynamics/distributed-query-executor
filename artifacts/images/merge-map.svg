@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 396" width="1020" height="396" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/></marker>
+<marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1020" height="396" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">두 저장소를 독자별 문서 두 벌로 합쳤다</text>
+<text x="28" y="60" font-size="13" fill="#64748b">각 문서는 self-contained 문서라 링크를 따라다니지 않고 하나만 읽어도 그 역할의 일이 끝난다</text>
+<rect x="24" y="108" width="300" height="92" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="174.0" y="138.66666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">distributed-query-executor</text>
+<text x="174.0" y="158.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">coordinator·executor 서비스</text>
+<text x="174.0" y="178.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">요청 흐름 · 실행 모드 · 동시성 · HA</text>
+<rect x="24" y="236" width="300" height="92" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+<text x="174.0" y="266.6666666666667" font-size="14" font-weight="700" fill="#c2410c" text-anchor="middle">impala-to-whpg</text>
+<text x="174.0" y="286.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">사람이 직접 쓰는 터미널 도구</text>
+<text x="174.0" y="306.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">쿼리·CSV · 셸 · S3 · 크론 · PXF</text>
+<rect x="660" y="108" width="336" height="92" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="828.0" y="138.66666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">artifacts/USER_GUIDE.md</text>
+<text x="828.0" y="158.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">작업을 맡기고 결과를 확인하는 사람</text>
+<text x="828.0" y="178.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">API 사용법과 도구 사용법을 한 벌로</text>
+<rect x="660" y="236" width="336" height="92" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="828.0" y="266.6666666666667" font-size="14" font-weight="700" fill="#6d28d9" text-anchor="middle">artifacts/OPERATOR_GUIDE.md</text>
+<text x="828.0" y="286.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">서비스를 설치하고 돌보는 사람</text>
+<text x="828.0" y="306.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">설정·용량·장애·S3/PXF·도구 운영</text>
+<line x1="328" y1="140" x2="656" y2="140" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="492.0" y="130.0" font-size="12" fill="#475569" text-anchor="middle">API 사용법</text>
+<line x1="328" y1="168" x2="656" y2="264" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<line x1="328" y1="268" x2="656" y2="172" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<line x1="328" y1="296" x2="656" y2="296" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="492.0" y="286.0" font-size="12" fill="#475569" text-anchor="middle">자격증명·크론·PXF·분산키</text>
+<text x="24" y="352" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">가로지르는 두 화살표가 갈라지는 지점이다. 서비스의 설치·설정·용량·장애는 운영자 가이드로 가고, 도구 사용법은 사용자 가이드로 간다.</text>
+<text x="24" y="370" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">도구는 이미 src/tools/ 로 옮겨져 bin/gp-shell · bin/impala-shell · bin/s3-ops 로 제공되고, 별도 설정 파일 없이 config/config.properties 를 그대로 읽는다.</text>
+</svg>

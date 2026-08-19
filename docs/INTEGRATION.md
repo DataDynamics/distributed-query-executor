@@ -91,7 +91,7 @@ executor 가 COPY 전에 그 DDL 로 테이블을 만들고, **생략하면 테�
 `staging_ddl` 은 ①에서 그대로 실행되므로 뒤따르는 COPY 가 채울 컬럼을 가진 테이블을 만들어야
 합니다(예시의 `CREATE TEMP TABLE stg_sales (LIKE warehouse.sales)` 처럼 대상 컬럼을 복제하면
 간단). `wrapper_query` 는 ③에서 실행되는 INSERT 로, **`staging_table` 에서 읽어 `target_table`
-로 넣는 완성된 SQL** 이어야 합니다. copy 모드와 달리 sub-query 자리표시자(`{{SUBQUERY}}`)는
+로 넣는 완성된 SQL** 이어야 합니다. copy 모드와 달리 sub-query placeholder(`{{SUBQUERY}}`)는
 필요 없습니다.
 
 두 가지를 유의하세요. 첫째, COPY(②)는 SELECT 가 돌려준 컬럼 이름을 그대로 쓰므로 `sql` 의
@@ -170,7 +170,7 @@ task 로 펼칩니다(executor 당 하루씩). 적재는 stage_insert append 이
 `sign` 은 **값의 부호가 아니라 SQL 연산자의 방향**입니다. Impala `interval` 은 절대값만 받아
 `current_date() - interval 7 day` 처럼 방향이 SQL 텍스트에 박히므로, 값(7)만으로는 "오늘 기준
 -7일" 을 복원할 수 없기 때문입니다. 서버는 task 마다 두 파라미터를 같은 날로 좁혀 렌더하므로
-`BETWEEN` 이 하루로 붕괴하고, `interval` 뒤에는 언제나 절대값만 들어갑니다. 비교식이 반열림
+`BETWEEN` 이 하루로 붕괴하고, `interval` 뒤에는 언제나 절대값만 들어갑니다. 비교식이 half-open
 (`>= a AND < b`)이면 `"task_bound": "pair"` 를 함께 보냅니다(기본 `point`).
 
 ## 3. 완료될 때까지 대기 (폴링)
@@ -626,7 +626,7 @@ var dailyJobId = await client.SubmitAsync(daily);
 
 - **`params` 는 이름-값 항목 `배열`**(`[{name, value}, …]`)로, `/jobs` 템플릿 모드의 map(2.2·7.1)과
   **형태가 다릅니다**.
-- SELECT 만 실행하는 **미리보기성 조회**라 stage_insert 적재를 하지 않고 결과 행만 반환합니다.
+- SELECT 만 실행하는 **preview 용 조회**라 stage_insert 적재를 하지 않고 결과 행만 반환합니다.
 - 소스(impala/trino) 실행은 클라이언트가 executor 를 지정하지 않고, coordinator 가 `/jobs` 와 동일
   정책으로 **가장 한가한 executor 를 골라 그 executor 의 `POST /query-run` 에 위임**합니다(연결
   실패 시 다음 executor 로 failover). `greenplum`/`history` 는 coordinator 가 직접 실행합니다.

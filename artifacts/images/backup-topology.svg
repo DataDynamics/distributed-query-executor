@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" width="1200" height="700" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/></marker>
+<marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1200" height="700" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">백업 구성도</text>
+<text x="28" y="60" font-size="13" fill="#64748b">설정과 템플릿, 커스텀 함수, 그리고 메타 저장소가 백업 대상이다. 나머지는 다시 만들 수 있다.</text>
+<rect x="28" y="92" width="470" height="406" rx="12" fill="none" stroke="#64748b" stroke-width="1.3" stroke-dasharray="7 5"/>
+<text x="40" y="111" font-size="12" font-weight="700" fill="#64748b">운영 서버 — /data1/distributed-query-executor</text>
+<rect x="46" y="126" width="434" height="52" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="263.0" y="146.83333333333334" font-size="13" font-weight="700" fill="#1d4ed8" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">config/</text>
+<text x="263.0" y="165.83333333333334" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">설정 · TLS 인증서 · 스키마</text>
+<rect x="46" y="186" width="434" height="52" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="263.0" y="206.83333333333334" font-size="13" font-weight="700" fill="#1d4ed8" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">templates/</text>
+<text x="263.0" y="225.83333333333334" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">쿼리 템플릿</text>
+<rect x="46" y="246" width="434" height="52" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="263.0" y="266.8333333333333" font-size="13" font-weight="700" fill="#1d4ed8" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">customs/</text>
+<text x="263.0" y="285.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">사이트 커스텀 함수</text>
+<rect x="46" y="306" width="434" height="52" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="263.0" y="326.8333333333333" font-size="13" font-weight="700" fill="#92400e" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">logs/</text>
+<text x="263.0" y="345.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">일 단위 롤링 · 30일 보존</text>
+<rect x="46" y="366" width="434" height="52" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.6"/>
+<text x="263.0" y="386.8333333333333" font-size="13" font-weight="700" fill="#334155" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">src/ · bin/ · .venv</text>
+<text x="263.0" y="405.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">install.sh 로 다시 만든다</text>
+<rect x="46" y="426" width="434" height="52" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.6"/>
+<text x="263.0" y="446.8333333333333" font-size="13" font-weight="700" fill="#334155" text-anchor="middle" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">stage/</text>
+<text x="263.0" y="465.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">실행 중에만 있는 중간 산출물</text>
+<rect x="560" y="380" width="250" height="120" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="685.0" y="414.6666666666667" font-size="14" font-weight="700" fill="#6d28d9" text-anchor="middle">PostgreSQL 메타 저장소</text>
+<text x="685.0" y="434.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">jobs · job_history</text>
+<text x="685.0" y="454.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">task_history · 상태 3종</text>
+<text x="685.0" y="474.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">볼륨이 작다</text>
+<rect x="880" y="120" width="290" height="96" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="1025.0" y="152.66666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">백업 저장소 — 파일</text>
+<text x="1025.0" y="172.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">dqe-assets-YYYYMMDD.tar.gz</text>
+<text x="1025.0" y="192.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">변경 시 · 3세대 이상</text>
+<rect x="880" y="380" width="290" height="96" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="1025.0" y="412.6666666666667" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">백업 저장소 — DB 덤프</text>
+<text x="1025.0" y="432.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">queryexec-YYYYMMDD.dump</text>
+<text x="1025.0" y="452.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">일 1회 · pg_dump -Fc</text>
+<line x1="480" y1="152" x2="876" y2="152" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<text x="678.0" y="140.0" font-size="12" fill="#475569" text-anchor="middle">tar czf — 운영자 자산 세 디렉터리</text>
+<path d="M480,332 H830 V176 H872" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arm)"/>
+<text x="700" y="324" font-size="12" fill="#475569" text-anchor="middle">필요 시</text>
+<line x1="810" y1="440" x2="876" y2="440" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<text x="843" y="428" font-size="12" fill="#475569" text-anchor="middle" font-weight="400">pg_dump</text>
+<text x="560" y="534" font-size="12" fill="#475569" text-anchor="start" font-weight="400">복구는 서비스를 멈추고 pg_restore 로 되돌린 뒤 다시 띄운다.</text>
+<text x="560" y="554" font-size="12" fill="#475569" text-anchor="start" font-weight="400">빈 DB 로 시작할 때는 config/postgresql.sql 을 먼저 적용한다.</text>
+<rect x="28" y="584" width="1142" height="82" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="599.0" y="609.6666666666666" font-size="14" font-weight="700" fill="#92400e" text-anchor="middle">백업 범위 밖</text>
+<text x="599.0" y="629.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">옮긴 데이터는 적재 대상 Greenplum 에 있고 그 백업은 대상 시스템의 운영 정책을 따른다. S3 스테이징 객체는 적재가 끝나면 지워지며,</text>
+<text x="599.0" y="649.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">남겨 두었다면 수명주기 정책으로 정리한다. 두 가지 모두 이 시스템이 백업하지 않는다.</text>
+</svg>

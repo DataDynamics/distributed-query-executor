@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 758" width="1240" height="758" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1240" height="758" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">클래스 — 공용 core 모듈</text>
+<text x="28" y="60" font-size="13" fill="#64748b">coordinator 와 executor 가 함께 쓰는 설정·로깅·미리보기·스테이징 SQL 조립</text>
+<rect x="814" y="94" width="392" height="584" rx="12" fill="none" stroke="#059669" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="828" y="114" font-size="12.5" font-weight="700" fill="#059669">데이터소스 미리보기와 스테이징 SQL</text>
+<rect x="414" y="94" width="392" height="468" rx="12" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="428" y="114" font-size="12.5" font-weight="700" fill="#2563eb">로깅 (core/logging.py · sqllog.py · http_logging.py)</text>
+<rect x="24" y="94" width="382" height="356" rx="12" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="38" y="114" font-size="12.5" font-weight="700" fill="#7c3aed">설정 (config.properties → config.yml)</text>
+<rect x="40" y="120" width="350" height="116" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="215.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="215.0" y="156" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">config_loader</text>
+<line x1="40" y1="166" x2="390" y2="166" stroke="#7c3aed" stroke-width="1"/>
+<text x="52" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_properties(path) → dict</text>
+<text x="52" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_yaml(path) → dict</text>
+<text x="52" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_config() → 치환된 설정</text>
+<rect x="40" y="252" width="350" height="182" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="215.0" y="272" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Settings</text>
+<line x1="40" y1="282" x2="390" y2="282" stroke="#7c3aed" stroke-width="1"/>
+<text x="52" y="296" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator.* / executor.*</text>
+<text x="52" y="314" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">impala.* / greenplum.*</text>
+<text x="52" y="332" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">template.* / s3.* / stage.*</text>
+<text x="52" y="350" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">log.* / monitor.* / history.*</text>
+<line x1="40" y1="364" x2="390" y2="364" stroke="#7c3aed" stroke-width="1"/>
+<text x="52" y="378" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">init_settings(config_dir)</text>
+<text x="52" y="396" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_get(section, key)</text>
+<text x="52" y="414" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_qualify_table(schema, table)</text>
+<rect x="430" y="120" width="360" height="152" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="610.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="610.0" y="156" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">logging</text>
+<line x1="430" y1="166" x2="790" y2="166" stroke="#7c3aed" stroke-width="1"/>
+<text x="442" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">setup_logging(name, filename)</text>
+<text x="442" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_log_context(job_id, task_id)</text>
+<text x="442" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">with_log_context(fn, *args)</text>
+<text x="442" y="234" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_DailyFileHandler → 일 단위 롤링</text>
+<text x="442" y="252" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">*-warn.log 분리</text>
+<rect x="430" y="288" width="360" height="116" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="610.0" y="308" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="610.0" y="324" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">sqllog</text>
+<line x1="430" y1="334" x2="790" y2="334" stroke="#7c3aed" stroke-width="1"/>
+<text x="442" y="348" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">log_sql(cursor, sql, phase …)</text>
+<text x="442" y="366" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">datasource_of(cursor)</text>
+<text x="442" y="384" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">format_sql(sql, max_length)</text>
+<rect x="430" y="420" width="360" height="126" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="610.0" y="440" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«ASGI»</text>
+<text x="610.0" y="456" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">HttpLoggingMiddleware</text>
+<line x1="430" y1="466" x2="790" y2="466" stroke="#7c3aed" stroke-width="1"/>
+<text x="442" y="480" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">max_body / exclude_paths</text>
+<line x1="430" y1="494" x2="790" y2="494" stroke="#7c3aed" stroke-width="1"/>
+<text x="442" y="508" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">__call__(scope, receive, send)</text>
+<text x="442" y="526" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">install_http_logging(app)</text>
+<rect x="830" y="120" width="360" height="134" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1010.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="1010.0" y="156" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">dbprobe</text>
+<line x1="830" y1="166" x2="1190" y2="166" stroke="#7c3aed" stroke-width="1"/>
+<text x="842" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">run_postgres_select(...)</text>
+<text x="842" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">run_impala_select(...)</text>
+<text x="842" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_shape(columns, rows, limit)</text>
+<text x="842" y="234" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_json_safe(value)</text>
+<rect x="830" y="270" width="360" height="126" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="1010.0" y="290" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«dataclass»</text>
+<text x="1010.0" y="306" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">QueryResult</text>
+<line x1="830" y1="316" x2="1190" y2="316" stroke="#ca8a04" stroke-width="1"/>
+<text x="842" y="330" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">columns / rows / row_count</text>
+<text x="842" y="348" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">truncated / elapsed_ms</text>
+<line x1="830" y1="362" x2="1190" y2="362" stroke="#ca8a04" stroke-width="1"/>
+<text x="842" y="376" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">to_dict()</text>
+<rect x="830" y="412" width="360" height="134" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1010.0" y="432" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="1010.0" y="448" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">s3_stage</text>
+<line x1="830" y1="458" x2="1190" y2="458" stroke="#7c3aed" stroke-width="1"/>
+<text x="842" y="472" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">s3_object_key(prefix, job, task)</text>
+<text x="842" y="490" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">external_table_name(job_id)</text>
+<text x="842" y="508" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">build_s3_external_ddl(...)</text>
+<text x="842" y="526" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">build_pre_delete(...) / build_cleanup_ddl()</text>
+<rect x="830" y="562" width="360" height="100" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1010.0" y="582" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">그 밖의 공용 모듈</text>
+<line x1="830" y1="592" x2="1190" y2="592" stroke="#7c3aed" stroke-width="1"/>
+<text x="842" y="606" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">masking · phases · metrics</text>
+<text x="842" y="624" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">timeutil · textui · webassets</text>
+<text x="842" y="642" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">banner · version</text>
+<path d="M215.0,236 V252" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M390,282 H428" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M790,150 H828" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M1010.0,254 V270" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="1032.0" y="258" font-size="11.5" fill="#64748b" text-anchor="start" font-weight="400">생성</text>
+<text x="28" y="738" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">설정은 config.properties 의 값이 config.yml 의 자리표시자를 채워 Settings 하나로 굳는다.</text>
+</svg>

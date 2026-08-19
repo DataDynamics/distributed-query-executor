@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 380" width="1080" height="380" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/></marker>
+<marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1080" height="380" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">제출하고, 기다리고, 실제로 확인하기</text>
+<text x="28" y="60" font-size="13" fill="#64748b">API 가 돌려주는 것은 상태와 행 수뿐이다. 옮긴 데이터는 대상 테이블에서 확인한다</text>
+<rect x="24" y="108" width="190" height="66" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="119.0" y="135.66666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">① POST /jobs</text>
+<text x="119.0" y="155.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">202 + job_id</text>
+<rect x="252" y="108" width="220" height="66" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="362.0" y="135.66666666666666" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">② status 폴링</text>
+<text x="362.0" y="155.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">1~3초 간격, 경량 응답</text>
+<line x1="214" y1="141" x2="250" y2="141" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<path d="M362,174 V210 H362" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<rect x="252" y="214" width="220" height="52" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.6"/>
+<text x="362.0" y="244.33333333333334" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">종료 상태 도달</text>
+<rect x="560" y="92" width="240" height="62" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="680.0" y="127.66666666666667" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">DONE</text>
+<rect x="560" y="172" width="240" height="62" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="680.0" y="207.66666666666666" font-size="14" font-weight="700" fill="#92400e" text-anchor="middle">PARTIAL · FAILED</text>
+<rect x="560" y="252" width="240" height="62" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.6"/>
+<text x="680.0" y="287.3333333333333" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">s3_stage 가 Phase 2 에서 실패</text>
+<path d="M472,240 H516 V123 H556" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<path d="M472,240 H516 V203 H556" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<path d="M472,240 H516 V283 H556" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<rect x="840" y="92" width="216" height="62" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="948.0" y="117.83333333333333" font-size="13" font-weight="700" fill="#6d28d9" text-anchor="middle">gp-shell 로</text>
+<text x="948.0" y="136.83333333333331" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">대상 행 수를 대조</text>
+<rect x="840" y="172" width="216" height="62" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.6"/>
+<text x="948.0" y="197.83333333333334" font-size="13" font-weight="700" fill="#b91c1c" text-anchor="middle">/jobs 상세로 원인 확인</text>
+<text x="948.0" y="216.83333333333334" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">POST /retry 로 실패분만</text>
+<rect x="840" y="252" width="216" height="62" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.6"/>
+<text x="948.0" y="277.8333333333333" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">s3-ops 로 남은 객체 확인</text>
+<text x="948.0" y="296.8333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">고친 뒤 다시 돌리고 정리</text>
+<line x1="802" y1="123" x2="836" y2="123" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<line x1="802" y1="203" x2="836" y2="203" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<line x1="802" y1="283" x2="836" y2="283" stroke="#334155" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="24" y="350" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">성공은 DONE 하나뿐이다. PARTIAL 은 일부 파티션이 빠진 상태이므로 성공으로 다루면 안 된다.</text>
+</svg>

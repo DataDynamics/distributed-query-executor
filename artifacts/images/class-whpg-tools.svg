@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 734" width="1200" height="734" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1200" height="734" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">클래스 — whpg-to-whpg 접속과 도구</text>
+<text x="28" y="60" font-size="13" fill="#64748b">복사 도구와 같은 설정을 읽어 사람이 직접 WarehousePG 와 S3 를 다루는 부분</text>
+<rect x="784" y="94" width="372" height="536" rx="12" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="798" y="114" font-size="12.5" font-weight="700" fill="#7c3aed">설정과 공통 부품</text>
+<rect x="404" y="94" width="382" height="560" rx="12" fill="none" stroke="#db2777" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="418" y="114" font-size="12.5" font-weight="700" fill="#db2777">사람이 직접 쓰는 도구</text>
+<rect x="24" y="94" width="372" height="338" rx="12" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="38" y="114" font-size="12.5" font-weight="700" fill="#2563eb">접속 (source · target 두 벌)</text>
+<rect x="40" y="120" width="340" height="146" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="210.0" y="140" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ConnectionInfo</text>
+<line x1="40" y1="150" x2="380" y2="150" stroke="#2563eb" stroke-width="1"/>
+<text x="52" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">host / port / database</text>
+<text x="52" y="182" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">user / password / sslmode</text>
+<text x="52" y="200" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">session_sql / schema</text>
+<line x1="40" y1="214" x2="380" y2="214" stroke="#2563eb" stroke-width="1"/>
+<text x="52" y="228" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">connect_kwargs() → psycopg2</text>
+<text x="52" y="246" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">label() → 로그 표기</text>
+<rect x="40" y="282" width="340" height="134" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="210.0" y="302" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="210.0" y="318" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">whpg</text>
+<line x1="40" y1="328" x2="380" y2="328" stroke="#2563eb" stroke-width="1"/>
+<text x="52" y="342" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">add_connection_arguments(parser)</text>
+<text x="52" y="360" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">resolve(args, section) → ConnectionInfo</text>
+<text x="52" y="378" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">resolve_password() — 인자로 받지 않음</text>
+<text x="52" y="396" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">connect(info) / probe(conn)</text>
+<rect x="420" y="120" width="350" height="116" rx="8" fill="#fdf2f8" stroke="#db2777" stroke-width="1.7"/>
+<text x="595.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="595.0" y="156" font-size="14" fill="#be185d" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">whpg_query</text>
+<line x1="420" y1="166" x2="770" y2="166" stroke="#db2777" stroke-width="1"/>
+<text x="432" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">build_parser() / main()</text>
+<text x="432" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">run(args) — -q · -f · -o</text>
+<text x="432" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">make_engine() / run_shell()</text>
+<rect x="420" y="252" width="350" height="110" rx="8" fill="#fdf2f8" stroke="#db2777" stroke-width="1.7"/>
+<text x="595.0" y="272" font-size="14" fill="#be185d" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Engine</text>
+<line x1="420" y1="282" x2="770" y2="282" stroke="#db2777" stroke-width="1"/>
+<text x="432" y="296" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">name / connect / cancel</text>
+<text x="432" y="314" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">list_tables_sql / ddl_sql</text>
+<line x1="420" y1="328" x2="770" y2="328" stroke="#db2777" stroke-width="1"/>
+<text x="432" y="342" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">connect() → DB-API 연결</text>
+<rect x="420" y="378" width="350" height="128" rx="8" fill="#fdf2f8" stroke="#db2777" stroke-width="1.7"/>
+<text x="595.0" y="398" font-size="14" fill="#be185d" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Shell</text>
+<line x1="420" y1="408" x2="770" y2="408" stroke="#db2777" stroke-width="1"/>
+<text x="432" y="422" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">engine / args</text>
+<line x1="420" y1="436" x2="770" y2="436" stroke="#db2777" stroke-width="1"/>
+<text x="432" y="450" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">run() : 대화 루프</text>
+<text x="432" y="468" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">meta(cmd) : \dt \d …</text>
+<text x="432" y="486" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">complete() / page() / transaction()</text>
+<rect x="420" y="522" width="350" height="116" rx="8" fill="#fdf2f8" stroke="#db2777" stroke-width="1.7"/>
+<text x="595.0" y="542" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="595.0" y="558" font-size="14" fill="#be185d" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">s3_ops</text>
+<line x1="420" y1="568" x2="770" y2="568" stroke="#db2777" stroke-width="1"/>
+<text x="432" y="582" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ls · upload · download · head</text>
+<text x="432" y="600" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cp · mv · rm · rmdir · exists</text>
+<text x="432" y="618" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">is_multipart_denied() — 단일 PUT 폴백</text>
+<rect x="800" y="120" width="340" height="134" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="970.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="970.0" y="156" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">appconfig</text>
+<line x1="800" y1="166" x2="1140" y2="166" stroke="#7c3aed" stroke-width="1"/>
+<text x="812" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">resolve_config_path(args)</text>
+<text x="812" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_section(path, section)</text>
+<text x="812" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">expand_env() — ${VAR} 치환</text>
+<text x="812" y="234" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">pick(cli, cfg, default)</text>
+<rect x="800" y="270" width="340" height="98" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="970.0" y="290" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="970.0" y="306" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">sqlfile</text>
+<line x1="800" y1="316" x2="1140" y2="316" stroke="#7c3aed" stroke-width="1"/>
+<text x="812" y="330" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read_query(args) → SQL</text>
+<text x="812" y="348" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">render_query() — Jinja 변수</text>
+<rect x="800" y="384" width="340" height="98" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="970.0" y="404" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="970.0" y="420" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">table</text>
+<line x1="800" y1="430" x2="1140" y2="430" stroke="#7c3aed" stroke-width="1"/>
+<text x="812" y="444" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">render(columns, rows)</text>
+<text x="812" y="462" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">write_csv() / print_result()</text>
+<rect x="800" y="498" width="340" height="116" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.7"/>
+<text x="970.0" y="518" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«파일»</text>
+<text x="970.0" y="534" font-size="14" fill="#475569" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">conf/config.yaml</text>
+<line x1="800" y1="544" x2="1140" y2="544" stroke="#94a3b8" stroke-width="1"/>
+<text x="812" y="558" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">source · target 섹션</text>
+<text x="812" y="576" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">copy · s3 · sql 섹션</text>
+<text x="812" y="594" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">비밀은 ${ENV} 참조</text>
+<path d="M380,190 H418" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M770,190 H796" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M970.0,254 V270" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M970.0,482 V498" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="1000.0" y="486" font-size="11.5" fill="#64748b" text-anchor="start" font-weight="400">읽기</text>
+<path d="M595.0,236 V252" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M595.0,362 V378" stroke="#334155" stroke-width="1.6" fill="none" marker-start="url(#dia)" marker-end="url(#open)"/>
+<text x="28" y="714" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">비밀번호는 명령행 인자로 받지 않고 설정·환경변수·대화형 입력 순으로만 찾는다.</text>
+</svg>

@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 780" width="1360" height="780" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1360" height="780" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">논리 ER — 무엇을 기억해야 하는가</text>
+<text x="28" y="60" font-size="13" fill="#64748b">테이블 모양이 아니라 이 시스템이 다루는 개념과 그 사이의 관계다. Task 는 개념으로는 독립이지만 물리에서는 Job 안에 담긴다.</text>
+<rect x="40" y="110" width="290" height="98" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.7"/>
+<path d="M40,140 V118 a8,8 0 0 1 8,-8 H322 a8,8 0 0 1 8,8 V140 z" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="185.0" y="130" font-size="13.5" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Coordinator</text>
+<text x="50" y="154" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="84" y="154" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="320" y="154" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">식별자</text>
+<text x="84" y="171" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">heartbeat_at</text>
+<text x="320" y="171" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">생존 신호 시각</text>
+<text x="50" y="194" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">요청을 받아 Job 을 만들고 소유한다</text>
+<rect x="400" y="110" width="330" height="217" rx="8" fill="#ffffff" stroke="#ca8a04" stroke-width="1.7"/>
+<path d="M400,140 V118 a8,8 0 0 1 8,-8 H722 a8,8 0 0 1 8,8 V140 z" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="565.0" y="130" font-size="13.5" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Job</text>
+<text x="410" y="154" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="444" y="154" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="720" y="154" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">식별자</text>
+<text x="410" y="171" font-size="9.5" fill="#1d4ed8" text-anchor="start" font-weight="700">FK</text>
+<text x="444" y="171" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="720" y="171" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">소유 coordinator</text>
+<text x="410" y="188" font-size="9.5" fill="#7c3aed" text-anchor="start" font-weight="700">U</text>
+<text x="444" y="188" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">idempotency_key</text>
+<text x="720" y="188" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">요청 멱등 키</text>
+<text x="444" y="205" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">username</text>
+<text x="720" y="205" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">제출자</text>
+<text x="444" y="222" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status</text>
+<text x="720" y="222" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">PENDING … DONE</text>
+<text x="444" y="239" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">target_table</text>
+<text x="720" y="239" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">적재 대상</text>
+<text x="444" y="256" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">partition_column</text>
+<text x="720" y="256" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">분할 기준</text>
+<text x="444" y="273" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">exec_mode / write_mode</text>
+<text x="720" y="273" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">실행·적재 방식</text>
+<text x="444" y="290" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">created_at / finished_at</text>
+<text x="720" y="290" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">시각</text>
+<text x="410" y="313" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">요청 하나가 곧 Job 하나다</text>
+<rect x="800" y="110" width="330" height="183" rx="8" fill="#ffffff" stroke="#ca8a04" stroke-width="1.7"/>
+<path d="M800,140 V118 a8,8 0 0 1 8,-8 H1122 a8,8 0 0 1 8,8 V140 z" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="965.0" y="130" font-size="13.5" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Task</text>
+<text x="810" y="154" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="844" y="154" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">task_id</text>
+<text x="1120" y="154" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">식별자</text>
+<text x="810" y="171" font-size="9.5" fill="#1d4ed8" text-anchor="start" font-weight="700">FK</text>
+<text x="844" y="171" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="1120" y="171" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">소속 Job</text>
+<text x="810" y="188" font-size="9.5" fill="#1d4ed8" text-anchor="start" font-weight="700">FK</text>
+<text x="844" y="188" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_id</text>
+<text x="1120" y="188" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">실행한 executor</text>
+<text x="844" y="205" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">partition_values</text>
+<text x="1120" y="205" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">이 task 가 맡은 값</text>
+<text x="844" y="222" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status</text>
+<text x="1120" y="222" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">QUEUED … DONE</text>
+<text x="844" y="239" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">rows_written / rows_read</text>
+<text x="1120" y="239" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">행 수</text>
+<text x="844" y="256" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">attempt</text>
+<text x="1120" y="256" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">재시도 횟수</text>
+<text x="810" y="279" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">Job 을 나눈 실행 단위</text>
+<rect x="1170" y="110" width="150" height="91" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.7"/>
+<path d="M1170,140 V118 a8,8 0 0 1 8,-8 H1312 a8,8 0 0 1 8,8 V140 z" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="1245.0" y="130" font-size="13.5" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Executor</text>
+<text x="1180" y="154" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="1214" y="154" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_id</text>
+<text x="1310" y="154" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="1214" y="171" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url</text>
+<text x="1310" y="171" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="1214" y="188" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">active_tasks</text>
+<text x="1310" y="188" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<rect x="400" y="430" width="330" height="149" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.7"/>
+<path d="M400,460 V438 a8,8 0 0 1 8,-8 H722 a8,8 0 0 1 8,8 V460 z" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="565.0" y="450" font-size="13.5" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobHistoryEvent</text>
+<text x="410" y="474" font-size="9.5" fill="#1d4ed8" text-anchor="start" font-weight="700">FK</text>
+<text x="444" y="474" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id</text>
+<text x="720" y="474" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">대상 Job</text>
+<text x="444" y="491" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">recorded_at</text>
+<text x="720" y="491" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">기록 시각</text>
+<text x="444" y="508" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status</text>
+<text x="720" y="508" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">그때의 상태</text>
+<text x="444" y="525" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">completed_tasks</text>
+<text x="720" y="525" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">진행</text>
+<text x="444" y="542" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">total_rows_written</text>
+<text x="720" y="542" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">누적 행 수</text>
+<text x="410" y="565" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">상태가 바뀔 때마다 한 줄씩 쌓인다</text>
+<rect x="800" y="430" width="330" height="149" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.7"/>
+<path d="M800,460 V438 a8,8 0 0 1 8,-8 H1122 a8,8 0 0 1 8,8 V460 z" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="965.0" y="450" font-size="13.5" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TaskHistoryEvent</text>
+<text x="810" y="474" font-size="9.5" fill="#1d4ed8" text-anchor="start" font-weight="700">FK</text>
+<text x="844" y="474" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id / task_id</text>
+<text x="1120" y="474" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">대상 task</text>
+<text x="844" y="491" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">recorded_at</text>
+<text x="1120" y="491" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">기록 시각</text>
+<text x="844" y="508" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status</text>
+<text x="1120" y="508" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">그때의 상태</text>
+<text x="844" y="525" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">rows_written</text>
+<text x="1120" y="525" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">적재 행 수</text>
+<text x="844" y="542" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read_wait / write_wait</text>
+<text x="1120" y="542" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">단계별 소요</text>
+<text x="810" y="565" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">executor 가 직접 남긴다</text>
+<rect x="1170" y="430" width="150" height="91" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.7"/>
+<path d="M1170,460 V438 a8,8 0 0 1 8,-8 H1312 a8,8 0 0 1 8,8 V460 z" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="1245.0" y="450" font-size="13.5" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ExecutorStatus</text>
+<text x="1180" y="474" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="1214" y="474" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_id</text>
+<text x="1310" y="474" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="1214" y="491" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cpu / memory</text>
+<text x="1310" y="491" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="1214" y="508" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">updated_at</text>
+<text x="1310" y="508" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<rect x="1170" y="620" width="150" height="91" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.7"/>
+<path d="M1170,650 V628 a8,8 0 0 1 8,-8 H1312 a8,8 0 0 1 8,8 V650 z" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="1245.0" y="640" font-size="13.5" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">HealthMetric</text>
+<text x="1180" y="664" font-size="9.5" fill="#1d4ed8" text-anchor="start" font-weight="700">FK</text>
+<text x="1214" y="664" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url</text>
+<text x="1310" y="664" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="1214" y="681" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">recorded_at</text>
+<text x="1310" y="681" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<text x="1214" y="698" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">healthy</text>
+<text x="1310" y="698" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace"></text>
+<rect x="40" y="430" width="290" height="132" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.7"/>
+<path d="M40,460 V438 a8,8 0 0 1 8,-8 H322 a8,8 0 0 1 8,8 V460 z" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="185.0" y="450" font-size="13.5" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Reservation</text>
+<text x="50" y="474" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="84" y="474" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url</text>
+<text x="320" y="474" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">예약 대상</text>
+<text x="50" y="491" font-size="9.5" fill="#b45309" text-anchor="start" font-weight="700">PK</text>
+<text x="84" y="491" font-size="11.5" fill="#0f172a" text-anchor="start" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id</text>
+<text x="320" y="491" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">예약한 coordinator</text>
+<text x="84" y="508" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">n</text>
+<text x="320" y="508" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">예약 수</text>
+<text x="84" y="525" font-size="11.5" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">updated_at</text>
+<text x="320" y="525" font-size="10.5" fill="#94a3b8" text-anchor="end" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TTL 판정</text>
+<text x="50" y="548" font-size="10.5" fill="#64748b" text-anchor="start" font-weight="400">디스패치하는 동안 자리를 잡아 둔다</text>
+<path d="M330,180 H398" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="339" y1="174" x2="339" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="398" y1="180" x2="386" y2="174" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="398" y1="180" x2="386" y2="180" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="398" y1="180" x2="386" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="364" y="168" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">소유</text>
+<path d="M730,180 H798" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="739" y1="174" x2="739" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="798" y1="180" x2="786" y2="174" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="798" y1="180" x2="786" y2="180" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="798" y1="180" x2="786" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="764" y="168" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">분할</text>
+<path d="M1130,180 H1168" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1130" y1="180" x2="1142" y2="174" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1130" y1="180" x2="1142" y2="180" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1130" y1="180" x2="1142" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1159" y1="174" x2="1159" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="1149" y="166" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">배정</text>
+<path d="M185.0,208 V430" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="179.0" y1="217" x2="191.0" y2="217" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="185.0" y1="430" x2="179.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="185.0" y1="430" x2="185.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="185.0" y1="430" x2="191.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="215.0" y="323.0" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">예약</text>
+<path d="M565.0,327 V430" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="559.0" y1="336" x2="571.0" y2="336" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="565.0" y1="430" x2="559.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="565.0" y1="430" x2="565.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="565.0" y1="430" x2="571.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="595.0" y="382.5" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">기록</text>
+<path d="M965.0,293 V430" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="959.0" y1="302" x2="971.0" y2="302" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="965.0" y1="430" x2="959.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="965.0" y1="430" x2="965.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="965.0" y1="430" x2="971.0" y2="418" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="995.0" y="365.5" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">기록</text>
+<path d="M1245.0,201 V430" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1239.0" y1="210" x2="1251.0" y2="210" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1239.0" y1="421" x2="1251.0" y2="421" stroke="#334155" stroke-width="1.5" fill="none"/>
+<circle cx="1245.0" cy="412" r="4.5" fill="#ffffff" stroke="#334155" stroke-width="1.5"/>
+<text x="1289.0" y="319.5" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">자기 보고</text>
+<path d="M1320,180 H1344 V650 H1320" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1329" y1="174" x2="1329" y2="186" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1320" y1="650" x2="1332" y2="644" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1320" y1="650" x2="1332" y2="650" stroke="#334155" stroke-width="1.5" fill="none"/>
+<line x1="1320" y1="650" x2="1332" y2="656" stroke="#334155" stroke-width="1.5" fill="none"/>
+<text x="1290" y="610" font-size="11.5" fill="#475569" text-anchor="middle" font-weight="400">수집</text>
+<text x="40" y="664" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">PK 는 식별자, FK 는 다른 개념을 가리키는 값, U 는 유일해야 하는 값이다. 선 끝의 갈래는 여럿(N), 세로 막대는</text>
+<text x="40" y="684" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">하나(1), 동그라미는 없을 수도 있음을 뜻한다. 관계는 개념 수준이라 실제 테이블에 외래키 제약을 걸어 두지는 않는다.</text>
+<text x="40" y="712" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">Reservation 은 Executor 와 Coordinator 를 잇는 교차 개념이라 두 식별자가 함께 키가 된다.</text>
+</svg>

@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1026" width="1280" height="1026" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1280" height="1026" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">클래스 — coordinator 요청 처리</text>
+<text x="28" y="60" font-size="13" fill="#64748b">POST /jobs 하나가 검증·분할·admission 을 지나 dispatcher 로 넘어가기까지 관여하는 클래스들</text>
+<rect x="24" y="656" width="1232" height="308" rx="12" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="38" y="676" font-size="12.5" font-weight="700" fill="#64748b">작업 상태 모델과 저장소</text>
+<rect x="1072" y="94" width="184" height="158" rx="12" fill="none" stroke="#059669" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="1086" y="114" font-size="12.5" font-weight="700" fill="#059669">실행 주체</text>
+<rect x="720" y="94" width="332" height="542" rx="12" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="734" y="114" font-size="12.5" font-weight="700" fill="#2563eb">수용과 실행 (dispatcher.py)</text>
+<rect x="356" y="94" width="332" height="484" rx="12" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="370" y="114" font-size="12.5" font-weight="700" fill="#2563eb">검증 · 분할 · 템플릿</text>
+<rect x="24" y="94" width="300" height="290" rx="12" fill="none" stroke="#ca8a04" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="38" y="114" font-size="12.5" font-weight="700" fill="#ca8a04">요청 모델 (models.py)</text>
+<rect x="40" y="120" width="268" height="152" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="174.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«pydantic»</text>
+<text x="174.0" y="156" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">CreateJobRequest</text>
+<line x1="40" y1="166" x2="308" y2="166" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="180" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">template_id / params</text>
+<text x="52" y="198" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">sql / partition_column</text>
+<text x="52" y="216" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">target_table / parallelism</text>
+<text x="52" y="234" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">exec_mode / write_mode</text>
+<text x="52" y="252" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">task_params / task_bound</text>
+<rect x="40" y="288" width="268" height="80" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="174.0" y="308" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«pydantic»</text>
+<text x="174.0" y="324" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">QueryParam</text>
+<line x1="40" y1="334" x2="308" y2="334" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="348" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">name / value / sign</text>
+<rect x="372" y="120" width="300" height="116" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="522.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="522.0" y="156" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">parser</text>
+<line x1="372" y1="166" x2="672" y2="166" stroke="#2563eb" stroke-width="1"/>
+<text x="384" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">validate_and_parse() → ParsedQuery</text>
+<text x="384" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">find_partition_in()</text>
+<text x="384" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">is_row_returning()</text>
+<rect x="372" y="252" width="300" height="98" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="522.0" y="272" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«dataclass»</text>
+<text x="522.0" y="288" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ParsedQuery</text>
+<line x1="372" y1="298" x2="672" y2="298" stroke="#ca8a04" stroke-width="1"/>
+<text x="384" y="312" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">sql / partition_column</text>
+<text x="384" y="330" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">partition_values / dialect</text>
+<rect x="372" y="366" width="300" height="98" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="522.0" y="386" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="522.0" y="402" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">splitter</text>
+<line x1="372" y1="412" x2="672" y2="412" stroke="#2563eb" stroke-width="1"/>
+<text x="384" y="426" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">split() → list[SubQuery]</text>
+<text x="384" y="444" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">wrap(sub_sql, wrapper)</text>
+<rect x="372" y="480" width="300" height="82" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="522.0" y="500" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TemplateEngine</text>
+<line x1="372" y1="510" x2="672" y2="510" stroke="#7c3aed" stroke-width="1"/>
+<text x="384" y="524" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">render() → RenderResult</text>
+<text x="384" y="542" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">render_query()</text>
+<rect x="736" y="120" width="300" height="164" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="886.0" y="140" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobAdmission</text>
+<line x1="736" y1="150" x2="1036" y2="150" stroke="#2563eb" stroke-width="1"/>
+<text x="748" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">max_running / max_pending</text>
+<text x="748" y="182" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">inflight</text>
+<line x1="736" y1="196" x2="1036" y2="196" stroke="#2563eb" stroke-width="1"/>
+<text x="748" y="210" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">try_admit() → bool</text>
+<text x="748" y="228" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">slot() : async ctx</text>
+<text x="748" y="246" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">release()</text>
+<text x="748" y="264" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">capacity()</text>
+<rect x="736" y="300" width="300" height="180" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="886.0" y="320" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«abstract»</text>
+<text x="886.0" y="336" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_DispatcherBase</text>
+<line x1="736" y1="346" x2="1036" y2="346" stroke="#2563eb" stroke-width="1"/>
+<text x="748" y="360" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">store / admission / history</text>
+<line x1="736" y1="374" x2="1036" y2="374" stroke="#2563eb" stroke-width="1"/>
+<text x="748" y="388" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">run(job)</text>
+<text x="748" y="406" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_execute(job)</text>
+<text x="748" y="424" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_plan_local_stage()</text>
+<text x="748" y="442" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_run_stage_load()</text>
+<text x="748" y="460" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_run_s3_load()</text>
+<rect x="736" y="502" width="142" height="118" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="807.0" y="522" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">HttpDispatcher</text>
+<line x1="736" y1="532" x2="878" y2="532" stroke="#2563eb" stroke-width="1"/>
+<text x="748" y="546" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_execute()</text>
+<text x="748" y="564" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_run_task()</text>
+<text x="748" y="582" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_poll()</text>
+<text x="748" y="600" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cancel()</text>
+<rect x="894" y="502" width="142" height="100" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="965.0" y="522" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">LocalDispatcher</text>
+<line x1="894" y1="532" x2="1036" y2="532" stroke="#2563eb" stroke-width="1"/>
+<text x="906" y="546" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_execute()</text>
+<text x="906" y="564" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_run_task()</text>
+<text x="906" y="582" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cancel()</text>
+<path d="M807,502 V480" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#tri)"/>
+<path d="M965,502 V490 H807" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#tri)"/>
+<rect x="1088" y="120" width="152" height="116" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="1164.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«HTTP»</text>
+<text x="1164.0" y="156" font-size="14" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor</text>
+<line x1="1088" y1="166" x2="1240" y2="166" stroke="#059669" stroke-width="1"/>
+<text x="1100" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">POST /tasks</text>
+<text x="1100" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">GET /tasks/{id}</text>
+<text x="1100" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">POST …/cancel</text>
+<rect x="40" y="682" width="340" height="234" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="210.0" y="702" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«dataclass»</text>
+<text x="210.0" y="718" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Job</text>
+<line x1="40" y1="728" x2="380" y2="728" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="742" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_id / status / username</text>
+<text x="52" y="760" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">original_sql / partition_column</text>
+<text x="52" y="778" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">target_table / exec_mode</text>
+<text x="52" y="796" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">tasks: list[Task]</text>
+<text x="52" y="814" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">idempotency_key / request_fingerprint</text>
+<text x="52" y="832" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">retry_of / cancel_requested</text>
+<line x1="40" y1="846" x2="380" y2="846" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="860" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">progress_percent()</text>
+<text x="52" y="878" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">status_view() / result_view()</text>
+<text x="52" y="896" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">to_record() / from_record()</text>
+<rect x="412" y="682" width="340" height="216" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="582.0" y="702" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«dataclass»</text>
+<text x="582.0" y="718" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Task</text>
+<line x1="412" y1="728" x2="752" y2="728" stroke="#ca8a04" stroke-width="1"/>
+<text x="424" y="742" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">task_id / job_id / status</text>
+<text x="424" y="760" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_url / sub_query</text>
+<text x="424" y="778" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">partition_values / attempt</text>
+<text x="424" y="796" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">rows_written / rows_read</text>
+<text x="424" y="814" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">phases / current_phase / out_path</text>
+<line x1="412" y1="828" x2="752" y2="828" stroke="#ca8a04" stroke-width="1"/>
+<text x="424" y="842" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">on_stage()</text>
+<text x="424" y="860" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">summary() / detail()</text>
+<text x="424" y="878" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">to_record() / from_record()</text>
+<rect x="784" y="682" width="216" height="134" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="892.0" y="702" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«enum»</text>
+<text x="892.0" y="718" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobStatus</text>
+<line x1="784" y1="728" x2="1000" y2="728" stroke="#ca8a04" stroke-width="1"/>
+<text x="796" y="742" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">PENDING / SPLITTING</text>
+<text x="796" y="760" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">RUNNING / DONE</text>
+<text x="796" y="778" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">PARTIAL / FAILED</text>
+<text x="796" y="796" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">CANCELLED</text>
+<rect x="784" y="832" width="216" height="116" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="892.0" y="852" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«enum»</text>
+<text x="892.0" y="868" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TaskStatus</text>
+<line x1="784" y1="878" x2="1000" y2="878" stroke="#ca8a04" stroke-width="1"/>
+<text x="796" y="892" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">QUEUED / READING</text>
+<text x="796" y="910" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">WRITING / DONE</text>
+<text x="796" y="928" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">FAILED / CANCELLED</text>
+<rect x="1032" y="682" width="208" height="134" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="1136.0" y="702" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«protocol»</text>
+<text x="1136.0" y="718" font-size="14" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobStore</text>
+<line x1="1032" y1="728" x2="1240" y2="728" stroke="#64748b" stroke-width="1"/>
+<text x="1044" y="742" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">claim_and_add(job, key)</text>
+<text x="1044" y="760" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">save() / get() / list()</text>
+<text x="1044" y="778" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">request_cancel(job_id)</text>
+<text x="1044" y="796" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">is_cancel_requested()</text>
+<path d="M380,772 H410" stroke="#334155" stroke-width="1.6" fill="none" marker-start="url(#dia)" marker-end="url(#open)"/>
+<text x="395" y="764" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">1..N</text>
+<path d="M752,762 H782" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M1000,722 H1030" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M308,190 H370" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M672,190 H734" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M1036,190 H1086" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="1061" y="182" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">HTTP</text>
+<path d="M807,620 V652 H210 V682" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="520" y="644" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">Job 과 Task 를 만들고 갱신한다</text>
+<text x="28" y="1006" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">실선 화살표는 참조, 점선은 호출·의존, 속이 빈 삼각형은 상속, 마름모는 소유를 뜻한다.</text>
+</svg>

@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 802" width="1560" height="802" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1560" height="802" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">클래스 — whpg-to-whpg 복사 파이프라인</text>
+<text x="28" y="60" font-size="13" fill="#64748b">CopyPlan 하나가 두 모드의 공통 계약이고, copy_local 과 copy_s3 는 같은 함수 이름으로 서로 다른 경로를 구현한다.</text>
+<rect x="1174" y="94" width="362" height="358" rx="12" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="1188" y="114" font-size="12.5" font-weight="700" fill="#64748b">파일 분할과 진행 표시</text>
+<rect x="784" y="94" width="382" height="522" rx="12" fill="none" stroke="#059669" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="798" y="114" font-size="12.5" font-weight="700" fill="#059669">모드별 실행 (같은 계약, 다른 경로)</text>
+<rect x="404" y="94" width="372" height="498" rx="12" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="418" y="114" font-size="12.5" font-weight="700" fill="#7c3aed">포맷 계약과 카탈로그</text>
+<rect x="24" y="94" width="372" height="628" rx="12" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="38" y="114" font-size="12.5" font-weight="700" fill="#2563eb">계획과 사전 점검</text>
+<rect x="40" y="120" width="340" height="152" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="210.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="210.0" y="156" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">whpg_copy</text>
+<line x1="40" y1="166" x2="380" y2="166" stroke="#2563eb" stroke-width="1"/>
+<text x="52" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">build_parser() / main()</text>
+<text x="52" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">build_plan(args) → CopyPlan</text>
+<text x="52" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">run(plan, args, timer)</text>
+<text x="52" y="234" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">prepare() / execute() / verify()</text>
+<text x="52" y="252" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">statements_for(plan) — dry-run</text>
+<rect x="40" y="288" width="340" height="218" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="210.0" y="308" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">CopyPlan</text>
+<line x1="40" y1="318" x2="380" y2="318" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="332" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">mode: local | s3</text>
+<text x="52" y="350" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">run_id / source·target 이름</text>
+<text x="52" y="368" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">fmt: CopyFormat</text>
+<text x="52" y="386" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">write_mode / match_by / jobs</text>
+<text x="52" y="404" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">jobs / split_size / split_rows</text>
+<text x="52" y="422" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">staging_dir / s3 / keep_staging</text>
+<line x1="40" y1="436" x2="380" y2="436" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="450" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">select_sql() / target_column_list()</text>
+<text x="52" y="468" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">staging_table() / uses_staging_table()</text>
+<text x="52" y="486" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">manifest() / adopt_manifest()</text>
+<rect x="40" y="522" width="340" height="116" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="210.0" y="542" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="210.0" y="558" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">copyplan</text>
+<line x1="40" y1="568" x2="380" y2="568" stroke="#2563eb" stroke-width="1"/>
+<text x="52" y="582" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">preflight(plan, src, tgt)</text>
+<text x="52" y="600" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">describe(plan)</text>
+<text x="52" y="618" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">dump_manifest() / load_manifest()</text>
+<rect x="40" y="654" width="340" height="52" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.7"/>
+<text x="210.0" y="674" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«exception»</text>
+<text x="210.0" y="690" font-size="14" fill="#c2410c" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">PreflightError</text>
+<rect x="420" y="120" width="340" height="164" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="590.0" y="140" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">CopyFormat</text>
+<line x1="420" y1="150" x2="760" y2="150" stroke="#7c3aed" stroke-width="1"/>
+<text x="432" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">delimiter / quote / escape</text>
+<text x="432" y="182" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">null / header / encoding</text>
+<line x1="420" y1="196" x2="760" y2="196" stroke="#7c3aed" stroke-width="1"/>
+<text x="432" y="210" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">copy_options() → COPY WITH(…)</text>
+<text x="432" y="228" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">external_clause() → FORMAT(…)</text>
+<text x="432" y="246" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">to_dict() / from_dict()</text>
+<text x="432" y="264" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">newline_is_record_boundary()</text>
+<rect x="420" y="300" width="340" height="152" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="590.0" y="320" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="590.0" y="336" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">catalog</text>
+<line x1="420" y1="346" x2="760" y2="346" stroke="#7c3aed" stroke-width="1"/>
+<text x="432" y="360" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">columns(cur, schema, table) → [Column]</text>
+<text x="432" y="378" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">distribution() / storage_options()</text>
+<text x="432" y="396" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">count_rows() / total_size()</text>
+<text x="432" y="414" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">create_table_sql() / staging_name()</text>
+<text x="432" y="432" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">match_columns(src, tgt, by)</text>
+<rect x="420" y="468" width="340" height="108" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="590.0" y="488" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«dataclass»</text>
+<text x="590.0" y="504" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Column</text>
+<line x1="420" y1="514" x2="760" y2="514" stroke="#ca8a04" stroke-width="1"/>
+<text x="432" y="528" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">name / type / not_null</text>
+<line x1="420" y1="542" x2="760" y2="542" stroke="#ca8a04" stroke-width="1"/>
+<text x="432" y="556" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">definition()</text>
+<rect x="800" y="120" width="350" height="170" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="975.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="975.0" y="156" font-size="14" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">copy_local</text>
+<line x1="800" y1="166" x2="1150" y2="166" stroke="#059669" stroke-width="1"/>
+<text x="812" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">unload_sql() → COPY … TO STDOUT</text>
+<text x="812" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">unload(plan, conn) → UnloadResult</text>
+<text x="812" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_sql() → COPY … FROM STDIN</text>
+<text x="812" y="234" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load() / _load_direct()</text>
+<text x="812" y="252" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_load_via_staging() / swap_statements()</text>
+<text x="812" y="270" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cleanup() / existing_files()</text>
+<rect x="800" y="306" width="350" height="170" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="975.0" y="326" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«module»</text>
+<text x="975.0" y="342" font-size="14" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">copy_s3</text>
+<line x1="800" y1="352" x2="1150" y2="352" stroke="#059669" stroke-width="1"/>
+<text x="812" y="366" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">unload_statements() — 쓰기 외부테이블</text>
+<text x="812" y="384" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">unload(plan, conn) → UnloadResult</text>
+<text x="812" y="402" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_statements() — 읽기 외부테이블</text>
+<text x="812" y="420" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load(plan, conn) → 적재 행 수</text>
+<text x="812" y="438" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">smoke_test() / check_prefix_empty()</text>
+<text x="812" y="456" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">write_manifest() / cleanup()</text>
+<rect x="800" y="492" width="350" height="108" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="975.0" y="512" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«dataclass»</text>
+<text x="975.0" y="528" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">UnloadResult</text>
+<line x1="800" y1="538" x2="1150" y2="538" stroke="#ca8a04" stroke-width="1"/>
+<text x="812" y="552" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">rows / files / bytes</text>
+<line x1="800" y1="566" x2="1150" y2="566" stroke="#ca8a04" stroke-width="1"/>
+<text x="812" y="580" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">summary()</text>
+<rect x="1190" y="120" width="330" height="200" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1355.0" y="140" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">RecordWriter</text>
+<line x1="1190" y1="150" x2="1520" y2="150" stroke="#7c3aed" stroke-width="1"/>
+<text x="1202" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">directory / prefix / suffix</text>
+<text x="1202" y="182" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">split_size / split_rows</text>
+<text x="1202" y="200" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">quote / escape / use_gzip</text>
+<text x="1202" y="218" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">bytes_written / rows / paths</text>
+<line x1="1190" y1="232" x2="1520" y2="232" stroke="#7c3aed" stroke-width="1"/>
+<text x="1202" y="246" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">write(chunk)</text>
+<text x="1202" y="264" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_scan() — 인용부호 밖 개행만</text>
+<text x="1202" y="282" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_should_split() / _rotate()</text>
+<text x="1202" y="300" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">close()</text>
+<rect x="1190" y="336" width="330" height="100" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1355.0" y="356" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Progress · Waiting · PhaseTimer</text>
+<line x1="1190" y1="366" x2="1520" y2="366" stroke="#7c3aed" stroke-width="1"/>
+<text x="1202" y="380" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">update() / advance() / finish()</text>
+<text x="1202" y="398" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">measure(name) : ctx</text>
+<text x="1202" y="416" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">report() → 구간별 소요 시간</text>
+<path d="M380,190 H418" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M760,190 H796" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M1150,200 H1186" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M210.0,272 V288" stroke="#334155" stroke-width="1.6" fill="none" marker-start="url(#dia)" marker-end="url(#open)"/>
+<path d="M210.0,506 V522" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M590.0,284 V300" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M590.0,452 V468" stroke="#334155" stroke-width="1.6" fill="none" marker-start="url(#dia)" marker-end="url(#open)"/>
+<text x="28" y="782" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">모드를 바꿔도 계획·포맷·검증·정리는 그대로이며, 달라지는 것은 데이터가 지나가는 매체뿐이다.</text>
+</svg>

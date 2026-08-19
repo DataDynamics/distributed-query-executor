@@ -2,7 +2,7 @@
 
 이 저장소의 분산 쿼리 실행기는 목적이 다른 세 가지 실행 방식을 제공한다. 대량 데이터를
 Impala 에서 Greenplum 으로 **옮기는 이관**과, 결과를 클라이언트로 **동기 반환하는
-미리보기성 실행**이 큰 갈래이고, 이관은 다시 적재 방식(`exec_mode`)에 따라 나뉜다. 이 문서는
+preview 용 실행**이 큰 갈래이고, 이관은 다시 적재 방식(`exec_mode`)에 따라 나뉜다. 이 문서는
 그중 실무에서 가장 자주 쓰는 셋을 한자리에 모아 정리한다. 작업 제출과 상태 조회, 오류 대처
 같은 기본기는 [사용자 가이드](USER.md)에 있으므로 그쪽을 먼저 읽고 오면 편하다.
 
@@ -132,7 +132,7 @@ trunc(current_date() - interval 3 day)`. **`interval` 뒤에는 언제나 절대
 | 비교식 | `task_bound` | task 수(`[-7,+1]`) | 잘못 고르면 |
 |---|---|---|---|
 | `BETWEEN a AND b`(양끝 포함) / `= a`, DATE 컬럼 | `point`(기본) — `(d, d)` | 9 | `pair` → 경계 날짜가 두 task 에 겹쳐 **중복 적재** |
-| `>= a AND < b`(반열림), TIMESTAMP 컬럼 | `pair` — `(d, d+1)` | 8 | `point` → 자정 정각 행만 읽어 **사실상 0행** |
+| `>= a AND < b`(half-open), TIMESTAMP 컬럼 | `pair` — `(d, d+1)` | 8 | `point` → 자정 정각 행만 읽어 **사실상 0행** |
 
 manifest 에 `task_bound` 를 못 박아 두면 요청자가 컬럼 타입을 몰라도 된다.
 
@@ -208,7 +208,7 @@ WHERE dt IN ( {{ date_range(start_dt, end_dt) | sql_in }} )
 {%- endif %}
 ```
 
-나머지 두 조각은 단순하다. `staging_ddl.sql.j2` 는 `CREATE TEMP TABLE {{ staging_table |
+나머지 두 task 는 단순하다. `staging_ddl.sql.j2` 는 `CREATE TEMP TABLE {{ staging_table |
 sql_ident }} (...)` 로 staging 을 만들고, `insert.sql.j2` 는 `INSERT INTO {{ target_table |
 sql_ident }} (...) SELECT ... FROM {{ staging_table | sql_ident }}` 로 staging→target 을 적재한다
 (식별자는 `sql_ident` 필터로 안전하게 렌더).
@@ -257,7 +257,7 @@ greenplum.pool_max=0          # GP 커넥션 풀 상한(0=executor.max_concurren
 
 # staging 으로의 COPY 튜닝(stage_insert 의 COPY 에도 적용)
 copy.batch_size=10000         # COPY 배치 크기(행)
-copy.pipeline=true            # 소스 읽기와 GP COPY 를 겹쳐 실행(벽시계 단축)
+copy.pipeline=true            # 소스 읽기와 GP COPY 를 겹쳐 실행(wall-clock time 단축)
 
 # 동시성
 executor.max_concurrent_tasks=8   # executor 1대 동시 task 수
@@ -274,7 +274,7 @@ executor.max_concurrent_tasks=8   # executor 1대 동시 task 수
 뒤(Phase 1), coordinator 가 그 파일들을 Greenplum 내장 **`file://` 프로토콜 외부테이블**로 걸어
 각 세그먼트가 **자기 호스트 로컬 CSV 를 병렬 read** 해 target 에 적재하는(Phase 2) 2-phase
 모드다. 세그먼트 병렬성을 그대로 살리므로 대량 적재에 강하다. 대신 **executor 를 각 GP 세그먼트
-호스트에 co-locate** 해야 한다는 배치 제약이 있다(설계 근거는 DESIGN §17).
+호스트에 co-locate** 해야 한다는 co-location 제약이 있다(설계 근거는 DESIGN §17).
 
 > 코드/로그의 스테이지명 `PXF_EXTERNAL_DDL` 은 역사적 이름일 뿐, 실제로는 PXF 가 아니라
 > `file://` 외부테이블을 쓴다.
@@ -318,7 +318,7 @@ POST /jobs
 ![접수 후 내부 흐름](images/guide-01.svg)
 
 Phase 1 은 coordinator 가 파일 예산을 배분(호스트당 ≤ S_h)한 뒤 각 executor 에 export task 를
-병렬 디스패치하고, 모든 export 가 DONE 될 때까지 **배리어**로 기다린다. Phase 2 는 coordinator 가
+병렬 디스패치하고, 모든 export 가 DONE 될 때까지 **barrier**로 기다린다. Phase 2 는 coordinator 가
 GP master 에 한 트랜잭션으로 다음 SQL 을 실행한다.
 
 ```sql
@@ -374,7 +374,7 @@ task 의 `executor_url` 은 파일 예산 배분대로 세그먼트 호스트에
 ### GP·Impala 없이 통합 테스트
 
 실제 GP/Impala 없이도 `POST /jobs`→`DONE` 전 과정(검증·분할·파일 예산 배분·host 매핑·Phase 1
-파일 write·배리어·Phase 2 `file://` read·target 집계·cleanup)을 닫힌 루프로 검증할 수 있다.
+파일 write·barrier·Phase 2 `file://` read·target 집계·cleanup)을 닫힌 루프로 검증할 수 있다.
 핵심은 `tests/helpers.py` 의 **`MockLocalStageBackend`** 로, `MockBackend` 를 상속해 export 에서
 실제 CSV 파일을 쓰고, load 에서 `external_ddl` 의 `file://` 경로를 파싱해 그 CSV 들을 읽어
 인메모리 `target` 에 넣으며, `segment_host_counts()` 로 지정 토폴로지를 돌려준다(운영 코드 변경
@@ -389,7 +389,7 @@ failover·gp_hostname 수집·cleanup 팬아웃을 얇게 덮는다. 순수 함�
 
 `s3_stage` 는 `local_stage` 와 **같은 2-phase 구조**이고, 스테이징 매체만 세그먼트 로컬 파일이
 아니라 **S3 객체**다. Phase 1 에서 각 executor 가 소스 SELECT 결과를 로컬 CSV 로 떨어뜨린 뒤
-**S3 에 업로드**하고(로컬 삭제), 배리어 후 Phase 2 에서 **coordinator 가** Greenplum master 에
+**S3 에 업로드**하고(로컬 삭제), barrier 후 Phase 2 에서 **coordinator 가** Greenplum master 에
 그 객체들을 **PXF 외부테이블 하나**로 걸어 target 에 INSERT 한다. S3 는 세그먼트 로컬이 아니라
 위치 무관하게 읽히므로 `local_stage` 가 요구하는 **executor↔세그먼트 co-locate·파일 예산 배분이
 필요 없다**. 외부테이블 생성과 INSERT 는 `local_stage` 처럼 **coordinator 가 중앙에서** 하고,
@@ -441,7 +441,7 @@ Phase 1 (executor N개 병렬):
   각 task: Impala SELECT → 로컬 임시 CSV → S3 업로드 → 로컬 삭제
            s3://<bucket>/<prefix>/<job_id>/<task_id>.csv   (모든 task 키가 job 폴더에 모임)
   단계: IMPALA_SUBMIT · EXPORT_WRITE · S3_UPLOAD
---- 배리어(모든 업로드 완료) ---
+--- barrier(모든 업로드 완료) ---
 Phase 2 (coordinator, GP master 한 트랜잭션):
 ```
 ```sql
@@ -484,7 +484,7 @@ Phase 2 가 `S3_EXTERNAL_DDL`·`DELETE`·`INSERT`·`COMMIT`·`CLEANUP` 이다.
 ### 예제 템플릿: `sales_migration_s3`
 
 `templates/sales_migration_s3/` 는 `sales_migration` 의 s3_stage 판이다(`select`+`insert`+
-`external_columns` 조각, `exec_mode: s3_stage`). 날짜 fan-out(§1 의 fan-out 참고)도 `s3_stage` 를
+`external_columns` task, `exec_mode: s3_stage`). 날짜 fan-out(§1 의 fan-out 참고)도 `s3_stage` 를
 지원하므로, 하루=1 task 로 업로드를 펼치고 coordinator 가 job 프리픽스로 한 번에 적재하게 할 수
 있다(append).
 
@@ -514,7 +514,7 @@ exec_mode: "s3_stage"      → executor S3 업로드 → PXF 외부테이블 (co
 
 | 옵션 | 의미 |
 |---|---|
-| `template_id` + `params` | 서버 템플릿을 파라미터로 렌더해 SQL 생성(raw `sql` 대신). s3_stage 는 `select`+`insert`+`external_columns` 조각을 렌더 |
+| `template_id` + `params` | 서버 템플릿을 파라미터로 렌더해 SQL 생성(raw `sql` 대신). s3_stage 는 `select`+`insert`+`external_columns` task 를 렌더 |
 | `task_params` (+ `task_bound`) | 날짜 fan-out(하루=1 task). `exec_mode` 가 `stage_insert` 또는 `s3_stage` 일 때 지원 |
 | `write_mode` | `append` / `overwrite_partitions`(후자는 적재 전 파티션 DELETE) |
 | `pre_delete` | 적재 전 DELETE 를 `write_mode` 와 독립적으로 강제/생략(위 요청 절 참고) |
@@ -541,7 +541,7 @@ exec_mode: "s3_stage"      → executor S3 업로드 → PXF 외부테이블 (co
 
 ### GP·S3 없이 통합 테스트
 
-실제 GP/S3 없이도 `POST /jobs`→`DONE` 전 과정(검증·분할·S3 키 확정·Phase 1 업로드·배리어·
+실제 GP/S3 없이도 `POST /jobs`→`DONE` 전 과정(검증·분할·S3 키 확정·Phase 1 업로드·barrier·
 Phase 2 외부테이블/INSERT 조립·Phase 3 정리·finalize)을 닫힌 루프로 검증할 수 있다. 핵심은
 `tests/helpers.py` 의 **`MockS3StageBackend`** 로, `MockBackend` 를 상속해 Phase 1(`export_to_s3`)이
 **인메모리 S3**(dict)에 CSV 를 올리고, Phase 2(`load_external_s3`)가 coordinator 가 조립한 PXF
@@ -557,7 +557,7 @@ cleanup 비활성을 덮는다. 순수 함수·라우팅·2-phase e2e 는 `tests
 
 서버에 보관된 **쿼리 템플릿**을 파라미터로 렌더해 `SELECT` 를 만들고, 지정한 데이터소스에 실행해
 **결과(상위 N행)를 동기로 돌려받는** API 다. 데이터를 옮기는 이관(`/jobs`)과 달리 결과가
-coordinator 를 거쳐 클라이언트로 반환되는 미리보기성 실행이다. 클라이언트는 SQL 전문이 아니라
+coordinator 를 거쳐 클라이언트로 반환되는 preview 용 실행이다. 클라이언트는 SQL 전문이 아니라
 **`template_id` + `params`(이름-값 항목 배열)** 만 보내며, **어떤 executor 가 실행하는지 몰라도
 된다** — 소스 실행은 coordinator 가 `/jobs` 와 동일한 정책으로 가장 한가한 executor 를 골라
 **`/query-run`(커스텀 함수)** 하나로 위임한다(연결 실패 시 다음 executor 로 failover). `greenplum`/
@@ -580,7 +580,7 @@ query-execute 의 소스 실행은 impala/trino 구분 없이 모든 소스를 e
 ### 실행 절차
 
 coordinator 는 요청의 `params[]` 를 `{name: value}` 로 접고(중복 name → 422), `render_query()`
-로 select 조각만 렌더한 뒤 `validate_select_query()` 로 행반환 SELECT 를 검증한다(렌더/검증 실패
+로 select 부분만 렌더한 뒤 `validate_select_query()` 로 행반환 SELECT 를 검증한다(렌더/검증 실패
 → 422 + error_code). `datasource` 가 `greenplum`/`history` 면 렌더된 SELECT 를 coordinator 가
 직접(psycopg) 실행해 상위 N행을 돌려주고(`executed_by=null`), 소스(impala/trino/source)면 `/jobs`
 와 동일한 선택 정책으로 executor 를 골라 `POST /query-run {sql, limit}` 로 위임한다(연결 실패 시
@@ -661,7 +661,7 @@ executor URL(관측용)이며, impala/trino 는 coordinator 가 고른 executor 
 ```yaml
 id: order_search
 description: 주문 조회(query-execute 예제) — region IN 목록 + 주문일 BETWEEN 구간
-# query-execute 는 select 조각만 렌더하지만, manifest 규약상 exec_mode 를 둔다(copy).
+# query-execute 는 select 부분만 렌더하지만, manifest 규약상 exec_mode 를 둔다(copy).
 exec_mode: copy
 strict_validation: false            # 렌더 SELECT 에 ORDER BY 등이 있어 lenient 로 둔다
 params:
