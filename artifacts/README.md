@@ -29,11 +29,13 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 기술 아키텍처 정의서다. 소프트웨어 구성과 구성요소별 정의, 구성요소 매핑에 더해 백업·복구와 보안,
 가용성 방안이 들어 있다. 하드웨어와 네트워크처럼 아직 정하지 않은 절은 표 골격만 두고 비워 두었다.
 
-이 두 정의서는 다른 문서에 옮겨 붙이기 좋도록 Word 판을 함께 둔다
-([sw-architecture.docx](sw-architecture.docx), [tech-architecture.docx](tech-architecture.docx)).
+네 문서는 다른 문서에 옮겨 붙이기 좋도록 Word 판을 함께 둔다 — 두 가이드
+([USER_GUIDE.docx](USER_GUIDE.docx), [OPERATOR_GUIDE.docx](OPERATOR_GUIDE.docx))와 두 정의서
+([sw-architecture.docx](sw-architecture.docx), [tech-architecture.docx](tech-architecture.docx))다.
 Word 기본 내장 스타일만 써서 꾸밈을 넣지 않았으므로, 붙여 넣는 문서의 서식을 그대로 따라간다.
 원본은 어디까지나 `.md` 이고 Word 판은 그것을 옮긴 것이므로, 내용을 고칠 때는 `.md` 를 고친 뒤
-다시 변환한다.
+다시 변환한다. `docs/` 의 사용자·운영자 문서도 같은 방식으로 만든 `USER.docx`·`OPERATOR.docx` 를
+함께 둔다.
 
 [er-diagram.md](er-diagram.md) 는 이 시스템이 무엇을 기억하는지를 다룬다. 개념과 관계만 보는 논리
 ER 한 장과, 실제 DDL 이 만드는 테이블을 그대로 보여 주는 물리 ER 두 장(PostgreSQL 판과 WarehousePG
