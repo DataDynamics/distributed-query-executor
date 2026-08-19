@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 988" width="1280" height="988" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1280" height="988" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">클래스 — executor 와 적재 백엔드</text>
+<text x="28" y="60" font-size="13" fill="#64748b">executor 는 task 상태만 관리하고, 소스 읽기와 Greenplum 적재는 Backend 규약 뒤에 있다.</text>
+<rect x="864" y="94" width="372" height="814" rx="12" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="878" y="114" font-size="12.5" font-weight="700" fill="#7c3aed">백엔드가 쓰는 부품</text>
+<rect x="414" y="94" width="432" height="600" rx="12" fill="none" stroke="#ea580c" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="428" y="114" font-size="12.5" font-weight="700" fill="#ea580c">적재 백엔드 (executor/backend.py)</text>
+<rect x="24" y="94" width="362" height="532" rx="12" fill="none" stroke="#059669" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="38" y="114" font-size="12.5" font-weight="700" fill="#059669">executor 앱과 상태 (executor/app.py · models.py)</text>
+<rect x="40" y="120" width="330" height="180" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="205.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«FastAPI»</text>
+<text x="205.0" y="156" font-size="14" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor.app</text>
+<line x1="40" y1="166" x2="370" y2="166" stroke="#059669" stroke-width="1"/>
+<text x="52" y="180" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">backend / _sem</text>
+<text x="52" y="198" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">tasks: dict[str, Task]</text>
+<line x1="40" y1="212" x2="370" y2="212" stroke="#059669" stroke-width="1"/>
+<text x="52" y="226" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">POST /tasks → task 접수</text>
+<text x="52" y="244" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">GET /tasks/{id} · /result</text>
+<text x="52" y="262" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">POST /tasks/{id}/cancel</text>
+<text x="52" y="280" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">POST /query-run</text>
+<rect x="40" y="316" width="330" height="180" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="205.0" y="336" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«dataclass»</text>
+<text x="205.0" y="352" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Task</text>
+<line x1="40" y1="362" x2="370" y2="362" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="376" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">task_id / job_id / status</text>
+<text x="52" y="394" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">sub_query / exec_mode</text>
+<text x="52" y="412" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">staging_table / insert_sql</text>
+<text x="52" y="430" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">out_path / csv_options</text>
+<text x="52" y="448" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">phases / rows_written</text>
+<line x1="40" y1="462" x2="370" y2="462" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="476" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">on_stage() / view() / detail()</text>
+<rect x="40" y="512" width="330" height="98" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.7"/>
+<text x="205.0" y="532" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«enum»</text>
+<text x="205.0" y="548" font-size="14" fill="#a16207" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TaskStatus</text>
+<line x1="40" y1="558" x2="370" y2="558" stroke="#ca8a04" stroke-width="1"/>
+<text x="52" y="572" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">QUEUED / READING / WRITING</text>
+<text x="52" y="590" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">DONE / FAILED / CANCELLED</text>
+<rect x="430" y="120" width="400" height="206" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.7"/>
+<text x="630.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«protocol»</text>
+<text x="630.0" y="156" font-size="14" fill="#c2410c" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">Backend</text>
+<line x1="430" y1="166" x2="830" y2="166" stroke="#ea580c" stroke-width="1"/>
+<text x="442" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">move(sub_query, target …) → rows</text>
+<text x="442" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">execute(sql)</text>
+<text x="442" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">stage_and_insert(...)</text>
+<text x="442" y="234" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">export_to_local_csv(...)</text>
+<text x="442" y="252" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_external_csv(...)</text>
+<text x="442" y="270" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">export_to_s3(...) / load_external_s3(...)</text>
+<text x="442" y="288" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cleanup_s3_prefix(prefix)</text>
+<text x="442" y="306" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">segment_host_counts() / segment_hosts()</text>
+<rect x="430" y="396" width="400" height="164" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="630.0" y="416" font-size="14" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ImpalaToGreenplumBackend</text>
+<line x1="430" y1="426" x2="830" y2="426" stroke="#059669" stroke-width="1"/>
+<text x="442" y="440" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">impala_dsn / greenplum_dsn</text>
+<text x="442" y="458" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">batch_size / pipeline / format</text>
+<line x1="430" y1="472" x2="830" y2="472" stroke="#059669" stroke-width="1"/>
+<text x="442" y="486" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_source_connect(datasource)</text>
+<text x="442" y="504" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_open_source_cursor() / _source_execute()</text>
+<text x="442" y="522" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_stream_pipelined() / _stream_serial()</text>
+<text x="442" y="540" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_build_copy() / _copy_stats()</text>
+<rect x="430" y="586" width="400" height="92" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="630.0" y="606" font-size="14" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">MockBackend</text>
+<line x1="430" y1="616" x2="830" y2="616" stroke="#64748b" stroke-width="1"/>
+<text x="442" y="630" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">rows_per_value</text>
+<line x1="430" y1="644" x2="830" y2="644" stroke="#64748b" stroke-width="1"/>
+<text x="442" y="658" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">greenplum.dsn 이 비면 이 백엔드로 뜬다</text>
+<path d="M630,396 V326" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#tri)"/>
+<text x="648" y="374" font-size="11.5" fill="#64748b" text-anchor="start" font-weight="400">구현</text>
+<path d="M540,586 V344 H630" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#tri)"/>
+<rect x="880" y="120" width="340" height="146" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1050.0" y="140" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_GreenplumPool</text>
+<line x1="880" y1="150" x2="1220" y2="150" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">dsn / maxsize</text>
+<text x="892" y="182" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_pool: queue</text>
+<line x1="880" y1="196" x2="1220" y2="196" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="210" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">connection() : ctx</text>
+<text x="892" y="228" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_reset() → DISCARD ALL</text>
+<text x="892" y="246" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">close()</text>
+<rect x="880" y="282" width="340" height="108" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1050.0" y="302" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«adapter»</text>
+<text x="1050.0" y="318" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_FunctionConnection</text>
+<line x1="880" y1="328" x2="1220" y2="328" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="342" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">fn / config / batch_size</text>
+<line x1="880" y1="356" x2="1220" y2="356" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="370" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">cursor() → _FunctionCursor</text>
+<rect x="880" y="406" width="340" height="144" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1050.0" y="426" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«adapter»</text>
+<text x="1050.0" y="442" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_FunctionCursor</text>
+<line x1="880" y1="452" x2="1220" y2="452" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="466" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">description / _rows</text>
+<line x1="880" y1="480" x2="1220" y2="480" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="494" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">execute(sql)</text>
+<text x="892" y="512" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">fetchmany(size)</text>
+<text x="892" y="530" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">close()</text>
+<rect x="880" y="566" width="340" height="110" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1050.0" y="586" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">S3Client</text>
+<line x1="880" y1="596" x2="1220" y2="596" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="610" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">bucket / endpoint / keys</text>
+<line x1="880" y1="624" x2="1220" y2="624" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="638" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">upload(path, key)</text>
+<text x="892" y="656" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">delete(key) / delete_prefix()</text>
+<rect x="880" y="692" width="340" height="92" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1050.0" y="712" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TaskHistoryRepository</text>
+<line x1="880" y1="722" x2="1220" y2="722" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="736" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">table=task_history</text>
+<line x1="880" y1="750" x2="1220" y2="750" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="764" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">record(task)</text>
+<rect x="880" y="800" width="340" height="92" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="1050.0" y="820" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ExecutorStatusReporter</text>
+<line x1="880" y1="830" x2="1220" y2="830" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="844" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">interval_s / advertise_url</text>
+<line x1="880" y1="858" x2="1220" y2="858" stroke="#7c3aed" stroke-width="1"/>
+<text x="892" y="872" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">start() / stop()</text>
+<path d="M370,190 H428" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="399" y="182" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">호출</text>
+<path d="M830,436 H844 V193.0 H878" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M830,454 H862 V336.0 H878" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M830,472 H880 V621.0 H878" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M1050.0,390 V406" stroke="#334155" stroke-width="1.6" fill="none" marker-start="url(#dia)" marker-end="url(#open)"/>
+<rect x="430" y="700" width="400" height="70" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.2"/>
+<text x="446" y="724" font-size="12" fill="#92400e" text-anchor="start" font-weight="400">GP 연결은 _GreenplumPool 로 재사용하고, 커스텀 소스는</text>
+<text x="446" y="744" font-size="12" fill="#92400e" text-anchor="start" font-weight="400">_FunctionConnection 이 감싸며, S3 업로드는 S3Client 가 맡는다.</text>
+<text x="28" y="968" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">커스텀 API 를 소스로 쓰면 _FunctionConnection·_FunctionCursor 가 커서처럼 감싸므로 읽기 루프가 바뀌지 않는다.</text>
+</svg>

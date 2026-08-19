@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 618" width="1280" height="618" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1280" height="618" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">시퀀스 — 디스패치 재시도와 failover</text>
+<text x="28" y="60" font-size="13" fill="#64748b">연결에 실패하면 몇 번 다시 걸어 보고, 그래도 안 되면 다른 executor 로 넘긴다</text>
+<line x1="110.0" y1="130" x2="110.0" y2="592" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="317.5" y1="130" x2="317.5" y2="592" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="542.5" y1="130" x2="542.5" y2="592" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="775.0" y1="130" x2="775.0" y2="592" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="965.0" y1="130" x2="965.0" y2="592" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="1150.0" y1="130" x2="1150.0" y2="592" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<rect x="30" y="90" width="160" height="40" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="110.0" y="115" font-size="13" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">dispatcher</text>
+<rect x="230" y="90" width="175" height="40" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="317.5" y="115" font-size="13" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ExecutorSelector</text>
+<rect x="440" y="90" width="205" height="40" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="542.5" y="115" font-size="13" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ReservationRepository</text>
+<rect x="700" y="90" width="150" height="40" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="775.0" y="115" font-size="13" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor A</text>
+<rect x="890" y="90" width="150" height="40" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="965.0" y="115" font-size="13" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor B</text>
+<rect x="1080" y="90" width="140" height="40" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="1150.0" y="115" font-size="13" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobStore</text>
+<line x1="110.0" y1="152" x2="317.5" y2="152" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="213.75" y="145" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">order(executors) — 살아 있고 한가한 순서</text>
+<line x1="317.5" y1="180" x2="110.0" y2="180" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="213.75" y="173" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">[A, B, …]</text>
+<line x1="110.0" y1="208" x2="542.5" y2="208" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="326.25" y="201" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">reserve(A) — 디스패치 동안 자리를 잡아 둔다</text>
+<line x1="110.0" y1="262" x2="775.0" y2="262" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="442.5" y="255" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">POST /tasks</text>
+<line x1="775.0" y1="290" x2="110.0" y2="290" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="442.5" y="283" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">연결 실패 · 타임아웃</text>
+<path d="M110.0,318 h46 v22 h-46" fill="none" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="166.0" y="328" font-size="12" fill="#334155" text-anchor="start" font-weight="400">task_retry_backoff_s 만큼 쉬었다가 다시 (task_max_retries 회)</text>
+<rect x="20" y="230" width="800" height="120" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="6 4"/>
+<rect x="20" y="230" width="156.575" height="18" rx="4" fill="#7c3aed"/>
+<text x="29" y="243" font-size="11.5" fill="#ffffff" text-anchor="start" font-weight="700">같은 executor 로 재시도</text>
+<line x1="110.0" y1="394" x2="965.0" y2="394" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="537.5" y="387" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">POST /tasks — 다음 후보로 넘긴다 (task_failover=true)</text>
+<line x1="965.0" y1="422" x2="110.0" y2="422" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="537.5" y="415" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">202 accepted</text>
+<line x1="110.0" y1="450" x2="542.5" y2="450" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="326.25" y="443" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">release(A) · reserve(B)</text>
+<rect x="20" y="358" width="1080" height="106" rx="6" fill="none" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="6 4"/>
+<rect x="20" y="358" width="68.6" height="18" rx="4" fill="#7c3aed"/>
+<text x="29" y="371" font-size="11.5" fill="#ffffff" text-anchor="start" font-weight="700">failover</text>
+<line x1="110.0" y1="488" x2="1150.0" y2="488" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="630.0" y="481" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">save(job) — task.executor_url 과 attempt 갱신</text>
+<rect x="20" y="514" width="1100" height="40" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.2"/>
+<text x="30" y="530" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">local_stage 는 executor 와 GP 세그먼트가 짝지어 있어 다른 곳으로 넘어가면 그 짝이 깨진다.</text>
+<text x="30" y="546" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">이 모드에서는 failover 가 도는 것 자체가 이미 신호이므로 배치와 호스트명 설정을 확인한다.</text>
+</svg>

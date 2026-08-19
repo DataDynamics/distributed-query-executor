@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 738" width="1320" height="738" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1320" height="738" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">시퀀스 — POST /jobs 접수</text>
+<text x="28" y="60" font-size="13" fill="#64748b">검증·분할·admission 까지는 동기로 끝나고, 실제 실행은 202 를 돌려준 뒤 백그라운드에서 시작한다</text>
+<line x1="105.0" y1="130" x2="105.0" y2="712" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="290.0" y1="130" x2="290.0" y2="712" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="485.0" y1="130" x2="485.0" y2="712" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="690.0" y1="130" x2="690.0" y2="712" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="892.5" y1="130" x2="892.5" y2="712" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="1075.0" y1="130" x2="1075.0" y2="712" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<line x1="1240.0" y1="130" x2="1240.0" y2="712" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="4 5"/>
+<rect x="30" y="90" width="150" height="40" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.7"/>
+<text x="105.0" y="115" font-size="13" fill="#475569" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">클라이언트</text>
+<rect x="210" y="90" width="160" height="40" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="290.0" y="115" font-size="13" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator</text>
+<rect x="400" y="90" width="170" height="40" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="485.0" y="115" font-size="13" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TemplateEngine</text>
+<rect x="600" y="90" width="180" height="40" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="690.0" y="115" font-size="13" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">parser · splitter</text>
+<rect x="810" y="90" width="165" height="40" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="892.5" y="115" font-size="13" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobAdmission</text>
+<rect x="1005" y="90" width="140" height="40" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="1075.0" y="115" font-size="13" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobStore</text>
+<rect x="1170" y="90" width="140" height="40" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="1240.0" y="115" font-size="13" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">dispatcher.run</text>
+<line x1="105.0" y1="152" x2="290.0" y2="152" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="197.5" y="145" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">POST /jobs  (Idempotency-Key)</text>
+<line x1="290.0" y1="180" x2="1075.0" y2="180" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="682.5" y="173" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">get_by_idempotency_key(key)</text>
+<line x1="1075.0" y1="208" x2="290.0" y2="208" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="682.5" y="201" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">기존 job 또는 없음</text>
+<rect x="210" y="234" width="620" height="24" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.2"/>
+<text x="220" y="250" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">같은 키에 같은 본문이면 200 + Idempotency-Replayed 로 재생하고, 본문이 다르면 409 로 거절한다.</text>
+<line x1="290.0" y1="282" x2="485.0" y2="282" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="387.5" y="275" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">render(template_id, params)</text>
+<line x1="485.0" y1="310" x2="290.0" y2="310" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="387.5" y="303" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">RenderResult — select · staging_ddl · insert</text>
+<line x1="290.0" y1="338" x2="690.0" y2="338" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="490.0" y="331" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">validate_and_parse(sql, partition_column)</text>
+<line x1="690.0" y1="366" x2="290.0" y2="366" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="490.0" y="359" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">ParsedQuery — partition_values</text>
+<line x1="290.0" y1="394" x2="690.0" y2="394" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="490.0" y="387" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">split(parallelism, split_strategy)</text>
+<line x1="690.0" y1="422" x2="290.0" y2="422" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="490.0" y="415" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">list[SubQuery]</text>
+<rect x="210" y="448" width="620" height="40" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.2"/>
+<text x="220" y="464" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">검증에 걸리면 여기서 422 + error_code 로 끝난다. task_params 를 주면 IN 분할 대신 날짜 fan-out 을 편다.</text>
+<line x1="290.0" y1="512" x2="892.5" y2="512" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="591.25" y="505" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">try_admit()</text>
+<line x1="892.5" y1="540" x2="290.0" y2="540" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="591.25" y="533" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">실행 슬롯 + 대기 큐를 넘으면 False</text>
+<rect x="210" y="566" width="620" height="24" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.2"/>
+<text x="220" y="582" font-size="11.5" fill="#92400e" text-anchor="start" font-weight="400">False 면 429 + Retry-After 로 거절하고 job 을 만들지 않는다.</text>
+<line x1="290.0" y1="614" x2="1075.0" y2="614" stroke="#0f172a" stroke-width="1.8" marker-end="url(#solid)"/>
+<text x="682.5" y="607" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">claim_and_add(job, key) — 멱등 키 원자적 선점</text>
+<line x1="290.0" y1="642" x2="105.0" y2="642" stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="197.5" y="635" font-size="12" fill="#64748b" text-anchor="middle" font-weight="400">202  { job_id }</text>
+<line x1="290.0" y1="670" x2="1240.0" y2="670" stroke="#2563eb" stroke-width="1.8" stroke-dasharray="2 3" marker-end="url(#solid)"/>
+<text x="765.0" y="663" font-size="12" fill="#334155" text-anchor="middle" font-weight="400">BackgroundTasks 로 run(job)</text>
+</svg>

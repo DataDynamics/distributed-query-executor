@@ -15,6 +15,11 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 위한 S3 와 PXF 준비, 적재 대상의 분산키 선정, 도구를 여럿이 쓰게 만들 때의 자격증명과 크론, 그리고
 업그레이드 절차를 다룬다.
 
+[class-diagram.md](class-diagram.md) 와 [sequence-diagram.md](sequence-diagram.md) 는 코드를 여는
+사람을 위한 것이다. 앞의 것은 기능별로 어느 파일에 무엇이 있는지를 일곱 장의 클래스 그림으로
+보여 주고, 뒤의 것은 요청 하나가 들어와 끝날 때까지 누가 누구를 언제 부르는지를 여섯 장의 시퀀스
+그림으로 좇는다.
+
 ## 무엇을 합쳤는가
 
 **DataDynamics/distributed-query-executor** 에서는 coordinator·executor 서비스와 그 운영을 가져왔다.
@@ -33,11 +38,15 @@ coordinator API 사용법과 `exec_mode` 선택, 템플릿과 날짜 fan-out, �
 ## 그림
 
 문서에 들어가는 그림은 `images/` 아래에 SVG 로 두었다. 에어갭 환경을 전제로 하므로 외부 이미지
-호스트를 참조하지 않고 저장소 안의 파일만 쓰며, 벡터라 확대해도 글자가 뭉개지지 않는다. 전체
-구성(`architecture.svg`), 작업 상태 전이(`job-lifecycle.svg`), 실행 모드별 데이터 경로
+호스트를 참조하지 않고 저장소 안의 파일만 쓰며, 벡터라 확대해도 글자가 뭉개지지 않는다. 가이드 쪽에는
+전체 구성(`architecture.svg`), 작업 상태 전이(`job-lifecycle.svg`), 실행 모드별 데이터 경로
 (`exec-modes.svg`), 제출부터 확인까지의 흐름(`verify-loop.svg`), 과부하 방어 세 층(`admission.svg`),
 task 하나의 시간 분해(`task-timing.svg`), `s3_stage` 의 3단계(`s3-stage-phases.svg`), 그리고 이
 디렉터리의 구성(`merge-map.svg`)이 있다.
+
+클래스 그림은 `class-*.svg`, 시퀀스 그림은 `seq-*.svg` 이며 이 둘은 같은 이름의 PNG 도 함께 둔다.
+PNG 는 가로 두 배 해상도로 뽑아 두었으므로 SVG 를 받지 않는 발표 자료나 사내 위키에 그대로 쓸 수
+있다. 그림을 고칠 때는 SVG 를 고치고 PNG 를 다시 뽑아 둘을 함께 갱신한다.
 
 ## `docs/` 와의 관계
 

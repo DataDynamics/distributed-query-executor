@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1256 820" width="1256" height="820" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif">
+<defs>
+<marker id="open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#334155" stroke-width="1.6"/></marker>
+<marker id="solid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path d="M0 0 L12 6 L0 12 z" fill="#ffffff" stroke="#334155" stroke-width="1.4"/></marker>
+<marker id="dia" viewBox="0 0 14 10" refX="13" refY="5" markerWidth="13" markerHeight="10" orient="auto-start-reverse"><path d="M0 5 L6.5 0 L13 5 L6.5 10 z" fill="#334155"/></marker>
+</defs>
+<rect x="0" y="0" width="1256" height="820" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">클래스 — 작업 저장소와 이력</text>
+<text x="28" y="60" font-size="13" fill="#64748b">단일 coordinator 는 메모리와 파일, 여러 대는 공유 PostgreSQL 을 쓴다. 이력과 HA 상태도 같은 DB 에 남는다.</text>
+<rect x="624" y="94" width="332" height="646" rx="12" fill="none" stroke="#2563eb" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="638" y="114" font-size="12.5" font-weight="700" fill="#2563eb">이력과 공유 상태를 쓰는 저장소</text>
+<rect x="24" y="94" width="562" height="518" rx="12" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="38" y="114" font-size="12.5" font-weight="700" fill="#64748b">Job 저장소 (coordinator/job_store.py)</text>
+<rect x="40" y="120" width="380" height="152" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="230.0" y="140" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«protocol»</text>
+<text x="230.0" y="156" font-size="14" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobStore</text>
+<line x1="40" y1="166" x2="420" y2="166" stroke="#64748b" stroke-width="1"/>
+<text x="52" y="180" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">add(job) / save(job)</text>
+<text x="52" y="198" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">claim_and_add(job, key) → bool</text>
+<text x="52" y="216" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">get(job_id) / list()</text>
+<text x="52" y="234" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">get_by_idempotency_key(key)</text>
+<text x="52" y="252" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">request_cancel() / is_cancel_requested()</text>
+<rect x="40" y="346" width="250" height="82" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="165.0" y="366" font-size="14" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">InMemoryJobStore</text>
+<line x1="40" y1="376" x2="290" y2="376" stroke="#64748b" stroke-width="1"/>
+<text x="52" y="390" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_jobs: dict</text>
+<text x="52" y="408" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_lock: threading.Lock</text>
+<rect x="40" y="488" width="250" height="92" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="165.0" y="508" font-size="14" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">FileJobStore</text>
+<line x1="40" y1="518" x2="290" y2="518" stroke="#64748b" stroke-width="1"/>
+<text x="52" y="532" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">path: 스냅샷 파일</text>
+<line x1="40" y1="546" x2="290" y2="546" stroke="#64748b" stroke-width="1"/>
+<text x="52" y="560" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">_flush() / _load()</text>
+<rect x="320" y="346" width="250" height="92" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="1.7"/>
+<text x="445.0" y="366" font-size="14" fill="#334155" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">SqlJobStore</text>
+<line x1="320" y1="376" x2="570" y2="376" stroke="#64748b" stroke-width="1"/>
+<text x="332" y="390" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">dsn / table (JSONB)</text>
+<line x1="320" y1="404" x2="570" y2="404" stroke="#64748b" stroke-width="1"/>
+<text x="332" y="418" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">list_owned(coordinator_id)</text>
+<rect x="320" y="498" width="250" height="98" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.7"/>
+<text x="445.0" y="518" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«function»</text>
+<text x="445.0" y="534" font-size="14" fill="#6d28d9" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">build_job_store()</text>
+<line x1="320" y1="544" x2="570" y2="544" stroke="#7c3aed" stroke-width="1"/>
+<text x="332" y="558" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">store.backend 값으로</text>
+<text x="332" y="576" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">memory · file · postgres 선택</text>
+<path d="M165,346 V272" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#tri)"/>
+<path d="M165,488 V428" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#tri)"/>
+<path d="M445,346 V312 H230 V272" stroke="#334155" stroke-width="1.6" fill="none" marker-end="url(#tri)"/>
+<path d="M445,498 V438" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<text x="462" y="484" font-size="11.5" fill="#64748b" text-anchor="start" font-weight="400">선택</text>
+<rect x="640" y="120" width="300" height="110" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="790.0" y="140" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">JobHistoryRepository</text>
+<line x1="640" y1="150" x2="940" y2="150" stroke="#2563eb" stroke-width="1"/>
+<text x="652" y="164" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">dsn / table=job_history</text>
+<line x1="640" y1="178" x2="940" y2="178" stroke="#2563eb" stroke-width="1"/>
+<text x="652" y="192" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">record(job)</text>
+<text x="652" y="210" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read(filters, paging)</text>
+<rect x="640" y="248" width="300" height="110" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.7"/>
+<text x="790.0" y="268" font-size="14" fill="#047857" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">TaskHistoryRepository</text>
+<line x1="640" y1="278" x2="940" y2="278" stroke="#059669" stroke-width="1"/>
+<text x="652" y="292" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">dsn / table=task_history</text>
+<line x1="640" y1="306" x2="940" y2="306" stroke="#059669" stroke-width="1"/>
+<text x="652" y="320" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">record(task)</text>
+<text x="652" y="338" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read(filters)</text>
+<rect x="640" y="376" width="300" height="92" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="790.0" y="396" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ExecutorStatusRepository</text>
+<line x1="640" y1="406" x2="940" y2="406" stroke="#2563eb" stroke-width="1"/>
+<text x="652" y="420" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">table=executor_status</text>
+<line x1="640" y1="434" x2="940" y2="434" stroke="#2563eb" stroke-width="1"/>
+<text x="652" y="448" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">read_all()</text>
+<rect x="640" y="486" width="300" height="128" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="790.0" y="506" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ReservationRepository</text>
+<line x1="640" y1="516" x2="940" y2="516" stroke="#2563eb" stroke-width="1"/>
+<text x="652" y="530" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">table=executor_reservation</text>
+<text x="652" y="548" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">ttl_s</text>
+<line x1="640" y1="562" x2="940" y2="562" stroke="#2563eb" stroke-width="1"/>
+<text x="652" y="576" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">reserve(url) / release(url)</text>
+<text x="652" y="594" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">load_by_url()</text>
+<rect x="640" y="632" width="300" height="92" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.7"/>
+<text x="790.0" y="652" font-size="14" fill="#1d4ed8" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">CoordinatorHeartbeat</text>
+<line x1="640" y1="662" x2="940" y2="662" stroke="#2563eb" stroke-width="1"/>
+<text x="652" y="676" font-size="12" fill="#475569" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_id / stale_s</text>
+<line x1="640" y1="690" x2="940" y2="690" stroke="#2563eb" stroke-width="1"/>
+<text x="652" y="704" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">beat() / fresh_ids()</text>
+<rect x="1040" y="300" width="176" height="170" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.7"/>
+<text x="1128.0" y="320" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="400">«external»</text>
+<text x="1128.0" y="336" font-size="14" fill="#475569" text-anchor="middle" font-weight="700" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">PostgreSQL</text>
+<line x1="1040" y1="346" x2="1216" y2="346" stroke="#94a3b8" stroke-width="1"/>
+<text x="1052" y="360" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">jobs</text>
+<text x="1052" y="378" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">job_history</text>
+<text x="1052" y="396" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">task_history</text>
+<text x="1052" y="414" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_status</text>
+<text x="1052" y="432" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">executor_reservation</text>
+<text x="1052" y="450" font-size="12" fill="#334155" text-anchor="start" font-weight="400" font-family="'JetBrains Mono','D2Coding','Consolas',monospace">coordinator_status</text>
+<path d="M940,175.0 H990" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4"/>
+<path d="M940,303.0 H990" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4"/>
+<path d="M940,422.0 H990" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4"/>
+<path d="M940,550.0 H990" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4"/>
+<path d="M940,678.0 H990" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4"/>
+<path d="M990,175.0 V678.0" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4"/>
+<path d="M990,385.0 H1038" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4" marker-end="url(#open)"/>
+<path d="M570,392.0 H600 V345.0 H990" stroke="#94a3b8" stroke-width="1.4" fill="none" stroke-dasharray="6 4"/>
+<text x="28" y="800" font-size="12" fill="#64748b" text-anchor="start" font-weight="400">구현을 바꿔도 dispatcher 는 JobStore 규약만 보므로 코드가 바뀌지 않는다.</text>
+</svg>
