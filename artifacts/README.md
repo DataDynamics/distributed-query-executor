@@ -99,6 +99,12 @@ Word 판에는 꾸밈을 넣지 않았다. Word 가 원래 갖고 있는 기본 
 고친 뒤 다시 변환한다. `docs/` 의 사용자·운영자 문서도 같은 방식으로 만든
 `USER.docx`·`OPERATOR.docx` 를 함께 둔다.
 
+두 다이어그램 문서는 성격이 달라 **그림만 담은 Word 판**을 따로
+둔다([class-diagram.docx](class-diagram.docx),
+[sequence-diagram.docx](sequence-diagram.docx)). 설명은 모두 빼고 다이어그램 이름과 그림만 한 쪽에
+하나씩 넣었으므로, 발표 자료나 다른 보고서에 그림을 통째로 옮겨 붙일 때 쓴다. 그림이 왜 그렇게
+생겼는지에 대한 설명은 `.md` 쪽에 있다.
+
 ## 무엇을 합쳤는가
 
 이 디렉터리는 두 저장소의 내용을 합친 것이다.
