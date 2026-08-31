@@ -1491,27 +1491,28 @@ FUNCTION RESOLVE_VALUE(value, props):
     RETURN 바뀐 문자열
 ```
 
-**5. 재귀 치환과 타입 복원**
+**5. 재귀 치환**
 
-구조 전체를 재귀로 훑으며 문자열마다 치환한다. 치환한 뒤에는 `true`·`123` 같은 값을 원래 타입으로
-되돌린다. YAML 이 문자열로 읽은 것을 그대로 두면 숫자 설정이 문자열이 되어 비교가 어긋난다.
+구조 전체를 재귀로 훑으며 문자열 값마다 치환한다. 치환한 결과는 **문자열 그대로 둔다.** 숫자나
+참·거짓으로 바꾸는 일은 여기서 하지 않고, 나중에 설정 항목을 꺼내는 쪽이 필요한 타입으로 읽는다.
+목록은 문자열 원소만 치환하고 숫자·참거짓 원소는 건드리지 않는다.
 
 ```
 FUNCTION RESOLVE_DICT(data, props):
-    IF data 가 dict THEN RETURN {k: RESOLVE_DICT(v, props) FOR k, v IN data}
-    IF data 가 list THEN RETURN [RESOLVE_DICT(v, props) FOR v IN data]
-    IF data 가 문자열 THEN
-        s = RESOLVE_VALUE(data, props)
-        IF s 가 "true"/"false" THEN RETURN 참/거짓
-        IF s 가 정수·실수 모양 THEN RETURN 숫자
-        RETURN s
-    RETURN data                       // 숫자·불리언은 그대로
+    FOR k, v IN data:
+        IF v 가 문자열 THEN out[k] = RESOLVE_VALUE(v, props)
+        ELSE IF v 가 dict THEN out[k] = RESOLVE_DICT(v, props)      // 한 단계 더 들어간다
+        ELSE IF v 가 list THEN
+            out[k] = [RESOLVE_VALUE(x, props) IF x 가 문자열 ELSE x FOR x IN v]
+        ELSE out[k] = v                                             // 숫자·참거짓·NULL 은 그대로
+    RETURN out
 ```
 
 **6. 결과 반환**
 
-치환이 끝난 묶음을 돌려준다. 이후 `Settings` 가 이 묶음을 섹션 구조 그대로 읽어 각 설정 항목을
-꺼낸다. 자리표시자 이름이 아니라 **YAML 의 중첩 위치**가 섹션과 일치해야 값이 반영된다.
+치환이 끝난 묶음을 돌려준다. 이후 `Settings` 가 이 묶음을 섹션 구조 그대로 읽으면서 숫자·참거짓
+항목을 그때 필요한 타입으로 바꾼다. 자리표시자 이름이 아니라 **YAML 의 중첩 위치**가 섹션과
+일치해야 값이 반영된다.
 
 ```
 RETURN RESOLVE_DICT(raw_config, props)
