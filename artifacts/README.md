@@ -23,6 +23,11 @@ WarehousePG 로 동시에 옮긴다. 다 담기면 시각화 서비스가 방금
 
 ![추출 버튼을 누른 뒤 Scatter Chart 까지의 비즈니스 프로세스](images/business-process.svg)
 
+단계 하나하나가 궁금하면 [상세판](images/business-process-detail.svg)을 본다. 같은 흐름을 왼쪽에서
+오른쪽으로 읽도록 눕히고 각 단계를 더 잘게 나눈 것이다. 한 줄에 다 담기지 않아 두 줄로 접었고, 줄이
+바뀌는 곳은 Ⓐ 로 이어진다. 줄마다 그 줄에서 실제로 쓰이는 swim lane 만 보이므로 빈 칸이 생기지
+않는다.
+
 ![두 저장소를 독자별 문서 두 벌로 합쳤다](images/merge-map.svg)
 
 ## 어디부터 읽어야 하나
@@ -153,7 +158,8 @@ Word 판에는 꾸밈을 넣지 않았다. Word 가 원래 갖고 있는 기본 
 쓰였는지(`task-timing.svg`), S3 를 거치는 3단계(`s3-stage-phases.svg`), 백업
 구성(`backup-topology.svg`), 바깥 시스템과의 연결(`integration-model.svg`), 데이터 세
 갈래(`data-domains.svg`)와 그 수명(`data-lifecycle.svg`), 추출부터 Scatter Chart 까지의 업무
-흐름(`business-process.svg`), 그리고 이 디렉터리의 구성(`merge-map.svg`)이다.
+흐름(`business-process.svg`)과 그 단계를 잘게 나눈 가로형 상세판(`business-process-detail.svg`),
+그리고 이 디렉터리의 구성(`merge-map.svg`)이다.
 
 클래스 그림은 `class-*.svg`, 시퀀스 그림은 `seq-*.svg`, ER 그림은 `er-*.svg` 다. 이 셋과 Word 판이
 쓰는 그림들은 같은 이름의 PNG 도 함께 둔다. Word 가 SVG 를 그리지 못하기 때문이다. PNG 는 가로 두 배
