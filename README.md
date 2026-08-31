@@ -22,6 +22,7 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분�
 | [`docs/USER.md`](docs/USER.md) | **사용자 가이드(self-contained)** — 작업 제출·모드 선택·템플릿·조회·오류 대처 | 사용자 |
 | [`docs/OPERATOR.md`](docs/OPERATOR.md) | **운영자 가이드(self-contained)** — 일상 점검·로그 추적·장애 대응·용량 조정·설정 | 운영자 |
 | [`docs/GUIDE.md`](docs/GUIDE.md) | 실행 모드별 심화(2-phase 내부 흐름, 통합 테스트 하니스 등) | 사용자 |
+| [`docs/INTERFACE.md`](docs/INTERFACE.md) | 클라이언트→coordinator REST 인터페이스 명세(엔드포인트별 JSON 필드 표, 엑셀 판 동봉) | 사용자 |
 | [`docs/INTEGRATION.md`](docs/INTEGRATION.md) | C# 클라이언트 전체 예제 코드 | 사용자 |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | 최초 설치·에어갭 오프라인 설치 절차 | 운영자 |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | 성능 파라미터 레퍼런스·확장·고가용성 심화 | 운영자 |

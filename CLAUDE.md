@@ -6,7 +6,11 @@
 
 문서는 독자별로 갈린다. `docs/USER.md`(사용자 — API 사용법·모드 선택·오류 코드)와
 `docs/OPERATOR.md`(운영자 — 일상 점검·장애 추적·용량 조정·설정)가 각 역할의 문서이고, GUIDE·
-INTEGRATION·DEPLOY·PERFORMANCE·DESIGN 은 특정 주제의 심화 문서다.
+INTERFACE·INTEGRATION·DEPLOY·PERFORMANCE·DESIGN 은 특정 주제의 심화 문서다.
+`docs/INTERFACE.md` 는 클라이언트가 coordinator 를 부를 때 쓰는 REST 인터페이스 명세로, 엔드포인트
+여덟 개의 요청·응답 JSON 을 엑셀로 옮길 수 있는 평면 표(부모필드명·입출력 구분 열)로 적은 것이다.
+엔드포인트를 추가하거나 요청·응답 필드를 바꾸면 이 문서와 짝을 이루는 `docs/INTERFACE.xlsx` 를
+함께 고친다(엑셀은 md 를 파싱해 엔드포인트별 시트로 만든 것이다).
 
 **이 두 문서는 의도적으로 self-contained 문서다.** 링크를 따라다니지 않고 하나만 읽어도 일을 끝낼 수
 있도록 다른 문서의 내용을 가져와 담았으므로, 심화 문서와 겹치는 서술이 있는 것이 정상이다. 중복을
