@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1372" width="1400" height="1372" role="img" font-family="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#334155"/></marker>
+<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/></marker>
+<marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1400" height="1372" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="28" y="38" font-size="19" font-weight="700" fill="#0f172a">비즈니스 프로세스 — 데이터 추출부터 시각화까지</text>
+<text x="28" y="60" font-size="13" fill="#64748b">현업 담당자가 분석 화면에서 추출을 요청하면 원천 데이터가 분석용 데이터베이스로 옮겨지고, 그 데이터로 차트를 그린다</text>
+<rect x="28" y="84" width="260" height="1264" rx="12" fill="none" stroke="#475569" stroke-width="1.3" stroke-dasharray="7 5"/>
+<rect x="28" y="84" width="260" height="34" rx="12" fill="#f1f5f9" stroke="#475569" stroke-width="1.3"/>
+<text x="158.0" y="106" font-size="13.5" font-weight="700" fill="#475569" text-anchor="middle">현업 담당자</text>
+<rect x="298" y="84" width="300" height="1264" rx="12" fill="none" stroke="#2563eb" stroke-width="1.3" stroke-dasharray="7 5"/>
+<rect x="298" y="84" width="300" height="34" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="1.3"/>
+<text x="448.0" y="106" font-size="13.5" font-weight="700" fill="#2563eb" text-anchor="middle">분석 애플리케이션 화면</text>
+<rect x="608" y="84" width="310" height="1264" rx="12" fill="none" stroke="#059669" stroke-width="1.3" stroke-dasharray="7 5"/>
+<rect x="608" y="84" width="310" height="34" rx="12" fill="#ecfdf5" stroke="#059669" stroke-width="1.3"/>
+<text x="763.0" y="106" font-size="13.5" font-weight="700" fill="#059669" text-anchor="middle">데이터 추출 서비스</text>
+<rect x="928" y="84" width="402" height="1264" rx="12" fill="none" stroke="#7c3aed" stroke-width="1.3" stroke-dasharray="7 5"/>
+<rect x="928" y="84" width="402" height="34" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.3"/>
+<text x="1129.0" y="106" font-size="13.5" font-weight="700" fill="#7c3aed" text-anchor="middle">데이터 저장소</text>
+<circle cx="158" cy="155" r="13" fill="#0f172a"/>
+<rect x="58" y="186" width="200" height="54" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="158.0" y="207.66666666666666" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">분석 조건을 고른다</text>
+<text x="158.0" y="227.66666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">기간 · 대상 · 항목</text>
+<rect x="58" y="262" width="200" height="54" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="158.0" y="293.6666666666667" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">‘추출’ 버튼을 누른다</text>
+<rect x="318" y="338" width="260" height="54" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="448.0" y="359.6666666666667" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">입력한 조건을 확인한다</text>
+<text x="448.0" y="379.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">빠진 값 · 잘못된 기간</text>
+<path d="M448 409.0 L558.0 446 L448 483.0 L338.0 446 Z" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="448" y="451" font-size="13.5" font-weight="700" fill="#92400e" text-anchor="middle">조건이 올바른가?</text>
+<rect x="58" y="414" width="200" height="62" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="158.0" y="439.6666666666667" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">안내를 보고</text>
+<text x="158.0" y="459.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">조건을 고친다</text>
+<rect x="318" y="500" width="260" height="54" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="448.0" y="521.6666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">추출을 요청한다</text>
+<text x="448.0" y="541.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">필요한 데이터를 알려 준다</text>
+<rect x="628" y="576" width="270" height="54" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="763.0" y="597.6666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">요청을 접수하고</text>
+<text x="763.0" y="617.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">접수번호를 돌려준다</text>
+<rect x="318" y="652" width="260" height="54" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="448.0" y="673.6666666666666" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">진행 상태를 보여 준다</text>
+<text x="448.0" y="693.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">몇 %까지 왔는지 표시</text>
+<rect x="628" y="652" width="270" height="54" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="763.0" y="673.6666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">일을 여러 몫으로 나눈다</text>
+<text x="763.0" y="693.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">기본 4몫 — 몫마다 동시에</text>
+<rect x="938" y="728" width="382" height="7" rx="3" fill="#0f172a"/>
+<rect x="938" y="752" width="180" height="86" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="1028.0" y="780.3333333333334" font-size="13" font-weight="700" fill="#6d28d9" text-anchor="middle">1번 몫</text>
+<text x="1028.0" y="799.3333333333334" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">원천 시스템에서 읽어</text>
+<text x="1028.0" y="818.3333333333334" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">분석용 창고에 담는다</text>
+<rect x="1140" y="752" width="180" height="86" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6"/>
+<text x="1230.0" y="780.3333333333334" font-size="13" font-weight="700" fill="#6d28d9" text-anchor="middle">2번 몫</text>
+<text x="1230.0" y="799.3333333333334" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">원천 시스템에서 읽어</text>
+<text x="1230.0" y="818.3333333333334" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">분석용 창고에 담는다</text>
+<rect x="938" y="860" width="382" height="7" rx="3" fill="#0f172a"/>
+<path d="M763 892.0 L888.0 931 L763 970.0 L638.0 931 Z" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="763" y="936" font-size="13.5" font-weight="700" fill="#92400e" text-anchor="middle">모든 몫이 담겼는가?</text>
+<rect x="938" y="900" width="392" height="62" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.6"/>
+<text x="1134.0" y="925.6666666666666" font-size="14" font-weight="700" fill="#b91c1c" text-anchor="middle">실패한 몫만 다시 담는다</text>
+<text x="1134.0" y="945.6666666666666" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">이미 담긴 몫은 그대로 둔다</text>
+<rect x="628" y="996" width="270" height="54" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+<text x="763.0" y="1017.6666666666666" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">끝났음을 알린다</text>
+<text x="763.0" y="1037.6666666666665" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">담은 건수를 함께 전달</text>
+<rect x="318" y="1072" width="260" height="54" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+<text x="448.0" y="1093.6666666666667" font-size="14" font-weight="700" fill="#1d4ed8" text-anchor="middle">완료를 표시하고</text>
+<text x="448.0" y="1113.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">결과 화면을 연다</text>
+<rect x="58" y="1148" width="200" height="62" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="158.0" y="1173.6666666666667" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">차트와 표로</text>
+<text x="158.0" y="1193.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">결과를 살펴본다</text>
+<rect x="58" y="1232" width="200" height="54" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+<text x="158.0" y="1253.6666666666667" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">보고서로 저장하거나</text>
+<text x="158.0" y="1273.6666666666667" font-size="12" font-weight="400" fill="#475569" text-anchor="middle">동료와 공유한다</text>
+<circle cx="158" cy="1318" r="15" fill="none" stroke="#0f172a" stroke-width="2.2"/><circle cx="158" cy="1318" r="9" fill="#0f172a"/>
+<rect x="938" y="1160" width="392" height="96" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.6"/>
+<text x="1134.0" y="1193.3333333333333" font-size="13" font-weight="700" fill="#92400e" text-anchor="middle">이 그림에서 말하는 창고</text>
+<text x="1134.0" y="1212.3333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">원천 시스템 = 업무 데이터가 쌓이는 큰 창고(Impala)</text>
+<text x="1134.0" y="1231.3333333333333" font-size="11" font-weight="400" fill="#475569" text-anchor="middle">분석용 창고 = 분석과 시각화 전용 데이터베이스(WarehousePG)</text>
+<line x1="158" y1="168" x2="158" y2="186" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<line x1="158" y1="240" x2="158" y2="262" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<path d="M258 289 L288 289 L288 365 L318 365" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<line x1="448" y1="392" x2="448" y2="409" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<path d="M338 446 L258 446" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<text x="300" y="436" font-size="11.5" fill="#b45309" text-anchor="middle" font-weight="400">아니오</text>
+<path d="M58 445 L42 445 L42 213 L58 213" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<line x1="448" y1="483" x2="448" y2="500" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<text x="458" y="497" font-size="11.5" fill="#047857" text-anchor="start" font-weight="400">예</text>
+<path d="M578 527 L603 527 L603 603 L628 603" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<path d="M628 616 L603 616 L603 679 L578 679" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="594" y="636" font-size="11" fill="#475569" text-anchor="end" font-weight="400">접수번호를 돌려준다</text>
+<line x1="763" y1="630" x2="763" y2="652" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<path d="M318 679 L298 679 L298 726 L448 726 L448 706" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<text x="375" y="740" font-size="11" fill="#475569" text-anchor="middle" font-weight="400">끝날 때까지 반복해서 새로 고친다</text>
+<path d="M898 679 L1310 679 L1310 728" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<line x1="1028" y1="735" x2="1028" y2="752" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<line x1="1230" y1="735" x2="1230" y2="752" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<line x1="1028" y1="838" x2="1028" y2="860" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<line x1="1230" y1="838" x2="1230" y2="860" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<path d="M1129 867 L1129 884 L763 884 L763 892" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<path d="M888 931 L938 931" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<text x="913" y="918" font-size="11.5" fill="#b91c1c" text-anchor="middle" font-weight="400">아니오</text>
+<path d="M1330 931 L1362 931 L1362 712 L1129 712 L1129 728" stroke="#334155" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<line x1="763" y1="970" x2="763" y2="996" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<text x="773" y="992" font-size="11.5" fill="#047857" text-anchor="start" font-weight="400">예</text>
+<path d="M898 1023 L908 1023 L908 1099 L578 1099" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<path d="M318 1099 L298 1099 L298 1179 L258 1179" stroke="#0f172a" stroke-width="2.6" fill="none" marker-end="url(#arw)"/>
+<line x1="158" y1="1210" x2="158" y2="1232" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<line x1="158" y1="1286" x2="158" y2="1303" stroke="#0f172a" stroke-width="2.6" marker-end="url(#arw)"/>
+<circle cx="950" cy="40" r="7" fill="#0f172a"/>
+<text x="962" y="44" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">시작</text>
+<rect x="998" y="31" width="26" height="18" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+<text x="1030" y="44" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">하는 일</text>
+<path d="M1090 31 L1108 40 L1090 49 L1072 40 Z" fill="#fffbeb" stroke="#d97706"/>
+<text x="1116" y="44" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">판단</text>
+<rect x="1150" y="36" width="26" height="6" rx="3" fill="#0f172a"/>
+<text x="1182" y="44" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">동시 진행</text>
+<circle cx="1250" cy="40" r="8" fill="none" stroke="#0f172a" stroke-width="2"/><circle cx="1250" cy="40" r="4.5" fill="#0f172a"/>
+<text x="1262" y="44" font-size="11.5" fill="#475569" text-anchor="start" font-weight="400">끝</text>
+</svg>

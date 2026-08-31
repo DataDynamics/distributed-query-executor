@@ -16,6 +16,12 @@
 **executor** 여러 대다. 데이터는 coordinator 를 거치지 않고 executor 가 원본에서 읽어 목적지로 곧장
 보낸다. coordinator 에게는 "몇 건 넣었다", "끝났다" 같은 소식만 올라온다.
 
+일이 오가는 순서로 보면 이렇다. 현업 담당자가 분석 화면에서 조건을 고르고 추출을 누르면, 화면이
+추출을 요청하고, 서비스가 그 일을 여러 몫으로 나눠 동시에 옮긴다. 다 담기면 화면이 완료를 알리고
+담당자는 그 데이터로 차트와 표를 본다.
+
+![추출 버튼을 누른 뒤 시각화까지의 비즈니스 프로세스](images/business-process.svg)
+
 ![두 저장소를 독자별 문서 두 벌로 합쳤다](images/merge-map.svg)
 
 ## 어디부터 읽어야 하나
@@ -86,8 +92,8 @@
 [interface.xlsx](interface.xlsx) 다.
 
 [program-spec.md](program-spec.md) 는 **핵심 프로그램 열세 개가 무슨 일을 어떤 순서로
-하는지**를 적은 프로그램 명세서다. 프로그램마다 어떤 물건인지(개요)와 처리 로직을 일련번호 순서로 담았고, 처리
-로직에는 실제 코드 대신 의사코드를 실었다. 파이썬을 모르는 사람도 순서를 읽을 수 있어야 하고 코드가
+하는지**를 적은 프로그램 명세서다. 프로그램마다 어떤 물건인지(개요)와 처리 로직을 일련번호 순서로
+담았고, 처리 로직에는 실제 코드 대신 의사코드를 실었다. 파이썬을 모르는 사람도 순서를 읽을 수 있어야 하고 코드가
 조금 바뀌어도 문서가 곧바로 낡지 않게 하기 위해서다. 같은 내용을 프로그램별로 시트를 나눈 엑셀이
 [program-spec.xlsx](program-spec.xlsx) 이며, 한 프로그램이 한 줄이 되도록 담아 처리 로직 칸 하나에
 모든 단계가 설명과 의사코드까지 함께 들어 있다.
@@ -145,8 +151,8 @@ Word 판에는 꾸밈을 넣지 않았다. Word 가 원래 갖고 있는 기본 
 과부하를 막는 세 겹의 방어(`admission.svg`), 작업 조각 하나의 시간이 어디에
 쓰였는지(`task-timing.svg`), S3 를 거치는 3단계(`s3-stage-phases.svg`), 백업
 구성(`backup-topology.svg`), 바깥 시스템과의 연결(`integration-model.svg`), 데이터 세
-갈래(`data-domains.svg`)와 그 수명(`data-lifecycle.svg`), 그리고 이 디렉터리의
-구성(`merge-map.svg`)이다.
+갈래(`data-domains.svg`)와 그 수명(`data-lifecycle.svg`), 추출부터 시각화까지의 업무
+흐름(`business-process.svg`), 그리고 이 디렉터리의 구성(`merge-map.svg`)이다.
 
 클래스 그림은 `class-*.svg`, 시퀀스 그림은 `seq-*.svg`, ER 그림은 `er-*.svg` 다. 이 셋과 Word 판이
 쓰는 그림들은 같은 이름의 PNG 도 함께 둔다. Word 가 SVG 를 그리지 못하기 때문이다. PNG 는 가로 두 배
