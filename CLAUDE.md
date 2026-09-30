@@ -364,7 +364,8 @@ closed loop 로 요청을 보내고 완료될 때까지 기다린 뒤 다음을 
 시간을 넘긴 job 만 취소하고 ABANDONED 로 집계한다. `wizard.py` 는 한 줄씩 묻는 대화형 마법사로,
 옵션 dict 만 만들고 실행 경로를 따로 두지 않는다. 끝에서 `cli.opts_to_argv` 로 명령행을 만들어
 보여 주고 그 인자를 그대로 `cli.main` 에 넘기므로 보인 명령과 실행이 어긋날 수 없다. 테스트는
-`tests/test_load_tool.py` 가 httpx.MockTransport 가짜 coordinator 와 대본 입력으로 한다.
+`tests/test_load_tool.py` 가 httpx.MockTransport 가짜 coordinator 와 대본 입력으로 한다. 사용법과
+시나리오 파일 형식(JSON·YAML)은 `src/tools/load/README.md` 에 있다.
 
 `bin/` 래퍼는 대화형 셸만 노출하지만 모듈 자체는 한 번 실행도 지원한다. 배치로 쓰려면
 `PYTHONPATH=src python -m tools.gp_query -q "SELECT 1" -o out.csv` 처럼 직접 부른다.
