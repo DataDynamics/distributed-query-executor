@@ -1,4 +1,4 @@
-"""운영자용 CLI 도구(`bin/gp-shell`·`bin/impala-shell`·`bin/s3-ops`) 검증.
+"""운영자용 CLI 도구(`bin/gp-shell`·`bin/impala-shell`·`bin/s3-ops`·`bin/load-test`) 검증.
 
 실제 DB 나 S3 없이 돌아가는 부분만 본다. 접속이 필요한 코드는 이 저장소의 다른
 테스트와 마찬가지로 다루지 않고, 대신 다음 네 가지를 확인한다.
@@ -263,7 +263,7 @@ def test_phase_timer_는_구간을_누적한다():
 
 # ───────────────────────── bin/ 래퍼 ─────────────────────────
 
-@pytest.mark.parametrize("name", ["gp-shell", "impala-shell", "s3-ops"])
+@pytest.mark.parametrize("name", ["gp-shell", "impala-shell", "s3-ops", "load-test"])
 def test_bin_래퍼가_도구를_띄운다(name):
     """PYTHONPATH·모듈 경로가 맞는지 --help 로 확인한다(접속은 하지 않는다)."""
     env = dict(os.environ, PYTHON=sys.executable, QUERY_EXECUTOR_CONFIG_DIR=str(REPO / "config"))

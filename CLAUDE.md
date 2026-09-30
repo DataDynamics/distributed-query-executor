@@ -33,7 +33,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 670개(+pandas 미설치 시 5 skip).
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 749개(+pandas 미설치 시 5 skip).
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -54,7 +54,7 @@ src/
   core/        # 공용: 설정 로더/설정/로깅/메트릭 (coordinator·executor 공유)
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: 소스 읽기 → Greenplum 적재(backend), task 상태 노출
-  tools/       # 운영자용 CLI(gp-shell·impala-shell·s3-ops). 서비스와 별개로 사람이 직접 쓴다
+  tools/       # 운영자용 CLI(gp-shell·impala-shell·s3-ops·load-test). 서비스와 별개로 사람이 직접 쓴다
 bin/           # 런처·설치 스크립트 + 운영자 CLI 래퍼(/data1 배포 트리와 공용)
   systemd/     # systemd 유닛(coordinator.service·executor@.service) + install-systemd.sh
 config/        # config.properties + config.yml 기본값 + 스키마(postgresql.sql / warehousepg.sql)
@@ -338,6 +338,7 @@ rsync 에서 제외되고 최초 1회만 seeding 되므로 재설치만으로는
 - **`bin/impala-shell`** 은 Impala 대화형 SQL 셸이다(`tools/impala_query.py --interactive`).
 - **`bin/s3-ops`** 는 S3 객체를 올리고 내리고 지운다(`ls`·`upload`·`download`·`head`·`cp`·`mv`·
   `rm`·`rmdir`·`exists`·`mkdir`·`buckets`).
+- **`bin/load-test`** 는 coordinator API 부하 테스트 도구다(`tools/load/`, `run`·`plan`·`wizard`).
 
 **핵심은 설정을 새로 만들지 않은 것이다.** 원본은 자체 `conf/config.yaml` 을 읽지만, 그대로 옮기면
 같은 접속 정보를 두 곳에 적어야 하고 한쪽만 고쳐서 어긋나는 사고가 난다. 그래서
@@ -349,6 +350,21 @@ rsync 에서 제외되고 최초 1회만 seeding 되므로 재설치만으로는
 
 드라이버도 서비스 쪽과 맞췄다. 원본의 psycopg2 대신 executor 백엔드가 쓰는 **psycopg 3** 을 쓴다.
 impyla 와 boto3 는 이미 `requirements-executor.txt` 에 있으므로 추가 의존성이 없다.
+
+**`tools/load/`** 는 앞의 셋과 달리 설정 파일이 아니라 coordinator HTTP API 만 쓴다. VU 하나가
+closed loop 로 요청을 보내고 완료될 때까지 기다린 뒤 다음을 보내며, VU 수는 단계(stage) 곡선을 따라
+늘고 준다(`scenario.target_vus`, 늘 때 올림·줄 때 내림). 완료의 뜻은 `request.py` 의 요청 **type** 이
+정한다. `async` 는 접수 응답의 id 로 상태 URL 을 종료 상태까지 폴링하고(`/jobs`), `sync` 는 응답이 곧
+완료다(`/query-execute`, dry_run). type 은 응답을 보고 추측하지 않고 명시하며(기본값만 경로로 정한다,
+`default_type`), 추측하면 id 없는 200 이 성공으로 묻히기 때문이다. 폴링 규칙(`PollSpec`)은 설정으로
+빼 기본값을 `/jobs` 규칙으로 두었다. async 결과는 **제출 TPS 와 완료 TPS 를 나눠** 낸다. `/jobs` 가
+항상 202 로 바로 돌아오는 비동기 API 라 제출 TPS 만 보면 처리량을 부풀려 보기 때문이다. 429 는 오류율에서 빼고 포화 신호로 따로 센다. 서버 자원은
+`GET /cluster` 한 번으로 coordinator 와 모든 executor 를 모으고(`sampler.py`), 부하 전 baseline
+구간을 따로 남겨 비교한다. 줄어드는 VU 와 drain 은 진행 중인 job 을 끝까지 지켜본 뒤 빠지며, drain
+시간을 넘긴 job 만 취소하고 ABANDONED 로 집계한다. `wizard.py` 는 한 줄씩 묻는 대화형 마법사로,
+옵션 dict 만 만들고 실행 경로를 따로 두지 않는다. 끝에서 `cli.opts_to_argv` 로 명령행을 만들어
+보여 주고 그 인자를 그대로 `cli.main` 에 넘기므로 보인 명령과 실행이 어긋날 수 없다. 테스트는
+`tests/test_load_tool.py` 가 httpx.MockTransport 가짜 coordinator 와 대본 입력으로 한다.
 
 `bin/` 래퍼는 대화형 셸만 노출하지만 모듈 자체는 한 번 실행도 지원한다. 배치로 쓰려면
 `PYTHONPATH=src python -m tools.gp_query -q "SELECT 1" -o out.csv` 처럼 직접 부른다.
