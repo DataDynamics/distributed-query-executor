@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# POST /jobs 부하 테스트(ramp-up + job 완료 폴링 + 서버 CPU/메모리 수집).
+#
+# VU(가상 사용자)를 ramp-up 으로 늘려 가며 job 을 제출하고, 각 job 이 끝날 때까지
+# GET /jobs/{id}/status 를 폴링한다. 끝나면 제출·완료 TPS, 지연 백분위, 그리고
+# GET /cluster 로 모은 coordinator·executor 별 CPU/메모리를 한 화면에 요약한다.
+#   예) load-test plan --stages 1m:10,3m:10,1m:30
+#       load-test run -c http://coord:8088 --body job.json --vus 20 --ramp-up 60s --duration 10m
+#       load-test run --scenario stairs.yml --out result.json --csv timeline.csv
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"
+
+# 파이썬: 배포 트리 .venv 우선, 없으면 소스 트리 .venv, 없으면 python3.
+# PYTHON 환경변수로 직접 지정할 수도 있다.
+if [[ -n "${PYTHON:-}" ]]; then
+    PY="$PYTHON"
+elif [[ -x "/data1/distributed-query-executor/.venv/bin/python" ]]; then
+    PY="/data1/distributed-query-executor/.venv/bin/python"
+elif [[ -x "$ROOT/.venv/bin/python" ]]; then
+    PY="$ROOT/.venv/bin/python"
+else
+    PY="$(command -v python3)"
+fi
+
+# src 레이아웃이므로 PYTHONPATH 에 src 를 넣어야 tools·core 모듈을 찾는다.
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# 크론이나 nohup 으로 돌릴 때를 위한 설정이다. LANG 이 없으면 한글 출력에서
+# UnicodeEncodeError 로 죽고, 버퍼링이 켜져 있으면 진행 줄이 늦게 보인다.
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+
+# --help 에 실제로 친 명령 이름이 나오게 한다.
+export PROG_NAME="bin/load-test"
+
+exec "$PY" -m tools.load "$@"

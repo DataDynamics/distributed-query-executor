@@ -255,6 +255,111 @@ downstream 의 안전 한도부터 확정한다. 그다음 executor 수와 execu
 여기서 반드시 지킬 것은 한 번에 한 값씩 바꾸는 것이다. 여러 값을 동시에 바꾸면 어떤 변경이 효과를
 냈는지 알 수 없어 튜닝이 미궁에 빠진다.
 
+### 부하를 걸어 한도 확인하기(`bin/load-test`)
+
+부하는 `bin/load-test` 로 건다. 가상 사용자(VU)를 ramp-up 으로 늘려 가며 coordinator API 를
+부르는 도구다. VU 하나는 요청을 보내고 그 요청이 **완료될 때까지 기다린 뒤** 다음 요청을 보내므로,
+동시에 진행 중인 요청 수는 VU 수를 넘지 않고 VU 를 늘려 가며 어디서 포화되는지 볼 수 있다.
+
+무엇을 완료로 보는지는 요청의 **type** 이 정한다.
+
+- **`async`** 는 `POST /jobs` 처럼 202 로 바로 돌아오고 실제 처리는 뒤에서 진행되는 요청이다.
+  도구는 접수 응답의 `job_id` 로 `GET /jobs/{id}/status` 를 폴링해 DONE·PARTIAL·FAILED·CANCELLED
+  중 하나가 되면 완료로 보고, 그중 DONE 만 성공으로 센다.
+- **`sync`** 는 `POST /query-execute` 처럼 응답이 곧 결과인 요청이다. 응답을 받는 순간 완료이고,
+  성공 코드(기본 2xx, `--success-status 200` 처럼 좁힐 수 있다)가 아니면 오류로 센다. `/jobs` 의
+  dry_run 도 여기에 해당한다.
+
+type 은 `--type` 으로 주고, 주지 않으면 경로가 `/jobs` 인 요청만 async 이고 나머지와 dry_run 은
+sync 다. 응답을 보고 추측하지 않는 이유는 설정 실수를 드러내기 위해서다. async 로 의도한 요청이 id 없이
+200 을 받으면 `missing_id` 오류로 잡힌다. 폴링 규칙(`--poll-path`·`--poll-id-field`·
+`--poll-status-field`·`--poll-terminal`·`--poll-success`·`--cancel-path`)의 기본값은 `/jobs`
+규칙이라 보통은 건드릴 일이 없고, 이 저장소 밖의 다른 비동기 API 를 잴 때만 바꾼다.
+
+처음이라면 **`bin/load-test wizard`** 로 시작하는 것이 쉽다. 대상 → 요청 → 부하 곡선 → 대기 →
+자원 수집 → 결과 파일 순으로 필요한 것만 묻고(sync 를 고르면 폴링 규칙은 묻지 않는다), 질문마다
+Enter 로 기본값을, `?` 로 설명을 볼 수 있다. 끝에서 완성된 명령을 보여 주고 바로 실행하거나
+시나리오 YAML 로 저장하거나 명령만 받아 갈 수 있다. 실행은 화면에 보인 그 명령 그대로 하므로, 한 번
+받아 둔 명령은 다음부터 마법사 없이 쓰면 된다. `wizard --scenario 파일` 로 기존 시나리오의 값을 기본
+답으로 채워 시작할 수도 있다.
+
+```bash
+bin/load-test wizard                       # 질문에 답하며 명령 구성
+
+# 요청 없이 VU 곡선만 먼저 확인한다
+bin/load-test plan --vus 20 --ramp-up 60s --duration 10m
+
+# 20 VU 까지 60초에 걸쳐 늘리고 10분 동안 부하를 건다
+bin/load-test run -c http://coord:8088 --body job.json \
+    --vus 20 --ramp-up 60s --duration 10m --out result.json --csv timeline.csv
+
+# 계단형 부하: 5 VU 로 2분, 20 VU 로 3분, 30초에 걸쳐 0 으로
+bin/load-test run -c http://coord:8088 --body job.json --stages 30s:5,2m:5,1m:20,3m:20,30s:0
+
+# sync: 결과 미리보기 API 에 10 VU 로 5분
+bin/load-test run -c http://coord:8088 --type sync --path /query-execute --body preview.json \
+    --vus 10 --ramp-up 30s --duration 5m
+```
+
+요청 본문(`--body`)은 `/jobs` 에 보내는 JSON 그대로이며, 문자열 안의 `${vu}`·`${iter}`·`${seq}`·
+`${uuid}`·`${run_id}`·`${now:%Y%m%d}`·`${choice:a,b,c}`·`${randint:1-9}` 가 요청마다 치환된다.
+예를 들어 `"target_table": "dwtemp.load_${vu}"` 로 VU 마다 대상 테이블을 나눌 수 있다. 자주 쓰는
+옵션은 시나리오 YAML(`--scenario`)로 묶어 두고, 키 이름은 옵션에서 `--` 를 떼고 `-` 를 `_` 로 바꾼
+것이다. 명령행 값이 YAML 보다 우선한다. 요청 명세는 아래처럼 `request:` 블록으로 묶어 쓸 수 있으며,
+본문 경로는 시나리오 파일 기준 상대경로다.
+
+```yaml
+request:
+  type: async              # async | sync
+  method: POST
+  path: /jobs
+  body: job.json
+  poll:                    # async 에서만. 생략한 항목은 /jobs 기본값
+    path: /jobs/${id}/status
+    id_field: job_id
+    status_field: status
+    terminal: [DONE, PARTIAL, FAILED, CANCELLED]
+    success: [DONE]
+    cancel_path: /jobs/${id}/cancel   # '' 이면 멈출 때 취소하지 않는다
+vus: 20
+ramp_up: 60s
+duration: 10m
+```
+
+**이 도구는 실제로 적재한다.** dry_run 이 아닌 `/jobs` 요청이면 시작 전에 대상과 부하 곡선을 보여
+주고 확인을 받으며(읽기 전용인 sync 요청은 묻지 않는다), 비대화형으로 돌릴 때는 `--yes` 가 있어야 시작한다. append 는 반복할 때마다 중복
+적재되므로 부하용 대상 테이블을 따로 두는 것이 안전하다. executor 없이 coordinator 의 검증·분할
+경로만 재고 싶으면 `--dry-run-body` 로 본문에 `dry_run=true` 를 넣는다.
+
+끝나면 요약이 stdout 으로 나온다. async 결과를 읽을 때는 TPS 가 두 가지라는 점을 먼저 기억한다.
+**제출 TPS** 는 초당 접수 건수이고, **완료 TPS** 는 초당 종료가 확인된 job 수로 서버가 실제로 처리한
+양이다. 비동기 API 라 제출 TPS 는 서버가 받아 주기만 하면 얼마든지 높게 나오므로 용량 판단은 완료
+TPS 로 한다. sync 는 응답이 곧 완료라 TPS 와 응답 지연이 하나씩만 나온다. 지연은 도구가 잰 e2e(제출부터 종료 확인까지)와, 서버 타임스탬프로 잰 대기 시간
+(created→started, 실행 슬롯을 기다린 시간)과 실행 시간(started→finished)으로 나뉘어 나온다. 대기
+시간이 늘기 시작하면 `max_concurrent_jobs` 에 닿은 것이다.
+
+같은 화면에 서버 자원 표가 붙는다. 도구는 테스트하는 동안 `GET /cluster` 를 `--sample-interval`
+(기본 5초)마다 불러 coordinator 와 모든 executor 의 CPU·메모리·실행 중 task 수를 모은다. 부하 전
+`--baseline`(기본 10초) 동안 먼저 재 두므로 '기준CPU' 와 'CPU평균' 을 비교하면 부하로 얼마나
+올랐는지가 보인다. 'task최대/상한' 이 상한에 붙어 있으면 executor 가 포화된 것이다. '포화 신호' 에는
+처음 429 가 난 시점과 그때의 VU 수가 나오는데, 429 는 도구 입장에서 오류가 아니라 admission 한도에
+닿았다는 신호라 오류율에서 빼고 따로 센다.
+
+멈출 때는 Ctrl-C 를 한 번 누르면 새 제출을 멈추고 진행 중인 job 을 `--drain-timeout`(기본 5분)
+동안 기다린 뒤 요약을 낸다. 두 번 누르면 기다리지 않는다. 그때까지 끝나지 않은 job 은
+`--on-stop cancel`(기본)이면 취소를 보내고, `abandon` 이면 그대로 두며, 어느 쪽이든 ABANDONED 로
+집계한다. 응답을 기다리던 sync 요청은 취소할 방법이 없어 연결만 끊는다. HTTP 타임아웃의 기본값도
+type 마다 다르다. async 는 접수 응답만 기다리므로 30초이고(긴 대기는 `--job-timeout` 이 맡는다),
+sync 는 요청 하나가 쿼리 실행 시간만큼 걸리므로 5분이며 이 값이 곧 작업 타임아웃이다. `--max-error-rate 0.05` 처럼 한도를 주면 오류율이 넘을 때 종료 코드 3 으로 끝나므로
+정기 점검 스크립트에서 성능 회귀를 판정할 수 있다. 초 단위 시계열(`--csv`)과 서버 자원
+표본(`--samples-csv`)은 엑셀에서 바로 열리는 CSV 이고, `--out` 의 JSON 에는 설정과 요약, 시계열,
+표본이 모두 들어 있어 두 번의 실행을 나중에 비교할 수 있다.
+
+도구 자신도 부하의 일부라는 점에 주의한다. VU 마다 `--poll-interval`(기본 2초, ±20% 분산) 간격으로
+상태를 폴링하므로 VU 가 수백이면 폴링만으로 coordinator 에 적지 않은 요청이 간다. job 이 수십 초
+이상 걸리는 이관이라면 폴링 간격을 5초 이상으로 늘려도 결과가 거의 달라지지 않는다. `/cluster` 의
+job 수는 이 도구가 만든 것만이 아니라 coordinator 전체의 수라는 점도 함께 기억한다.
+
 ---
 
 ## 작업이 밀릴 때
