@@ -33,7 +33,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 749개(+pandas 미설치 시 5 skip).
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 770개(+pandas 미설치 시 5 skip).
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -368,6 +368,13 @@ ANSI 커서 이동으로 제자리에서 다시 그리고(터미널이 아니면
 보여 주고 그 인자를 그대로 `cli.main` 에 넘기므로 보인 명령과 실행이 어긋날 수 없다. 테스트는
 `tests/test_load_tool.py` 가 httpx.MockTransport 가짜 coordinator 와 대본 입력으로 한다. 사용법과
 시나리오 파일 형식(JSON·YAML)은 `src/tools/load/README.md` 에 있다.
+
+포화 분석은 `analysis.py`(순수 함수)가 시계열을 VU 수준별로 묶어(`per_vu_levels`, 수준이 오른 직후
+과도구간은 warmup 으로 버린다) 완료 TPS 곡선을 만들고, 이웃 수준 간 증가율이 임계 아래로 떨어지는
+무릎점을 찾는다(`find_knee`). `saturation` 명령이 `--levels`·`--step-duration` 으로 계단 부하를
+구성해 이를 재고, 결과는 모든 `run` 에도 자동으로 붙는다. 차트는 `analysis.ascii_chart`(콘솔)와
+`charts.py`(PNG=Pillow 지연 임포트, SVG=의존성 없음)가 그리며, Pillow 가 없으면 PNG 는 조용히
+건너뛰고 SVG 를 권한다.
 
 `bin/` 래퍼는 대화형 셸만 노출하지만 모듈 자체는 한 번 실행도 지원한다. 배치로 쓰려면
 `PYTHONPATH=src python -m tools.gp_query -q "SELECT 1" -o out.csv` 처럼 직접 부른다.

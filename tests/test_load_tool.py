@@ -859,3 +859,155 @@ def test_LiveRenderer_는_줄이_줄면_남은_줄을_지운다():
     buf.truncate(0); buf.seek(0)
     r.clear()
     assert buf.getvalue().startswith("\033[1A")
+
+
+# ───────────────────────── 포화 분석(saturation) ─────────────────────────
+
+from tools.load import analysis, charts
+
+
+def _staircase_timeline(plan, secs=4, warmup_ok=True):
+    """{vus: complete_per_sec} 를 계단형 시계열로 만든다."""
+    tl, sec = [], 0
+    for vus, cps in plan.items():
+        for _ in range(secs):
+            tl.append({"second": sec, "vus": vus, "inflight": vus, "submitted": cps,
+                       "accepted": cps, "rejected_429": 0, "request_errors": 0,
+                       "completed": cps, "success": cps, "failed": 0, "rows": cps * 100})
+            sec += 1
+    return tl
+
+
+def test_per_vu_levels_는_수준별로_묶고_warmup_을_버린다():
+    tl = _staircase_timeline({1: 5, 2: 10, 4: 18}, secs=4)
+    levels = analysis.per_vu_levels(tl, warmup_frac=0.5)
+    assert [l["vus"] for l in levels] == [1, 2, 4]
+    # 4초 중 앞 2초(50%)를 버려 2초만 센다.
+    assert all(l["seconds"] == 2 for l in levels)
+    assert levels[2]["complete_tps"] == 18.0 and levels[2]["rows_per_sec"] == 1800.0
+    # VU 0 은 제외된다.
+    tl0 = [{"second": 0, "vus": 0, "completed": 0, "submitted": 0, "rejected_429": 0,
+            "success": 0, "failed": 0, "rows": 0}] + tl
+    assert [l["vus"] for l in analysis.per_vu_levels(tl0)] == [1, 2, 4]
+
+
+def test_per_vu_levels_는_짧은_구간이면_마지막_1초만_쓴다():
+    tl = _staircase_timeline({1: 5, 2: 8}, secs=1)
+    levels = analysis.per_vu_levels(tl, warmup_frac=0.9)
+    assert all(l["seconds"] == 1 for l in levels)
+
+
+def test_find_knee_는_증가율이_꺾이는_지점을_찾는다():
+    # 8→16 에서 3.8% 만 늘어 포화(기본 임계 5%).
+    levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 18, 8: 26, 16: 27}))
+    k = analysis.find_knee(levels)
+    assert k["saturated"] and k["knee_vus"] == 8 and k["peak_vus"] == 16
+
+
+def test_find_knee_는_계속_오르면_포화_안됨으로_본다():
+    levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 20, 8: 40}))
+    k = analysis.find_knee(levels)
+    assert not k["saturated"] and k["peak_vus"] == 8
+
+
+def test_find_knee_는_과부하로_TPS_가_줄면_그_앞을_무릎점으로():
+    levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 20, 8: 15}))
+    k = analysis.find_knee(levels)
+    assert k["saturated"] and k["knee_vus"] == 4
+
+
+def test_find_knee_는_수준이_하나면_None():
+    levels = analysis.per_vu_levels(_staircase_timeline({4: 20}))
+    assert analysis.find_knee(levels) is None
+
+
+def test_ascii_chart_는_포화점만_다이아몬드로_찍는다():
+    levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 18, 8: 26, 16: 27}))
+    k = analysis.find_knee(levels)
+    chart = "\n".join(analysis.ascii_chart(levels, knee=k))
+    assert "◆" in chart and "●" in chart and "VU" in chart
+    # 포화 안 됐으면 ◆ 를 찍지 않는다.
+    lv2 = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 20, 8: 40}))
+    chart2 = "\n".join(analysis.ascii_chart(lv2, knee=analysis.find_knee(lv2)))
+    assert "◆" not in chart2
+
+
+def test_format_saturation_은_표와_곡선과_무릎점을_낸다():
+    levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 18, 8: 26, 16: 27}))
+    sat = {"warmup_frac": 0.3, "levels": levels, "knee": analysis.find_knee(levels)}
+    out = "\n".join(report.format_saturation(sat))
+    assert "완료TPS" in out and "포화 VU ≈ 8" in out and "과도구간" in out
+    # 수준이 하나뿐이면 빈 목록.
+    assert report.format_saturation({"levels": analysis.per_vu_levels(
+        _staircase_timeline({4: 10})), "knee": None}) == []
+
+
+@pytest.mark.skipif(not charts.available(), reason="Pillow 미설치(에어갭 번들 등)")
+def test_charts_png_은_Pillow_로_파일을_만든다(tmp_path):
+    levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 18, 8: 26, 16: 27, 32: 25}))
+    k = analysis.find_knee(levels)
+    png = tmp_path / "sat.png"
+    assert charts.render_saturation_png(levels, k, str(png))
+    assert png.exists() and png.stat().st_size > 1000
+    # 점이 부족하면 False.
+    assert not charts.render_saturation_png(levels[:1], k, str(tmp_path / "x.png"))
+
+
+def test_charts_svg_는_의존성_없이_문자열을_만든다():
+    levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 18, 8: 26}))
+    svg = charts.render_saturation_svg(levels, analysis.find_knee(levels))
+    assert svg.startswith("<svg") and "polyline" in svg and svg.rstrip().endswith("</svg>")
+
+
+async def test_build_result_에_포화_분석이_들어간다():
+    fake = FakeCoordinator(polls_to_finish=1)
+    stages = []
+    for lv in (1, 2, 4):
+        stages += [scenario.Stage(0.0, lv), scenario.Stage(1.5, lv)]
+    runner = await _run(fake, stages=stages)
+    res = report.build_result(runner, {"run_id": "r", "coordinators": ["c"], "scenario": "s",
+                                       "request_type": "async"}, warmup_frac=0.0)
+    levels = res["saturation"]["levels"]
+    vus = [l["vus"] for l in levels]
+    # 계단으로 올렸으니 서로 다른 수준이 둘 이상 잡히고 최고 수준(4)이 포함된다.
+    assert len(levels) >= 2 and max(vus) == 4
+
+
+# ───────────────────────── saturation 명령 ─────────────────────────
+
+def test_build_saturation_stages_는_각_수준을_즉시전이_후_유지한다():
+    stages = cli.build_saturation_stages({"levels": "1,2,4", "step_duration": "30s"})
+    # 수준마다 (0초 전이, 30초 유지) 두 단계.
+    assert len(stages) == 6
+    assert stages[0].duration == 0.0 and stages[0].target == 1
+    assert stages[1].duration == 30.0 and stages[1].target == 1
+    assert stages[5].target == 4 and stages[5].duration == 30.0
+    assert scenario.max_vus(stages) == 4
+
+
+@pytest.mark.parametrize("levels,match", [
+    ("1,x,4", "정수 목록"),
+    ("0,2", "1 이상"),
+    ("", "하나 이상"),
+])
+def test_build_saturation_stages_는_잘못된_levels_를_거부한다(levels, match):
+    with pytest.raises(cli.ConfigError, match=match):
+        cli.build_saturation_stages({"levels": levels, "step_duration": "10s"})
+
+
+def test_saturation_명령은_계단을_구성해_옵션에_담는다():
+    parser = cli.build_parser()
+    opts = cli.merge_options(parser.parse_args(
+        ["saturation", "--body", "j.json", "--levels", "1,2,4,8", "--step-duration", "45s"]))
+    assert opts["levels"] == "1,2,4,8" and opts["step_duration"] == "45s"
+    stages = cli.build_saturation_stages(opts)
+    assert scenario.max_vus(stages) == 8
+
+
+def test_write_chart_는_svg_를_의존성_없이_쓴다(tmp_path, capsys):
+    levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 18, 8: 26}))
+    sat = {"levels": levels, "knee": analysis.find_knee(levels)}
+    svg = tmp_path / "c.svg"
+    cli._write_chart(str(svg), sat)
+    assert svg.exists() and svg.read_text(encoding="utf-8").startswith("<svg")
+    assert "SVG" in capsys.readouterr().err

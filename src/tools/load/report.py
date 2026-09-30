@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from ..progress import display_width, pad
 from ..table import render
-from . import scenario
+from . import analysis, scenario
 from .stats import SUBMIT_ERRORS, summarize
 
 
@@ -43,17 +43,25 @@ def _pct(v: Optional[float]) -> str:
     return "-" if v is None else f"{v:.0f}%"
 
 
-def build_result(runner: Any, meta: Dict[str, Any]) -> Dict[str, Any]:
-    """러너 상태를 JSON 으로 직렬화할 결과 dict 로 만든다."""
+def build_result(runner: Any, meta: Dict[str, Any], warmup_frac: float = 0.3) -> Dict[str, Any]:
+    """러너 상태를 JSON 으로 직렬화할 결과 dict 로 만든다.
+
+    시계열을 VU 수준별로 묶어 포화 분석(levels + knee)도 함께 담는다. 서로 다른 VU 수준이 둘
+    이상이면(계단 부하나 ramp) 무릎점 탐지가 의미를 가진다.
+    """
     col = runner.collector
     summary = col.summary(runner.total_elapsed, runner.load_elapsed)
+    timeline = col.timeline(runner.total_elapsed)
+    levels = analysis.per_vu_levels(timeline, warmup_frac=warmup_frac)
+    knee = analysis.find_knee(levels)
     return {
         "meta": dict(meta, stop_reason=runner.stop_reason,
                      load_elapsed=runner.load_elapsed, total_elapsed=runner.total_elapsed,
                      max_vus_spawned=runner._next_vu - 1),
         "summary": summary,
         "resources": runner.sampler.summary() if runner.sampler else None,
-        "timeline": col.timeline(runner.total_elapsed),
+        "saturation": {"warmup_frac": warmup_frac, "levels": levels, "knee": knee},
+        "timeline": timeline,
         "samples": runner.sampler.rows() if runner.sampler else [],
     }
 
@@ -181,7 +189,43 @@ def format_summary(result: Dict[str, Any]) -> str:
         lines.append(_section("주요 오류"))
         for msg, n in s["top_errors"]:
             lines.append(f"  {n:>6,} × {msg}")
+
+    sat = format_saturation(result.get("saturation"))
+    if sat:
+        lines.append(_section("포화 분석"))
+        lines.extend(sat)
     return "\n".join(lines)
+
+
+def format_saturation(sat: Optional[Dict[str, Any]]) -> List[str]:
+    """포화 분석을 VU 수준별 표 + ASCII 곡선 + 무릎점 한 줄로 만든다.
+
+    서로 다른 VU 수준이 둘 이상일 때만 내용을 돌려준다(한 수준뿐이면 빈 목록).
+    """
+    if not sat:
+        return []
+    levels = [lv for lv in sat.get("levels", []) if lv["seconds"] > 0]
+    if len(levels) < 2:
+        return []
+    knee = sat.get("knee")
+    out = [_indent(render(
+        ["VU", "초", "완료TPS", "제출TPS", "오류율", "429", "rows/s"],
+        [[str(lv["vus"]), str(lv["seconds"]), f"{lv['complete_tps']:.1f}",
+          f"{lv['submit_tps']:.1f}", f"{lv['error_rate'] * 100:.1f}%", str(lv["reject"]),
+          f"{lv['rows_per_sec']:,.0f}"] for lv in levels]))]
+    out.append("")
+    out.extend(analysis.ascii_chart(levels, knee=knee))
+    if knee:
+        if knee["saturated"]:
+            out.append(f"  → 포화 VU ≈ {knee['knee_vus']} 에서 완료 {knee['knee_tps']:.1f} TPS. "
+                       f"이보다 VU 를 늘려도 처리량은 거의 늘지 않는다"
+                       + (f"(최고 VU {knee['peak_vus']} 에서 {knee['peak_tps']:.1f} TPS, "
+                          f"+{knee['headroom'] * 100:.0f}%)." if knee["headroom"] > 0.01 else "."))
+        else:
+            out.append(f"  → 측정 범위(최고 VU {knee['peak_vus']})에서 아직 포화에 닿지 않았다. "
+                       "VU 를 더 높여 다시 측정하면 무릎점이 보인다.")
+    out.append(f"  (각 수준의 앞 {sat.get('warmup_frac', 0.3) * 100:.0f}% 과도구간은 빼고 집계)")
+    return out
 
 
 def _indent(text: str, prefix: str = "  ") -> str:
