@@ -85,12 +85,17 @@ def build_parser() -> argparse.ArgumentParser:
             "  %(prog)s plan --stages 1m:10,2m:10,1m:30\n"
         ),
     )
+    parser.epilog = parser.epilog + (
+        "  %(prog)s saturation --body job.json --levels 1,2,4,8,16,32 --step-duration 60s\n")
     sub = parser.add_subparsers(dest="command")
     for name, help_text in (("run", "부하 테스트를 실행한다"),
-                            ("plan", "요청 없이 시간대별 VU 수만 보여 준다")):
+                            ("plan", "요청 없이 시간대별 VU 수만 보여 준다"),
+                            ("saturation", "VU 를 계단으로 올리며 포화점(무릎점)을 찾는다")):
         p = sub.add_parser(name, help=help_text,
                            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
         _add_arguments(p)
+        if name == "saturation":
+            _add_saturation_arguments(p)
     w = sub.add_parser("wizard", help="질문에 답하며 명령행을 구성한다(대화형)")
     w.add_argument("--scenario", "-s", metavar="YAML",
                    help="이 시나리오의 값을 기본 답으로 채워 시작한다")
@@ -166,12 +171,25 @@ def _add_arguments(p: argparse.ArgumentParser) -> None:
     g.add_argument("--out", "-o", metavar="JSON", help="전체 결과 JSON 파일")
     g.add_argument("--csv", metavar="CSV", help="초 단위 시계열 CSV 파일")
     g.add_argument("--samples-csv", metavar="CSV", help="서버 자원 표본 CSV 파일")
+    g.add_argument("--saturation-csv", metavar="CSV", help="VU 수준별 포화 분석 CSV 파일")
+    g.add_argument("--chart", metavar="PNG|SVG",
+                   help="포화 곡선(TPS vs VU) 이미지 파일. .svg 면 의존성 없이, 그 밖은 PNG(Pillow)")
+    g.add_argument("--warmup", type=float,
+                   help="VU 수준별 집계에서 앞쪽 과도구간으로 버릴 비율 0~0.9 (기본 0.3)")
     g.add_argument("--max-error-rate", type=float,
                    help="오류율(0~1)이 이 값을 넘으면 종료 코드 3")
     g.add_argument("--no-progress", action="store_true", default=None, help="진행 줄을 끈다")
     g.add_argument("--yes", "-y", action="store_true", default=None,
                    help="실제 적재 요청의 시작 확인을 건너뛴다")
     g.add_argument("--seed", type=int, help="난수 시드(치환·폴링 jitter 재현용)")
+
+
+def _add_saturation_arguments(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("포화 계단 (saturation 전용)")
+    g.add_argument("--levels", "-L", default="1,2,4,8,16,32", metavar="N,N,...",
+                   help="차례로 유지할 VU 수준 목록 (기본 1,2,4,8,16,32)")
+    g.add_argument("--step-duration", default="60s", metavar="DUR",
+                   help="각 VU 수준을 유지하는 시간 (기본 60s). 정상상태가 될 만큼 넉넉히 준다")
 
 
 def _run_parser() -> argparse.ArgumentParser:
@@ -566,8 +584,63 @@ def cmd_plan(opts: Dict[str, Any]) -> int:
     return EXIT_OK
 
 
-def cmd_run(opts: Dict[str, Any]) -> int:
-    stages = build_stages(opts)
+def _write_chart(path: str, sat: Dict[str, Any]) -> None:
+    """포화 곡선 이미지를 쓴다. .svg 는 의존성 없이, 그 밖은 PNG(Pillow)로 그린다."""
+    from . import charts
+    levels = [lv for lv in sat.get("levels", []) if lv["seconds"] > 0]
+    knee = sat.get("knee")
+    if len(levels) < 2:
+        print("차트를 그릴 VU 수준이 부족합니다(둘 이상 필요).", file=sys.stderr)
+        return
+    if path.lower().endswith(".svg"):
+        svg = charts.render_saturation_svg(levels, knee)
+        if svg:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(svg)
+            print(f"포화 곡선 SVG: {path}", file=sys.stderr)
+        return
+    if not charts.available():
+        print(f"Pillow 가 없어 PNG 를 만들 수 없습니다. .svg 로 저장하거나 Pillow 를 설치하세요: {path}",
+              file=sys.stderr)
+        return
+    if charts.render_saturation_png(levels, knee, path):
+        print(f"포화 곡선 PNG: {path}", file=sys.stderr)
+
+
+def build_saturation_stages(opts: Dict[str, Any]) -> List[scenario.Stage]:
+    """``--levels`` 와 ``--step-duration`` 으로 계단 부하를 만든다.
+
+    각 수준으로 즉시 뛴 뒤(0초 전이) ``step_duration`` 만큼 유지한다. 포화 분석은 각 수준의 앞쪽
+    과도구간을 버리므로, 즉시 전이해도 정상상태 측정에는 지장이 없다.
+    """
+    raw = opts.get("levels")
+    if raw is None:
+        raw = "1,2,4,8,16,32"      # 키 자체가 없을 때만 기본값(빈 문자열은 오류로 잡는다)
+    try:
+        levels = [int(x) for x in str(raw).replace(" ", "").split(",") if x != ""]
+    except ValueError:
+        raise ConfigError(f"--levels 는 정수 목록이어야 합니다: {raw!r}") from None
+    if not levels or any(n <= 0 for n in levels):
+        raise ConfigError("--levels 는 1 이상의 정수를 하나 이상 담아야 합니다")
+    hold = _dur(opts, "step_duration") or 60.0
+    if hold <= 0:
+        raise ConfigError("--step-duration 은 0보다 커야 합니다")
+    stages: List[scenario.Stage] = []
+    for lv in levels:
+        stages.append(scenario.Stage(0.0, lv))     # 즉시 그 수준으로
+        stages.append(scenario.Stage(hold, lv))    # 유지
+    return stages
+
+
+def cmd_saturation(opts: Dict[str, Any]) -> int:
+    # 포화 측정은 최대 처리량을 봐야 하므로 think time 0 을 기본으로 하고, 앞쪽 과도구간만 버린다.
+    opts.setdefault("think_time", "0")
+    return cmd_run(opts, stages=build_saturation_stages(opts))
+
+
+def cmd_run(opts: Dict[str, Any], stages: Optional[List[scenario.Stage]] = None) -> int:
+    if stages is None:
+        stages = build_stages(opts)
     spec = build_request(opts)
     config = build_config(opts, spec, stages)
     coords = coordinators(opts)
@@ -601,7 +674,9 @@ def cmd_run(opts: Dict[str, Any]) -> int:
         "options": {k: v for k, v in opts.items() if k not in ("body", "header")},
         "body": spec.body,
     }
-    result = report.build_result(runner, meta)
+    warmup = opts.get("warmup")
+    warmup = min(max(float(warmup), 0.0), 0.9) if warmup is not None else 0.3
+    result = report.build_result(runner, meta, warmup_frac=warmup)
     print(report.format_summary(result))
     if opts.get("out"):
         report.write_json(opts["out"], result)
@@ -612,6 +687,11 @@ def cmd_run(opts: Dict[str, Any]) -> int:
     if opts.get("samples_csv"):
         report.write_csv(opts["samples_csv"], result["samples"])
         print(f"자원 표본 CSV: {opts['samples_csv']}", file=sys.stderr)
+    if opts.get("saturation_csv"):
+        report.write_csv(opts["saturation_csv"], result["saturation"]["levels"])
+        print(f"포화 분석 CSV: {opts['saturation_csv']}", file=sys.stderr)
+    if opts.get("chart"):
+        _write_chart(opts["chart"], result["saturation"])
 
     limit = opts.get("max_error_rate")
     if limit is not None and result["summary"]["error_rate"] > float(limit):
@@ -638,6 +718,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         opts = merge_options(args)
         if args.command == "plan":
             return cmd_plan(opts)
+        if args.command == "saturation":
+            return cmd_saturation(opts)
         return cmd_run(opts)
     except ConfigError as exc:
         print(f"설정 오류: {exc}", file=sys.stderr)

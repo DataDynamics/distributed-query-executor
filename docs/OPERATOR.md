@@ -361,6 +361,21 @@ sync 는 요청 하나가 쿼리 실행 시간만큼 걸리므로 5분이며 이
 표본(`--samples-csv`)은 엑셀에서 바로 열리는 CSV 이고, `--out` 의 JSON 에는 설정과 요약, 시계열,
 표본이 모두 들어 있어 두 번의 실행을 나중에 비교할 수 있다.
 
+**포화점(무릎점)을 찾으려면** `saturation` 명령을 쓴다. VU 를 계단으로 올리며 각 수준의 정상상태
+완료 TPS 를 재고, VU 를 더 얹어도 처리량이 늘지 않는 지점을 찾아 준다.
+
+```bash
+bin/load-test saturation -c http://coord:8088 --body job.json \
+    --levels 1,2,4,8,16,32 --step-duration 60s --chart saturation.png
+```
+
+`--levels` 의 각 수준을 `--step-duration` 만큼 유지하며(수준이 오른 직후 과도구간은 버린다) 요약에
+VU 별 TPS 표와 TPS–VU 곡선, 무릎점을 낸다. 무릎점은 이웃 수준 사이 처리량 증가율이 5% 아래로
+떨어지는 첫 지점이고, 그 VU 수 × 평균 분할 task 수가 앞 절에서 구한 유효 동시 task 수와 맞는지
+비교하면 admission·executor 설정이 실제 한도와 맞는지 확인할 수 있다. `--chart` 는 곡선을 PNG
+(`.svg` 면 Pillow 없이)로 저장한다. 같은 분석은 `--stages`·ramp 로 여러 수준을 거친 일반 `run`
+결과에도 자동으로 붙지만, 각 수준을 충분히 유지한 계단 부하라야 곡선이 안정적이다.
+
 도구 자신도 부하의 일부라는 점에 주의한다. VU 마다 `--poll-interval`(기본 2초, ±20% 분산) 간격으로
 상태를 폴링하므로 VU 가 수백이면 폴링만으로 coordinator 에 적지 않은 요청이 간다. job 이 수십 초
 이상 걸리는 이관이라면 폴링 간격을 5초 이상으로 늘려도 결과가 거의 달라지지 않는다. `/cluster` 의
