@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import csv
 import json
+import unicodedata
 from typing import Any, Dict, List, Optional, Sequence
 
+from ..progress import display_width, pad
 from ..table import render
 from . import scenario
-from .stats import SUBMIT_ERRORS
+from .stats import SUBMIT_ERRORS, summarize
 
 
 def _ms(v: Optional[float]) -> str:
@@ -213,6 +215,156 @@ def format_progress(runner: Any, window: float = 10.0) -> str:
     if runner.phase == "drain":
         line = "[drain] " + line
     return line
+
+
+def _instant(col: Any, field: str, start: float, end: float) -> float:
+    """[start, end) 초 구간의 초당 ``field`` 건수다. 진행 패널의 순간 TPS 에 쓴다."""
+    span = end - start
+    if span <= 0:
+        return 0.0
+    total = sum(col.buckets[s][field] for s in range(int(start), int(end)) if s in col.buckets)
+    return total / span
+
+
+def format_live(runner: Any, width: int = 100, window: float = 10.0) -> List[str]:
+    """실행 중 라이브 패널이다. 여러 줄을 돌려주며, 각 줄은 화면 폭에 맞게 잘려 있다.
+
+    진행 상황과 제출·완료 TPS(최근 ``window`` 초 기준)를 위에, 서버별 CPU·메모리·task 를 아래
+    표로 낸다. 서버 자원은 sampler 가 마지막으로 수집한 스냅샷을 그대로 보여 준다.
+    """
+    t = runner.elapsed()
+    col = runner.collector
+    is_async = runner.cfg.request.is_async
+    if runner.phase == "baseline":
+        return [_clip(f"■ 기준선 수집 중 · {max(0.0, -t):.0f}초 남으면 부하를 시작합니다", width)]
+
+    head = "■ 부하" + ("(drain)" if runner.phase == "drain" else "")
+    target = scenario.target_vus(runner.cfg.stages, t) if runner.phase == "load" else 0
+    lines = [_clip(
+        f"{head} · {scenario.format_duration(int(t))} · "
+        f"VU {runner.active_vus}/{target} · 진행중 {runner.inflight}", width)]
+
+    start = max(0.0, t - window)
+    so = col.submit_counts
+    submit_tps = _instant(col, "submitted", start, t)
+    done_tps = _instant(col, "completed", start, t)
+    if is_async:
+        lines.append(_clip(
+            f"  제출 {sum(so.values()):,} ({submit_tps:.1f}/s)   "
+            f"완료 {col.completed:,} ({done_tps:.1f}/s, 실패 {col.failed:,})   "
+            f"429 {so['rejected_429']:,}", width))
+    else:
+        lines.append(_clip(
+            f"  요청 {sum(so.values()):,} ({submit_tps:.1f}/s)   "
+            f"성공 {col.succeeded:,}   실패 {col.failed:,}   429 {so['rejected_429']:,}", width))
+
+    # 지연은 지금까지 누적한 표본의 p50/p95 다(구간이 아니라 전체 — 흐름을 보는 용도).
+    lat = summarize(col.e2e_success if is_async else col.submit_latency)
+    if lat["count"]:
+        label = "e2e" if is_async else "응답"
+        extra = f"   적재 {_short_rows(col.rows_written)}" if col.rows_written else ""
+        lines.append(_clip(
+            f"  지연 {label} p50 {_ms(lat['p50'])} · p95 {_ms(lat['p95'])}{extra}", width))
+
+    lines.extend(_clip(r, width) for r in _server_lines(runner))
+    return lines
+
+
+def _server_lines(runner: Any) -> List[str]:
+    """서버별 CPU·메모리·task 표를 만든다. sampler 가 없거나 아직 수집 전이면 안내 한 줄이다."""
+    if not runner.sampler:
+        return ["  (서버 자원 수집 꺼짐 — --no-sample)"]
+    snap = runner.sampler.latest()
+    if not snap:
+        return ["  (서버 자원 수집 대기 중…)"]
+    names = list(snap["servers"])
+    label = [n if len(n) <= 24 else "…" + n[-23:] for n in
+             [_server_label(n, snap["servers"][n]["role"]) for n in names]]
+    w = min(max((display_width(x) for x in label), default=8), 26)
+    rows = [f"  {pad('서버', w)}   CPU    MEM   task"]
+    for name, disp in zip(names, label):
+        m = snap["servers"][name]
+        if not m.get("healthy"):
+            rows.append(f"  {pad(disp, w)}   다운")
+            continue
+        task = "-"
+        if m.get("active_tasks") is not None:
+            task = f"{m['active_tasks']:.0f}/{m['max_tasks']:.0f}" if m.get("max_tasks") \
+                else f"{m['active_tasks']:.0f}"
+        rows.append(f"  {pad(disp, w)}  {_bar(m.get('cpu'))} {_bar(m.get('mem'))}  {task}")
+    return rows
+
+
+def _server_label(name: str, role: str) -> str:
+    if role == "coordinator":
+        return name  # "coordinator" 또는 "coordinator@host"
+    return name.split("://", 1)[-1]  # executor 는 scheme 을 떼 짧게
+
+
+def _bar(pct: Optional[float]) -> str:
+    """CPU·메모리 사용률을 '  72%▊' 처럼 값과 짧은 막대로 보인다."""
+    if pct is None:
+        return "  -  "
+    filled = int(round(min(max(pct, 0), 100) / 100 * 4))
+    return f"{pct:3.0f}%{'█' * filled}{'·' * (4 - filled)}"
+
+
+def _short_rows(n: int) -> str:
+    for unit, div in (("B", 1e9), ("M", 1e6), ("K", 1e3)):
+        if n >= div:
+            return f"{n / div:.1f}{unit} rows"
+    return f"{n:,} rows"
+
+
+def _clip(text: str, width: int) -> str:
+    """표시 폭 기준으로 자른다. 라이브 패널이 화면 폭을 넘겨 줄바꿈되면 커서 계산이 깨지기 때문이다."""
+    if width <= 0:
+        return text
+    out, w = [], 0
+    for ch in text:
+        cw = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+        if w + cw > width:
+            break
+        out.append(ch)
+        w += cw
+    return "".join(out)
+
+
+class LiveRenderer:
+    """여러 줄 패널을 제자리에서 다시 그린다. ANSI 커서 이동으로 이전 줄을 덮어쓴다.
+
+    줄 수가 매번 달라질 수 있어(서버가 늘거나 지연 줄이 생김) 직전에 그린 줄 수를 기억했다가
+    남는 줄은 지운다. 커서는 항상 패널 바로 아래 줄에 두어, 다음 그리기가 위로 올라가 덮어쓴다.
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self.stream = stream
+        self._prev = 0
+
+    def render(self, lines: Sequence[str]) -> None:
+        buf = []
+        if self._prev:
+            buf.append(f"\033[{self._prev}A")  # 이전 패널 맨 위로 올라간다
+        for ln in lines:
+            buf.append("\r" + ln + "\033[K\n")
+        extra = self._prev - len(lines)
+        for _ in range(max(0, extra)):
+            buf.append("\r\033[K\n")           # 줄어든 만큼 남은 옛 줄을 지운다
+        if extra > 0:
+            buf.append(f"\033[{extra}A")       # 커서를 패널 바로 아래로 되돌린다
+        self._prev = len(lines)
+        self.stream.write("".join(buf))
+        self.stream.flush()
+
+    def clear(self) -> None:
+        """패널을 지우고 커서를 패널이 있던 자리 맨 위로 되돌린다(뒤이어 요약이 그 위에 찍힌다)."""
+        if not self._prev:
+            return
+        self.stream.write(f"\033[{self._prev}A")
+        self.stream.write(("\r\033[K\n") * self._prev)
+        self.stream.write(f"\033[{self._prev}A")
+        self.stream.flush()
+        self._prev = 0
 
 
 def write_json(path: str, result: Dict[str, Any]) -> None:

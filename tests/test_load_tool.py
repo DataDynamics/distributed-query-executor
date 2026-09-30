@@ -802,3 +802,60 @@ def test_wizard_는_비대화형이면_거절한다(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
     assert cli.main(["wizard"]) == cli.EXIT_CONFIG
     assert "대화형 터미널" in capsys.readouterr().err
+
+
+# ───────────────────────── 라이브 진행 패널 ─────────────────────────
+
+async def test_라이브_패널은_진행과_서버_자원을_여러_줄로_낸다():
+    fake = FakeCoordinator(polls_to_finish=2)
+    runner = await _run(fake, sampler=True)
+    lines = report.format_live(runner, width=100)
+    assert lines[0].startswith("■ 부하")
+    joined = "\n".join(lines)
+    assert "완료" in joined and "/s" in joined
+    assert "서버" in joined and "CPU" in joined and "MEM" in joined
+    assert "coordinator" in joined and "e1:8001" in joined
+    assert any("다운" in ln for ln in lines)
+
+
+def test_라이브_패널은_기준선_단계와_sync_를_구분한다():
+    import time
+    fake = FakeCoordinator()
+    spec = RequestSpec(type="sync", path="/query-execute", body={})
+    client = CoordinatorClient(["http://c"], transport=httpx.MockTransport(fake.handler))
+    runner = LoadRunner(_config(request=spec), client, sampler_enabled=False)
+    runner._t0 = time.monotonic() + 5
+    runner.phase = "baseline"
+    assert report.format_live(runner)[0].startswith("■ 기준선 수집 중")
+    runner._t0 = time.monotonic()
+    runner.phase = "load"
+    runner.collector.record_submit(0.1, "ok", 0.02)
+    lines = report.format_live(runner)
+    assert any("요청" in ln and "성공" in ln for ln in lines)
+    assert any("서버 자원 수집 꺼짐" in ln for ln in lines)
+
+
+def test_라이브_패널은_화면_폭을_넘지_않는다():
+    import time
+    fake = FakeCoordinator()
+    client = CoordinatorClient(["http://c"], transport=httpx.MockTransport(fake.handler))
+    runner = LoadRunner(_config(), client, sampler_enabled=False)
+    runner._t0 = time.monotonic()
+    runner.phase = "load"
+    for ln in report.format_live(runner, width=30):
+        assert report.display_width(ln) <= 30
+
+
+def test_LiveRenderer_는_줄이_줄면_남은_줄을_지운다():
+    import io
+    buf = io.StringIO()
+    r = report.LiveRenderer(buf)
+    r.render(["a", "b", "c"])
+    buf.truncate(0); buf.seek(0)
+    r.render(["x"])
+    out = buf.getvalue()
+    assert out.startswith("\033[3A")
+    assert out.count("\033[K") >= 3
+    buf.truncate(0); buf.seek(0)
+    r.clear()
+    assert buf.getvalue().startswith("\033[1A")

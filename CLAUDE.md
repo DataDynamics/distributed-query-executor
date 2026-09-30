@@ -360,7 +360,9 @@ closed loop 로 요청을 보내고 완료될 때까지 기다린 뒤 다음을 
 빼 기본값을 `/jobs` 규칙으로 두었다. async 결과는 **제출 TPS 와 완료 TPS 를 나눠** 낸다. `/jobs` 가
 항상 202 로 바로 돌아오는 비동기 API 라 제출 TPS 만 보면 처리량을 부풀려 보기 때문이다. 429 는 오류율에서 빼고 포화 신호로 따로 센다. 서버 자원은
 `GET /cluster` 한 번으로 coordinator 와 모든 executor 를 모으고(`sampler.py`), 부하 전 baseline
-구간을 따로 남겨 비교한다. 줄어드는 VU 와 drain 은 진행 중인 job 을 끝까지 지켜본 뒤 빠지며, drain
+구간을 따로 남겨 비교한다. 실행 중에는 `report.LiveRenderer` 가 진행·TPS·서버별 CPU/메모리 패널을
+ANSI 커서 이동으로 제자리에서 다시 그리고(터미널이 아니면 30초 한 줄 요약으로 폴백), 폭 넘침은
+`_clip` 이 표시 폭 기준으로 잘라 줄바꿈에 따른 커서 어긋남을 막는다. 줄어드는 VU 와 drain 은 진행 중인 job 을 끝까지 지켜본 뒤 빠지며, drain
 시간을 넘긴 job 만 취소하고 ABANDONED 로 집계한다. `wizard.py` 는 한 줄씩 묻는 대화형 마법사로,
 옵션 dict 만 만들고 실행 경로를 따로 두지 않는다. 끝에서 `cli.opts_to_argv` 로 명령행을 만들어
 보여 주고 그 인자를 그대로 `cli.main` 에 넘기므로 보인 명령과 실행이 어긋날 수 없다. 테스트는
