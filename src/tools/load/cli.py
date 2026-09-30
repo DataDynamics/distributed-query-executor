@@ -23,6 +23,7 @@ import json
 import math
 import os
 import shlex
+import shutil
 import signal
 import sys
 from datetime import datetime
@@ -493,8 +494,21 @@ def confirm(opts: Dict[str, Any], spec: request.RequestSpec, stages: List[scenar
     return answer.strip().lower() in ("y", "yes")
 
 
+def _term_width(default: int = 100) -> int:
+    try:
+        return max(40, shutil.get_terminal_size((default, 24)).columns)
+    except (OSError, ValueError):
+        return default
+
+
 async def _progress_loop(runner: LoadRunner, stop: asyncio.Event, interactive: bool) -> None:
+    """진행 상황을 stderr 로 보여 준다.
+
+    터미널이면 여러 줄 라이브 패널(진행·TPS·서버별 CPU/메모리)을 1초마다 제자리에서 다시 그리고,
+    아니면(로그·크론) 한 줄 요약을 30초마다 새 줄로 남긴다. 뒤엉키지 않게 stdout(요약)과 분리한다.
+    """
     interval = 1.0 if interactive else 30.0
+    live = report.LiveRenderer(sys.stderr) if interactive else None
     while not stop.is_set():
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
@@ -502,15 +516,13 @@ async def _progress_loop(runner: LoadRunner, stop: asyncio.Event, interactive: b
             pass
         if stop.is_set():
             break
-        line = report.format_progress(runner)
-        if interactive:
-            sys.stderr.write("\r" + line + "\033[K")
+        if live is not None:
+            live.render(report.format_live(runner, _term_width()))
         else:
-            sys.stderr.write(line + "\n")
-        sys.stderr.flush()
-    if interactive:
-        sys.stderr.write("\r\033[K")
-        sys.stderr.flush()
+            sys.stderr.write(report.format_progress(runner) + "\n")
+            sys.stderr.flush()
+    if live is not None:
+        live.clear()
 
 
 async def execute(config: LoadConfig, coords: List[str], headers: Dict[str, str],
