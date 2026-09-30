@@ -891,6 +891,20 @@ def test_per_vu_levels_는_수준별로_묶고_warmup_을_버린다():
     assert [l["vus"] for l in analysis.per_vu_levels(tl0)] == [1, 2, 4]
 
 
+def test_per_vu_levels_는_스쳐간_과도_수준을_버린다():
+    # 1,2,4,8 은 6초씩 유지하고, 그 사이 전환 중 잡힌 3(1초)·6(1초)은 버려야 한다.
+    tl, sec = [], 0
+    for vus, secs, cps in [(1, 6, 5), (3, 1, 7), (2, 6, 10), (6, 1, 14), (4, 6, 18)]:
+        for _ in range(secs):
+            tl.append({"second": sec, "vus": vus, "completed": cps, "submitted": cps,
+                       "rejected_429": 0, "success": cps, "failed": 0, "rows": 0})
+            sec += 1
+    levels = analysis.per_vu_levels(tl, warmup_frac=0.0, drop_short_frac=0.5)
+    assert [l["vus"] for l in levels] == [1, 2, 4]   # 3, 6 은 빠진다
+    # 필터를 끄면 모두 남는다.
+    assert len(analysis.per_vu_levels(tl, warmup_frac=0.0, drop_short_frac=0.0)) == 5
+
+
 def test_per_vu_levels_는_짧은_구간이면_마지막_1초만_쓴다():
     tl = _staircase_timeline({1: 5, 2: 8}, secs=1)
     levels = analysis.per_vu_levels(tl, warmup_frac=0.9)
