@@ -6,6 +6,34 @@
 운영 관점의 튜닝 절차와 결과 해석은 [docs/OPERATOR.md](../../../docs/OPERATOR.md) 의
 "부하를 걸어 한도 확인하기" 절에 있다. 이 문서는 도구의 사용법과 설정 파일 형식을 모아 둔다.
 
+## 요구 사항
+
+Python 3.9 이상. 외부 패키지는 다음과 같다.
+
+| 패키지 | 필요 여부 | 쓰임 |
+|---|---|---|
+| `httpx>=0.28,<1.0` | 필수 | coordinator HTTP 호출 |
+| `PyYAML>=6.0` | 필수 | 시나리오·요청 본문 YAML 파싱 |
+| `Pillow>=9` | 선택 | `--chart` 의 PNG 렌더. 없으면 PNG 는 건너뛰고 `.svg`(의존성 없음)나 콘솔 ASCII 차트를 쓴다 |
+
+`httpx` 와 `PyYAML` 은 coordinator 의존성이라 이 저장소의 `requirements.txt` 에 이미 들어 있다.
+그래서 coordinator 를 설치한 환경이면 별도 설치 없이 바로 쓸 수 있다. `Pillow` 만 기본 목록에
+없으므로, PNG 차트가 필요할 때만 더한다.
+
+```bash
+# 이 저장소 기준(coordinator 의존성 설치) — httpx·PyYAML 포함
+.venv/bin/pip install -r requirements.txt
+
+# 이 도구만 따로 쓸 때(최소 설치)
+pip install "httpx>=0.28,<1.0" "PyYAML>=6.0"
+
+# PNG 차트/스크린샷까지 쓰려면(선택)
+pip install Pillow
+```
+
+에어갭 환경에서는 오프라인 wheel 로 설치한다. `Pillow` 가 번들에 없어도 `--chart out.svg` 로 곡선을
+얻을 수 있으니, PNG 가 꼭 필요하지 않으면 추가하지 않아도 된다.
+
 ## 무엇을 재는가
 
 VU 하나는 **closed loop** 다. 요청을 보내고 그 요청이 **완료될 때까지 기다린 뒤** 다음 요청을
