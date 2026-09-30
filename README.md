@@ -132,6 +132,9 @@ bin/load-test plan --vus 20 --ramp-up 60s --duration 10m          # VU 곡선만
 bin/load-test run -c http://coord:8088 --body job.json --vus 20 --ramp-up 60s --duration 10m
 ```
 
+`load-test` 의 요청 type(async/sync)·시나리오 파일(JSON·YAML)·결과 해석은
+[src/tools/load/README.md](src/tools/load/README.md) 에 모아 두었습니다.
+
 셸 안에서는 `\?` 로 메타 명령 목록을, `\dt` 로 테이블 목록을, `\d 이름` 으로 컬럼 정보를 봅니다.
 `--config-dir` 로 다른 설정 디렉터리를, `--no-config` 로 설정을 무시하고 명령행 인자만 쓸 수
 있습니다. 한 번만 실행하고 끝내려면 `PYTHONPATH=src python -m tools.gp_query -q "SELECT 1"` 처럼
