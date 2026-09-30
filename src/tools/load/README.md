@@ -281,7 +281,14 @@ bin/load-test saturation -c http://coord:8088 --body job.json \
 
 무릎점은 이웃한 두 VU 수준 사이에서 처리량 증가율이 5% 아래로 떨어지는 첫 지점으로 잡는다(TPS 가
 오히려 줄면 그 앞 수준). 측정 범위 안에서 끝까지 증가하면 "아직 포화 안 됨"으로 보고하니 VU 를 더
-높여 다시 측정한다. `--chart` 로 그린 PNG 는 아래처럼 나온다(`.svg` 로 주면 Pillow 없이 그린다).
+높여 다시 측정한다.
+
+아래는 실제로 돌려 캡처한 화면이다. coordinator 의 동시 job 수를 8 로 제한한 데모 클러스터라, VU 를
+8 위로 올려도 완료 TPS 가 더 오르지 않고 VU 32 에서 429(용량 초과)가 나타난다.
+
+![saturation 실제 실행 화면](../../../docs/images/load-test-saturation-run.png)
+
+`--chart` 로 그린 PNG 곡선은 아래처럼 나온다(`.svg` 로 주면 Pillow 없이 그린다).
 
 ![포화 곡선 PNG](../../../docs/images/load-test-saturation.png)
 

@@ -30,13 +30,17 @@ def _segments(timeline: Sequence[Dict[str, Any]]):
         i = j
 
 
-def per_vu_levels(timeline: Sequence[Dict[str, Any]],
-                  warmup_frac: float = 0.3) -> List[Dict[str, Any]]:
+def per_vu_levels(timeline: Sequence[Dict[str, Any]], warmup_frac: float = 0.3,
+                  drop_short_frac: float = 0.5) -> List[Dict[str, Any]]:
     """시계열을 VU 수준별로 묶어 처리량을 집계한다.
 
     각 연속 구간에서 앞쪽 ``warmup_frac`` 비율의 초는 버린다(수준이 오른 직후 in-flight 가 차오르는
     과도구간이라 정상상태 TPS 를 왜곡한다). 남는 초가 없으면 마지막 1초만 쓴다. 같은 VU 수준이 여러
     구간에 나뉘어 있으면(예: ramp 뒤 hold) 합산한다. VU 0 은 제외한다.
+
+    계단이 오르내릴 때 스쳐 가는 1~2초짜리 과도 VU 수준(예: 8→16 사이의 10·12)은 곡선을 어지럽히므로,
+    센 초가 가장 오래 유지된 수준의 ``drop_short_frac`` 배에 못 미치는 수준은 버린다. 모든 수준이
+    비슷하게 유지되면(합성 데이터·균일 계단) 아무것도 버리지 않는다.
 
     반환은 VU 오름차순의 항목 목록이며, 각 항목은 그 수준에서의 초 수와 제출·완료·성공 TPS,
     초당 적재 rows, 오류율(429 제외 시도 대비), 429 건수를 담는다.
@@ -54,8 +58,12 @@ def per_vu_levels(timeline: Sequence[Dict[str, Any]],
             for f in _SUM_FIELDS:
                 a[f] += row.get(f, 0)
 
+    max_secs = max((a["seconds"] for a in agg.values()), default=0)
+    min_secs = max_secs * drop_short_frac
     levels = []
     for v in sorted(agg):
+        if agg[v]["seconds"] < min_secs:
+            continue   # 스쳐 간 과도 수준
         a = agg[v]
         s = a["seconds"] or 1
         attempts = a["submitted"] - a["rejected_429"]
