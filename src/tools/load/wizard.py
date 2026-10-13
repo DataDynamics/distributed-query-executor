@@ -263,11 +263,52 @@ class Wizard:
         self.say(f"    요청: {spec.describe()} | {cli.describe_body(spec.body)}")
         return spec
 
+    def _ask_data(self, body_path: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """본문이 ${data:<컬럼>} 를 쓸 때만 데이터 파일을 묻는다. 모든 행으로 본문을 렌더해 본 뒤 받는다."""
+        loaded: Dict[str, Any] = {}
+
+        def conv(raw: str) -> str:
+            path = os.path.expanduser(raw)
+            try:
+                rows = cli.load_data({"data": path})
+                loaded["body"] = cli.load_body({"body": body_path, "path": self.opts.get("path")},
+                                               rows)
+            except cli.ConfigError as exc:
+                raise ValueError(str(exc)) from None
+            loaded["rows"] = rows
+            return path
+        self.opts["data"] = self.ask(
+            "데이터 파일(.csv·.jsonl·.json·.yml)", self.opts.get("data") or None, convert=conv,
+            help=("본문이 ${data:<컬럼>} 를 쓰므로 요청마다 한 행씩 꺼내 채울 파일이 필요합니다.\n"
+                  "시작일·종료일처럼 서로 맞아야 하는 값은 한 행에 함께 두면 짝이 어긋나지 않습니다.\n"
+                  "CSV 는 첫 줄이 컬럼 이름이고 값은 문자열로, JSON 계열은 숫자·목록 타입 그대로\n"
+                  "들어갑니다."))
+        rows = loaded["rows"]
+
+        def conv_mode(raw: str) -> str:
+            if raw.lower() not in scenario.DATA_MODES:
+                raise ValueError(f"{'/'.join(scenario.DATA_MODES)} 중 하나를 입력해 주세요")
+            return raw.lower()
+        mode = self.ask("행을 고르는 방식(sequential/random)",
+                        self.opts.get("data_mode") or "sequential", convert=conv_mode, help=(
+            "sequential 은 모든 VU 가 커서 하나를 나눠 차례로 쓰고 끝에 닿으면 처음으로\n"
+            "돌아갑니다. random 은 요청마다 무작위로 고릅니다."))
+        self.opts["data_mode"] = None if mode == "sequential" else mode
+        self.say(f"    데이터: {len(rows)}행, 컬럼 {', '.join(map(str, rows[0]))}")
+        return loaded["body"], rows
+
     def _ask_body(self, required: bool, suggest: bool) -> Optional[Dict[str, Any]]:
         loaded: Dict[str, Any] = {}
 
         def conv(raw: str) -> str:
             path = os.path.expanduser(raw)
+            try:
+                needs_data = scenario.uses_data(cli._load_structured(path))
+            except Exception:  # 읽기 오류는 아래 load_body 가 사유와 함께 알린다
+                needs_data = False
+            if needs_data:
+                loaded["needs_data"] = True
+                return path
             try:
                 body = cli.load_body({"body": path, "path": self.opts.get("path")})
             except cli.ConfigError as exc:
@@ -278,11 +319,17 @@ class Wizard:
         path = self.ask(question, self.opts.get("body") if isinstance(self.opts.get("body"), str)
                         else None, convert=conv, allow_empty=not required, help=(
             "요청에 실어 보낼 JSON 입니다. 문자열 안의 ${vu}·${iter}·${seq}·${uuid}·${run_id}·\n"
-            "${now:%Y%m%d}·${choice:a,b}·${randint:1-9} 가 요청마다 치환됩니다.\n"
+            "${now:%Y%m%d}·${choice:a,b}·${randint:1-9}·${date:today-30~today}·\n"
+            "${data:<컬럼>} 가 요청마다 치환됩니다(${data:..} 를 쓰면 데이터 파일을 이어서 묻습니다).\n"
             "예: \"target_table\": \"dwtemp.load_${vu}\" 로 VU 마다 대상을 나눕니다."
             + ("" if suggest else "\nGET 처럼 본문이 없는 요청이면 - 를 입력합니다.")))
         self.opts["body"] = path
-        body = loaded.get("body")
+        if loaded.get("needs_data"):
+            body, _ = self._ask_data(path)
+        else:
+            self.opts.pop("data", None)
+            self.opts.pop("data_mode", None)
+            body = loaded.get("body")
         if body is not None:
             self.say(f"    본문 요약: {cli.describe_body(body)}")
         return body

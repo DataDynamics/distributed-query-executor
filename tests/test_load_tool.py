@@ -1025,3 +1025,139 @@ def test_write_chart_는_svg_를_의존성_없이_쓴다(tmp_path, capsys):
     cli._write_chart(str(svg), sat)
     assert svg.exists() and svg.read_text(encoding="utf-8").startswith("<svg")
     assert "SVG" in capsys.readouterr().err
+
+
+# ───────────────────────── 동적 파라미터(date·data) ─────────────────────────
+
+def _ctx(row=None, seed=0):
+    from datetime import date
+    return scenario.RenderContext(vu=1, iteration=0, seq=1, run_id="r", rng=random.Random(seed),
+                                  row=row, today=date(2026, 10, 13))
+
+
+def test_date_자리표시자는_오늘_기준_이동과_구간_무작위와_형식을_지원한다():
+    assert scenario.render_body("${date:today}", _ctx()) == "2026-10-13"
+    assert scenario.render_body("${date:today-13}", _ctx()) == "2026-09-30"
+    assert scenario.render_body("${date:2024-02-28+2|%Y%m%d}", _ctx()) == "20240301"
+    picked = {scenario.render_body("${date:2024-01-01~2024-01-03}", _ctx(seed=s))
+              for s in range(50)}
+    assert picked == {"2024-01-01", "2024-01-02", "2024-01-03"}  # 양끝을 포함한다
+    for bad in ("${date:yesterday}", "${date:2024-01-03~2024-01-01}"):
+        with pytest.raises(ValueError):
+            scenario.validate_body({"v": bad})
+
+
+def test_data_자리표시자는_한_요청에서_같은_행을_쓰고_JSON_타입을_보존한다():
+    row = {"from": "2024-01-01", "to": "2024-01-07", "regions": ["A", "B"], "n": 3}
+    tpl = {"params": [{"name": "from", "value": "${data:from}"},
+                      {"name": "to", "value": "${data:to}"},
+                      {"name": "regions", "value": "${data:regions}"},
+                      {"name": "label", "value": "r-${data:n}"}]}
+    out = scenario.render_body(tpl, _ctx(row=row))
+    assert [p["value"] for p in out["params"]] == ["2024-01-01", "2024-01-07", ["A", "B"], "r-3"]
+    out["params"][2]["value"].append("X")
+    assert row["regions"] == ["A", "B"]  # 행 원본은 요청 사이에 오염되지 않는다
+    assert scenario.uses_data(tpl) and not scenario.uses_data({"v": "${vu}"})
+
+
+def test_data_검증은_모든_행을_보고_없는_컬럼을_행_번호와_함께_알린다():
+    with pytest.raises(ValueError, match="2번째 행.*'b'"):
+        scenario.validate_body({"v": "${data:b}"}, [{"b": 1}, {"a": 2}])
+    with pytest.raises(ValueError, match="--data"):
+        scenario.validate_body({"v": "${data:b}"})
+
+
+def test_데이터_파일은_csv_jsonl_json_을_읽고_잘못된_형식을_거부한다(tmp_path):
+    csv_f = tmp_path / "p.csv"
+    csv_f.write_text("﻿from,to\n2024-01-01,2024-01-07\n2024-02-01,2024-02-07\n",
+                     encoding="utf-8")
+    assert scenario.load_data_file(str(csv_f))[1] == {"from": "2024-02-01", "to": "2024-02-07"}
+    jl = tmp_path / "p.jsonl"
+    jl.write_text('{"n": 1}\n\n{"n": [2, 3]}\n', encoding="utf-8")
+    assert scenario.load_data_file(str(jl)) == [{"n": 1}, {"n": [2, 3]}]
+    js = tmp_path / "p.json"
+    js.write_text('[{"n": 1}]', encoding="utf-8")
+    assert scenario.load_data_file(str(js)) == [{"n": 1}]
+    for name, text in (("bad.csv", "a,b\n1\n"), ("empty.json", "[]"), ("obj.json", '{"n": 1}'),
+                       ("x.txt", "a")):
+        f = tmp_path / name
+        f.write_text(text, encoding="utf-8")
+        with pytest.raises(ValueError):
+            scenario.load_data_file(str(f))
+
+
+def test_DataFeed_sequential_은_순환하고_random_은_행_안에서_고른다():
+    rows = [{"i": 0}, {"i": 1}, {"i": 2}]
+    feed = scenario.DataFeed(rows)
+    assert [feed.next(random.Random(0))["i"] for _ in range(5)] == [0, 1, 2, 0, 1]
+    feed = scenario.DataFeed(rows, "random")
+    rng = random.Random(0)
+    assert {feed.next(rng)["i"] for _ in range(30)} == {0, 1, 2}
+    with pytest.raises(ValueError):
+        scenario.DataFeed(rows, "shuffle")
+
+
+@pytest.mark.asyncio
+async def test_러너는_요청마다_데이터_행을_차례로_채운다():
+    fake = FakeCoordinator(polls_to_finish=1)
+    rows = [{"d": f"2024-01-0{i}"} for i in range(1, 4)]
+    spec = RequestSpec(type="async", data=rows,
+                       body={"sql": "SELECT 1", "params": [{"name": "d", "value": "${data:d}"}]})
+    await _run(fake, request=spec, stages=scenario.stages_from_ramp(1, 0.0, 10.0), iterations=4)
+    assert [b["params"][0]["value"] for b in fake.bodies] == [
+        "2024-01-01", "2024-01-02", "2024-01-03", "2024-01-01"]
+
+
+def test_시나리오의_data_는_상대경로를_풀고_저장하면_다시_읽힌다(tmp_path):
+    (tmp_path / "b.json").write_text('{"template_id": "a", "d": "${data:d}"}', encoding="utf-8")
+    (tmp_path / "p.csv").write_text("d\n2024-01-01\n", encoding="utf-8")
+    scn = tmp_path / "s.yml"
+    scn.write_text("request:\n  type: sync\n  path: /query-count\n  body: b.json\n"
+                   "  data: p.csv\n  data_mode: random\nvus: 1\nduration: 1m\n", encoding="utf-8")
+    opts = cli.load_scenario(str(scn))
+    assert opts["data"] == str(tmp_path / "p.csv")
+    spec = cli.build_request(opts)
+    assert spec.data == [{"d": "2024-01-01"}] and spec.data_mode == "random"
+    assert "데이터 1행·random" in spec.describe()
+    text = cli.opts_to_scenario(opts, spec)
+    assert "data_mode: random" in text and "data:" in text
+    assert text.count("data_mode") == 1  # request 블록에만 들어간다
+
+
+def test_본문이_data_를_쓰는데_데이터_파일이_없으면_시작_전에_거절한다(tmp_path):
+    body = tmp_path / "b.json"
+    body.write_text('{"d": "${data:d}"}', encoding="utf-8")
+    with pytest.raises(cli.ConfigError, match="--data"):
+        cli.build_request({"type": "sync", "path": "/query-execute", "body": str(body)})
+    data = tmp_path / "p.csv"
+    data.write_text("e\n1\n", encoding="utf-8")
+    with pytest.raises(cli.ConfigError, match="'d'"):
+        cli.build_request({"type": "sync", "path": "/query-execute", "body": str(body),
+                           "data": str(data)})
+
+
+def test_마법사는_본문이_data_를_쓸_때만_데이터_파일을_묻는다(tmp_path):
+    body = tmp_path / "q.json"
+    body.write_text('{"template_id": "a", "d": "${data:d}"}', encoding="utf-8")
+    good = tmp_path / "p.csv"
+    good.write_text("d\n2024-01-01\n2024-01-02\n", encoding="utf-8")
+    bad = tmp_path / "bad.csv"
+    bad.write_text("x\n1\n", encoding="utf-8")
+    wz, script, out, ran = _wizard([
+        "http://coord:8088", "2", "/query-execute", "",  # 대상, sync, 경로, 메서드
+        str(body),
+        str(bad),              # 컬럼 d 가 없음 → 다시 묻는다
+        str(good), "random",   # 데이터 파일, 고르는 방식
+        "", "",                # Idempotency-Key 질문 없음(sync) → 성공 코드 기본, ramp 방식
+        "2", "0", "", "1m",
+        "", "",
+        "", "", "",
+        "-", "-", "-",
+        "",
+    ])
+    assert wz.run() == 0
+    argv = ran[0]
+    assert argv[argv.index("--data") + 1] == str(good)
+    assert argv[argv.index("--data-mode") + 1] == "random"
+    text = out.getvalue()
+    assert "'d' 컬럼이 없습니다" in text and "데이터: 2행" in text

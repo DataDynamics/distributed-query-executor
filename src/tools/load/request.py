@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
+from .scenario import DATA_MODES
+
 REQUEST_TYPES = ("async", "sync")
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 
@@ -70,6 +72,9 @@ class RequestSpec:
     # sync 요청에서 성공으로 볼 HTTP 상태 코드다. 비어 있으면 2xx 전체를 성공으로 본다.
     success_status: Tuple[int, ...] = ()
     poll: PollSpec = field(default_factory=PollSpec)
+    # 본문의 ${data:<컬럼>} 에 채울 데이터 파일의 행들과 행을 고르는 방식(sequential|random)이다.
+    data: Optional[List[Dict[str, Any]]] = None
+    data_mode: str = "sequential"
 
     @property
     def is_async(self) -> bool:
@@ -88,6 +93,9 @@ class RequestSpec:
             raise ValueError(f"method 는 {'/'.join(METHODS)} 중 하나여야 합니다: {self.method!r}")
         if not self.path.startswith("/"):
             raise ValueError(f"path 는 '/' 로 시작해야 합니다: {self.path!r}")
+        if self.data_mode not in DATA_MODES:
+            raise ValueError(f"data_mode 는 {'/'.join(DATA_MODES)} 중 하나여야 합니다: "
+                             f"{self.data_mode!r}")
         if self.is_async:
             p = self.poll
             if _ID_PLACEHOLDER not in p.path:
@@ -102,7 +110,10 @@ class RequestSpec:
                     "dry_run 요청은 job 을 만들지 않고 계획만 돌려주므로 sync 로 보내야 합니다")
 
     def describe(self) -> str:
-        return f"{self.type} {self.method} {self.path}"
+        text = f"{self.type} {self.method} {self.path}"
+        if self.data:
+            text += f" (데이터 {len(self.data)}행·{self.data_mode})"
+        return text
 
 
 def default_type(path: str, body: Optional[Dict[str, Any]]) -> str:
@@ -146,7 +157,8 @@ def parse_status_codes(value: Any) -> Tuple[int, ...]:
     return tuple(dict.fromkeys(codes))
 
 
-def build_spec(opts: Dict[str, Any], body: Optional[Dict[str, Any]]) -> RequestSpec:
+def build_spec(opts: Dict[str, Any], body: Optional[Dict[str, Any]],
+               data: Optional[List[Dict[str, Any]]] = None) -> RequestSpec:
     """cli 가 합친 옵션 dict 에서 요청 명세를 만든다. 키가 없으면 PollSpec 기본값을 쓴다."""
     path = str(opts.get("path") or "/jobs")
     method = str(opts.get("method") or "POST").upper()
@@ -166,6 +178,8 @@ def build_spec(opts: Dict[str, Any], body: Optional[Dict[str, Any]]) -> RequestS
         type=rtype, method=method, path=path, body=body,
         success_status=parse_status_codes(opts.get("success_status")),
         poll=poll,
+        data=data,
+        data_mode=str(opts.get("data_mode") or "sequential").lower(),
     )
     spec.validate()
     return spec
@@ -187,6 +201,8 @@ REQUEST_YAML_MAP: Dict[str, str] = {
     "method": "method",
     "path": "path",
     "body": "body",
+    "data": "data",
+    "data_mode": "data_mode",
     "success_status": "success_status",
 }
 POLL_YAML_MAP: Dict[str, str] = {
@@ -221,11 +237,15 @@ def flatten_request_block(block: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def spec_to_yaml_block(spec: RequestSpec, body_ref: Any) -> Dict[str, Any]:
+def spec_to_yaml_block(spec: RequestSpec, body_ref: Any, data_ref: Any = None) -> Dict[str, Any]:
     """명세를 시나리오 YAML 의 ``request:`` 블록으로 되돌린다. 기본값과 같은 폴링 항목은 생략한다."""
     block: Dict[str, Any] = {"type": spec.type, "method": spec.method, "path": spec.path}
     if body_ref is not None:
         block["body"] = body_ref
+    if data_ref is not None:
+        block["data"] = data_ref
+        if spec.data_mode != "sequential":
+            block["data_mode"] = spec.data_mode
     if spec.success_status:
         block["success_status"] = _compact_codes(spec.success_status)
     if spec.is_async:

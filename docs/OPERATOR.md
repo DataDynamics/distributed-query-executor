@@ -337,8 +337,11 @@ bin/load-test run -c http://coord:8088 --type sync --path /query-execute --body 
 ```
 
 요청 본문(`--body`)은 `/jobs` 에 보내는 JSON 그대로이며, 문자열 안의 `${vu}`·`${iter}`·`${seq}`·
-`${uuid}`·`${run_id}`·`${now:%Y%m%d}`·`${choice:a,b,c}`·`${randint:1-9}` 가 요청마다 치환된다.
-예를 들어 `"target_table": "dwtemp.load_${vu}"` 로 VU 마다 대상 테이블을 나눌 수 있다. 자주 쓰는
+`${uuid}`·`${run_id}`·`${now:%Y%m%d}`·`${choice:a,b,c}`·`${randint:1-9}`·`${date:today-7}`·
+`${date:2024-01-01~2024-12-31}` 가 요청마다 치환된다. 예를 들어 `"target_table": "dwtemp.load_${vu}"`
+로 VU 마다 대상 테이블을 나눌 수 있다. 템플릿 `params` 의 시작일·종료일처럼 값끼리 짝이 맞아야 하면
+CSV·JSONL 데이터 파일을 `--data` 로 주고 본문에 `${data:<컬럼>}` 을 쓴다. 요청마다 행 하나를 꺼내므로
+한 요청의 값들이 같은 행에서 나온다(`--data-mode sequential|random`). 자주 쓰는
 옵션은 시나리오 YAML(`--scenario`)로 묶어 두고, 키 이름은 옵션에서 `--` 를 떼고 `-` 를 `_` 로 바꾼
 것이다. 명령행 값이 YAML 보다 우선한다. 요청 명세는 아래처럼 `request:` 블록으로 묶어 쓸 수 있으며,
 본문 경로는 시나리오 파일 기준 상대경로다.

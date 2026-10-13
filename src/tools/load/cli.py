@@ -118,7 +118,14 @@ def _add_arguments(p: argparse.ArgumentParser) -> None:
     g.add_argument("--path", "-p", help="요청 경로 (기본 /jobs)")
     g.add_argument("--body", "-b", metavar="FILE",
                    help="요청 본문(JSON/YAML). ${vu}·${iter}·${seq}·${uuid}·"
-                        "${now:%%Y%%m%%d}·${choice:a,b}·${randint:1-9}·${run_id} 치환")
+                        "${now:%%Y%%m%%d}·${choice:a,b}·${randint:1-9}·${run_id}·"
+                        "${date:today-30~today}·${data:<컬럼>} 치환")
+    g.add_argument("--data", metavar="FILE",
+                   help="요청마다 한 행씩 꺼내 본문의 ${data:<컬럼>} 에 채울 데이터 파일 "
+                        "(.csv·.jsonl·.json·.yml)")
+    g.add_argument("--data-mode", choices=scenario.DATA_MODES,
+                   help="데이터 행을 고르는 방식. sequential=차례로 돌아가며, random=무작위 "
+                        "(기본 sequential)")
     g.add_argument("--success-status", metavar="CODES",
                    help="sync 에서 성공으로 볼 HTTP 코드 (예: 200 또는 200,201, 기본 2xx)")
     g.add_argument("--dry-run-body", action="store_true", default=None,
@@ -238,9 +245,10 @@ def load_scenario(path: str) -> Dict[str, Any]:
             out[key] = v
         else:
             raise ConfigError(f"시나리오에 알 수 없는 키가 있습니다: {k}")
-    body = out.get("body")
-    if isinstance(body, str) and not os.path.isabs(body):
-        out["body"] = os.path.join(os.path.dirname(os.path.abspath(path)), body)
+    for key in ("body", "data"):
+        ref = out.get(key)
+        if isinstance(ref, str) and ref and not os.path.isabs(ref):
+            out[key] = os.path.join(os.path.dirname(os.path.abspath(path)), ref)
     return out
 
 
@@ -285,10 +293,25 @@ def build_stages(opts: Dict[str, Any]) -> List[scenario.Stage]:
         raise ConfigError(f"부하 곡선 설정 오류: {exc}") from None
 
 
-def load_body(opts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def load_data(opts: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """``--data`` 데이터 파일의 행 목록을 읽는다. 지정하지 않았으면 None 이다."""
+    path = opts.get("data")
+    if not path:
+        if opts.get("data_mode"):
+            raise ConfigError("--data-mode 는 --data 와 함께 써야 합니다")
+        return None
+    try:
+        return scenario.load_data_file(os.path.expanduser(str(path)))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise ConfigError(f"데이터 파일을 읽을 수 없습니다: {exc}") from None
+
+
+def load_body(opts: Dict[str, Any],
+              data: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """요청 본문을 읽는다. 본문 없이 보내는 요청(GET 등)이면 None 이다.
 
-    ``/jobs`` 는 본문 없이는 어차피 422 이므로 시작 전에 막는다.
+    ``/jobs`` 는 본문 없이는 어차피 422 이므로 시작 전에 막는다. ``data`` 가 있으면 모든 행으로
+    렌더해 보아 ``${data:..}`` 가 가리키는 컬럼이 행마다 있는지도 시작 전에 확인한다.
     """
     body = opts.get("body")
     if body is None or body == "":
@@ -307,16 +330,21 @@ def load_body(opts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if opts.get("dry_run_body"):
         body = dict(body, dry_run=True)
     try:
-        scenario.validate_body(body)
+        if data is None and scenario.uses_data(body):
+            raise ValueError("본문이 ${data:<컬럼>} 를 쓰므로 --data(데이터 파일)가 필요합니다")
+        scenario.validate_body(body, data)
     except ValueError as exc:
         raise ConfigError(f"요청 본문 치환 오류: {exc}") from None
     return body
 
 
 def build_request(opts: Dict[str, Any]) -> request.RequestSpec:
-    body = load_body(opts)
+    data = load_data(opts)
+    body = load_body(opts, data)
+    if data is not None and body is None:
+        raise ConfigError("--data 는 --body 와 함께 써야 합니다(본문의 ${data:<컬럼>} 에 채운다)")
     try:
-        return request.build_spec(opts, body)
+        return request.build_spec(opts, body, data)
     except ValueError as exc:
         raise ConfigError(f"요청 설정 오류: {exc}") from None
 
@@ -441,7 +469,8 @@ def opts_to_scenario(opts: Dict[str, Any], spec: Optional[request.RequestSpec] =
     request_keys = set(request.REQUEST_YAML_MAP.values()) | set(request.POLL_YAML_MAP.values())
     data: Dict[str, Any] = {}
     if spec is not None:
-        data["request"] = request.spec_to_yaml_block(spec, opts.get("body") or None)
+        data["request"] = request.spec_to_yaml_block(spec, opts.get("body") or None,
+                                                     opts.get("data") or None)
     for key in option_keys():
         if key in request_keys:
             continue

@@ -11,12 +11,14 @@ k6 식 ``--stages 30s:5,2m:5,1m:20`` 은 적은 그대로 단계가 된다.
 from __future__ import annotations
 
 import copy
+import csv
+import json
 import math
 import random
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 
 _DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
@@ -164,19 +166,67 @@ def target_vus(stages: Sequence[Stage], t: float) -> int:
 # ───────── 요청 본문 치환 ─────────
 
 _PLACEHOLDER = re.compile(r"\$\{(\w+)(?::([^}]*))?\}")
-# 문자열 전체가 이 자리표시자 하나뿐이면 정수로 넣는다(예: "parallelism": "${vu}").
-_INT_VARS = ("vu", "iter", "seq", "randint")
+# 문자열 전체가 이 자리표시자 하나뿐이면 문자열이 아니라 값의 타입 그대로 넣는다. 정수 변수는
+# "parallelism": "${vu}" 가 정수가 되게 하고, data 는 JSON 데이터 파일의 숫자·목록이 그대로 들어가게
+# 한다(CSV 는 원래 문자열이라 문자열로 들어간다).
+_INT_VARS = ("vu", "iter", "seq", "randint", "data")
+
+_DATE_FORMAT = "%Y-%m-%d"
+_DATE_EXPR = re.compile(r"^(today|\d{4}-\d{2}-\d{2})\s*(?:([+-])\s*(\d+))?$")
 
 
 @dataclass
 class RenderContext:
-    """자리표시자에 채울 반복별 값이다."""
+    """자리표시자에 채울 반복별 값이다.
+
+    ``row`` 는 데이터 파일에서 이번 요청 몫으로 고른 행이다. 한 요청 안의 ``${data:..}`` 는 모두 같은
+    행을 보므로, 시작일·종료일처럼 서로 맞아야 하는 값을 한 행에 함께 두면 짝이 어긋나지 않는다.
+    """
 
     vu: int
     iteration: int
     seq: int
     run_id: str
     rng: random.Random
+    row: Optional[Dict[str, Any]] = None
+    today: Optional[date] = None
+
+
+def _parse_date_expr(expr: str, today: date) -> date:
+    """``today``·``today-7``·``2024-01-01``·``2024-01-01+3`` 을 날짜로 바꾼다(단위는 일)."""
+    m = _DATE_EXPR.match(expr.strip())
+    if not m:
+        raise ValueError(f"날짜 표현이 아닙니다: {expr!r} (예: today, today-7, 2024-01-01)")
+    base = today if m.group(1) == "today" else datetime.strptime(m.group(1), _DATE_FORMAT).date()
+    if m.group(3):
+        days = int(m.group(3))
+        base += timedelta(days=days if m.group(2) == "+" else -days)
+    return base
+
+
+def _resolve_date(arg: Optional[str], ctx: RenderContext) -> str:
+    """``${date:<날짜>[~<날짜>][|<형식>]}`` 을 푼다. ``~`` 로 구간을 주면 양끝을 포함해 무작위로 고른다."""
+    spec, _, fmt = (arg or "today").partition("|")
+    today = ctx.today or date.today()
+    lo_s, sep, hi_s = spec.partition("~")
+    lo = _parse_date_expr(lo_s, today)
+    if sep:
+        hi = _parse_date_expr(hi_s, today)
+        if hi < lo:
+            raise ValueError(f"${{date:{spec}}} 의 끝이 시작보다 앞섭니다")
+        lo += timedelta(days=ctx.rng.randint(0, (hi - lo).days))
+    return lo.strftime(fmt or _DATE_FORMAT)
+
+
+def _resolve_data(arg: Optional[str], ctx: RenderContext) -> Any:
+    if ctx.row is None:
+        raise ValueError(f"${{data:{arg or ''}}} 를 쓰려면 데이터 파일(--data)이 필요합니다")
+    if not arg:
+        raise ValueError("${data:<컬럼>} 형식이어야 합니다")
+    if arg not in ctx.row:
+        cols = ", ".join(map(str, ctx.row)) or "(없음)"
+        raise ValueError(f"데이터 파일에 {arg!r} 컬럼이 없습니다 (있는 컬럼: {cols})")
+    return copy.deepcopy(ctx.row[arg])
 
 
 def _resolve(name: str, arg: Optional[str], ctx: RenderContext) -> Any:
@@ -203,8 +253,13 @@ def _resolve(name: str, arg: Optional[str], ctx: RenderContext) -> Any:
         except ValueError:
             raise ValueError("${randint:<최소>-<최대>} 형식이어야 합니다") from None
         return ctx.rng.randint(lo, hi)
+    if name == "date":
+        return _resolve_date(arg, ctx)
+    if name == "data":
+        return _resolve_data(arg, ctx)
     raise ValueError(
-        f"알 수 없는 자리표시자 ${{{name}}} (vu·iter·seq·run_id·uuid·now·choice·randint 중 하나)"
+        f"알 수 없는 자리표시자 ${{{name}}} "
+        "(vu·iter·seq·run_id·uuid·now·choice·randint·date·data 중 하나)"
     )
 
 
@@ -230,9 +285,94 @@ def render_body(template: Any, ctx: RenderContext) -> Any:
     return copy.copy(template)
 
 
-def validate_body(template: Any) -> None:
-    """시작 전에 한 번 렌더해 잘못된 자리표시자를 부하를 걸기 전에 잡는다."""
-    render_body(template, RenderContext(1, 0, 0, "check", random.Random(0)))
+def uses_data(template: Any) -> bool:
+    """본문 어딘가에 ``${data:..}`` 자리표시자가 있는지다. 데이터 파일이 필요한지 가르는 데 쓴다."""
+    if isinstance(template, dict):
+        return any(uses_data(v) for v in template.values())
+    if isinstance(template, list):
+        return any(uses_data(v) for v in template)
+    return isinstance(template, str) and any(
+        m.group(1) == "data" for m in _PLACEHOLDER.finditer(template))
+
+
+def validate_body(template: Any, rows: Optional[Sequence[Dict[str, Any]]] = None) -> None:
+    """시작 전에 렌더해 잘못된 자리표시자를 부하를 걸기 전에 잡는다.
+
+    데이터 파일이 있으면 모든 행으로 한 번씩 렌더한다. JSON 데이터는 행마다 키가 다를 수 있어서,
+    첫 행만 보면 부하 도중에 컬럼 누락으로 요청이 깨지는 경우를 놓친다.
+    """
+    rng = random.Random(0)
+    for i, row in enumerate(rows or [None]):
+        try:
+            render_body(template, RenderContext(1, 0, 0, "check", rng, row=row))
+        except ValueError as exc:
+            if row is None:
+                raise
+            raise ValueError(f"데이터 {i + 1}번째 행: {exc}") from None
+
+
+# ───────── 데이터 파일 ─────────
+
+DATA_MODES = ("sequential", "random")
+
+
+def load_data_file(path: str) -> List[Dict[str, Any]]:
+    """요청마다 하나씩 꺼내 쓸 행 목록을 읽는다. 형식은 확장자로 정한다.
+
+    - ``.csv`` 는 첫 줄이 컬럼 이름인 CSV 다. 값은 모두 문자열이다(UTF-8, BOM 허용).
+    - ``.jsonl``/``.ndjson`` 은 한 줄에 객체 하나다.
+    - ``.json``/``.yml``/``.yaml`` 은 객체의 배열이다.
+
+    JSON 계열은 값의 타입이 살아 있어서 숫자나 목록(IN 값 목록 등)을 그대로 넣을 수 있다.
+    """
+    lower = path.lower()
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        if lower.endswith(".csv"):
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                raise ValueError(f"CSV 에 머리줄(컬럼 이름)이 없습니다: {path}")
+            rows: Any = [dict(r) for r in reader]
+            for i, r in enumerate(rows, start=2):
+                if None in r or any(v is None for v in r.values()):
+                    raise ValueError(f"CSV {i}번째 줄의 열 개수가 머리줄과 다릅니다: {path}")
+        elif lower.endswith((".jsonl", ".ndjson")):
+            rows = [json.loads(line) for line in f if line.strip()]
+        elif lower.endswith(".json"):
+            rows = json.load(f)
+        elif lower.endswith((".yml", ".yaml")):
+            import yaml  # 순수 로직 모듈이 PyYAML 없이도 임포트되도록 여기서만 쓴다
+            rows = yaml.safe_load(f)
+        else:
+            raise ValueError(f"데이터 파일 확장자는 .csv·.jsonl·.json·.yml 중 하나여야 합니다: {path}")
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        raise ValueError(f"데이터 파일은 객체(행)의 목록이어야 합니다: {path}")
+    if not rows:
+        raise ValueError(f"데이터 파일에 행이 없습니다: {path}")
+    return rows
+
+
+class DataFeed:
+    """요청마다 데이터 파일의 행 하나를 내준다.
+
+    ``sequential`` 은 실행 전체에서 커서 하나로 차례대로 돌고, 끝에 닿으면 처음으로 돌아간다. VU 가
+    여럿이어도 같은 커서를 나눠 쓰므로 행이 고르게 쓰인다. ``random`` 은 매번 무작위로 고른다.
+    """
+
+    def __init__(self, rows: Sequence[Dict[str, Any]], mode: str = "sequential") -> None:
+        if mode not in DATA_MODES:
+            raise ValueError(f"data_mode 는 {'/'.join(DATA_MODES)} 중 하나여야 합니다: {mode!r}")
+        if not rows:
+            raise ValueError("데이터 행이 없습니다")
+        self.rows = list(rows)
+        self.mode = mode
+        self._next = 0
+
+    def next(self, rng: random.Random) -> Dict[str, Any]:
+        if self.mode == "random":
+            return rng.choice(self.rows)
+        row = self.rows[self._next % len(self.rows)]
+        self._next += 1
+        return row
 
 
 def max_target_after(stages: Sequence[Stage], t: float) -> int:

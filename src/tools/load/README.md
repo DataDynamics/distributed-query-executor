@@ -101,9 +101,64 @@ bin/load-test run -c http://coord:8088 --type sync --path /query-execute --body 
 | `${now:%Y%m%d}` | 현재 시각(형식 지정) |
 | `${choice:a,b,c}` | 목록 중 무작위 하나 |
 | `${randint:1-9}` | 범위 안 무작위 정수 |
+| `${date:today-7}` | 날짜. `today`·`YYYY-MM-DD` 에 `+N`/`-N` 일을 더한다(기본 형식 `%Y-%m-%d`) |
+| `${date:2024-01-01~2024-12-31}` | 구간(양끝 포함) 안의 무작위 날짜. `\|%Y%m%d` 를 붙여 형식을 바꾼다 |
+| `${data:<컬럼>}` | 데이터 파일(`--data`)에서 이번 요청 몫으로 고른 행의 값 |
 
 예를 들어 `"target_table": "dwtemp.load_${vu}"` 로 VU 마다 대상 테이블을 나눈다. 문자열 전체가
 `${vu}`·`${iter}`·`${seq}`·`${randint:..}` 하나뿐이면 정수로 들어간다(`"parallelism": "${vu}"`).
+`${data:..}` 하나뿐이면 데이터 파일의 값이 타입 그대로 들어간다(JSON 데이터의 숫자·목록).
+
+### 요청마다 템플릿 파라미터 바꾸기
+
+`/query-execute`·`/query-count`·`/jobs` 의 `params` 값도 본문의 일부이므로 같은 방식으로 바꾼다.
+값이 서로 독립이면 `${choice}`·`${randint}`·`${date}` 를 바로 쓴다.
+
+```json
+{
+  "template_id": "order_count",
+  "params": [
+    {"name": "region", "value": "${choice:SEOUL,BUSAN,DAEGU}"},
+    {"name": "from_date", "value": "${date:2024-01-01~2024-12-31}"}
+  ]
+}
+```
+
+시작일과 종료일처럼 **값끼리 짝이 맞아야 하면** 데이터 파일을 쓴다. 따로 무작위로 뽑으면 종료일이
+시작일보다 앞서는 요청이 섞이기 때문이다. `--data` 로 준 파일에서 요청마다 행 하나를 꺼내고, 한
+요청 안의 `${data:..}` 는 모두 같은 행을 본다. 실제 운영 요청에서 뽑은 조합을 그대로 재생할 때도
+이 방식이 맞다.
+
+```csv
+region,from_date,to_date
+SEOUL,2024-01-01,2024-01-07
+BUSAN,2024-03-01,2024-03-31
+```
+
+```json
+{
+  "template_id": "order_count",
+  "params": [
+    {"name": "region",    "value": "${data:region}"},
+    {"name": "from_date", "value": "${data:from_date}"},
+    {"name": "to_date",   "value": "${data:to_date}"}
+  ]
+}
+```
+
+```bash
+bin/load-test run -c http://coord:8088 --type sync --path /query-count \
+    --body count.json --data params.csv --vus 10 --ramp-up 30s --duration 5m
+```
+
+데이터 파일 형식은 확장자로 정한다. `.csv` 는 첫 줄이 컬럼 이름이고 값은 모두 문자열이다.
+`.jsonl`(한 줄에 객체 하나)과 `.json`·`.yml`(객체 배열)은 타입이 살아 있어서 IN 값 목록 같은 배열도
+`"value": "${data:regions}"` 로 그대로 넣을 수 있다. 행을 고르는 방식은 `--data-mode` 로 정한다.
+`sequential`(기본)은 모든 VU 가 커서 하나를 나눠 차례로 쓰고 끝에 닿으면 처음으로 돌아가며,
+`random` 은 요청마다 무작위로 고른다. 시작 전에 모든 행으로 본문을 렌더해 보므로, 어떤 행에 컬럼이
+빠져 있으면 부하를 걸기 전에 행 번호와 함께 거절한다. 시나리오 파일에서는 `request:` 블록에
+`data: params.csv`·`data_mode: random` 으로 쓰며 경로는 시나리오 파일 기준 상대경로다. `wizard` 는
+본문이 `${data:..}` 를 쓸 때만 데이터 파일을 이어서 묻는다.
 
 ## 시나리오 파일
 
@@ -360,7 +415,7 @@ executor 의 CPU·메모리·task 수를 모아 결과에 서버별 표로 붙�
 | `cli.py` | 명령행·시나리오 파일 파싱, 옵션 병합, 실행 조립 |
 | `wizard.py` | 대화형 마법사(옵션 dict 만 만들고 `cli` 로 실행) |
 | `request.py` | 요청 명세(type·폴링 규칙)와 시나리오 `request:` 블록 해석 |
-| `scenario.py` | ramp-up 단계 계산, 요청 본문 치환(순수 함수) |
+| `scenario.py` | ramp-up 단계 계산, 요청 본문 치환과 데이터 파일 공급(순수 함수) |
 | `runner.py` | VU 생성·회수, 폴링, drain 조율 |
 | `client.py` | coordinator HTTP 호출 |
 | `sampler.py` | `GET /cluster` 로 서버 자원 수집 |

@@ -87,6 +87,8 @@ class LoadRunner:
         self.vus: Dict[int, _VU] = {}
         self._next_vu = 1
         self._seq = 0
+        spec = config.request
+        self._data = scenario.DataFeed(spec.data, spec.data_mode) if spec.data else None
         self._stop_new = False          # 새 제출 금지(종료 시작)
         self._abort = asyncio.Event()   # Ctrl-C 등 외부 중단 요청
         self._wake = asyncio.Event()    # 중단이든 정상 종료든 멈추기 시작하면 sleep 을 깨운다
@@ -225,7 +227,9 @@ class LoadRunner:
         self._seq += 1
         if self.cfg.request.body is None:
             return None
-        ctx = scenario.RenderContext(vu.vu_id, vu.iteration, self._seq, self.cfg.run_id, self.rng)
+        row = self._data.next(self.rng) if self._data else None
+        ctx = scenario.RenderContext(vu.vu_id, vu.iteration, self._seq, self.cfg.run_id, self.rng,
+                                     row=row)
         return scenario.render_body(self.cfg.request.body, ctx)
 
     async def _vu_loop(self, vu: _VU) -> None:
