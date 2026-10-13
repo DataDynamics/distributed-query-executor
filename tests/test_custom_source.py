@@ -246,7 +246,7 @@ def test_task_payload_carries_datasource(store):
             return None
 
     class _FakeClient:
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
             sent.append(json)
             return _Resp()
 

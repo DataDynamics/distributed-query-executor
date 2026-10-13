@@ -123,7 +123,7 @@ def test_query_count_source_proxies_count_sql_to_query_run(qe_client, monkeypatc
         async def __aexit__(self, *a):
             return False
 
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
             sent.append((url, json))
             return _Resp(payload={"limit": 1, "columns": ["row_count"], "rows": [[42]],
                                   "row_count": 1, "truncated": False, "elapsed_ms": 3.0})
@@ -219,3 +219,55 @@ def test_query_count_order_count_grade_omitted(qe_client, monkeypatch):  # noqa:
     ])
     assert resp.status_code == 200, resp.text
     assert "c.grade =" not in resp.json()["sql"]
+
+
+def test_query_count_logs_rendered_and_count_sql_multiline(qe_client, monkeypatch, caplog):  # noqa: F811
+    """렌더한 SELECT 와 감싼 건수 쿼리가 원문 줄 그대로 남고, 요청 식별자가 함께 찍힌다."""
+    import logging
+
+    from core.logging import current_job_label
+
+    monkeypatch.setattr(core_config.settings, "greenplum_dsn", "postgresql://x")
+    monkeypatch.setattr(core_config.settings, "log_sql_format", "multiline", raising=False)
+    import coordinator.app as ca
+    monkeypatch.setattr(ca, "run_postgres_select",
+                        lambda dsn, sql, *, limit, datasource="greenplum": _count_result(1))
+    labels = []
+    real = ca.log_template_render
+
+    def _spy(*a, **k):
+        labels.append(current_job_label())
+        return real(*a, **k)
+
+    monkeypatch.setattr(ca, "log_template_render", _spy)
+    with caplog.at_level(logging.INFO, logger="core.sql"):
+        resp = _post_order_count(qe_client(), [
+            {"name": "regions", "value": ["KR"]},
+            {"name": "start_dt", "value": "2026-01-01"},
+            {"name": "end_dt", "value": "2026-01-31"},
+        ])
+    assert resp.status_code == 200, resp.text
+    msg = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("템플릿 렌더"))
+    assert "template=order_count" in msg and "(datasource=greenplum)" in msg
+    assert "    | SELECT o.order_id," in msg          # 여러 줄 원문이 줄 단위로 남는다
+    assert "    |        o.customer_id," in msg
+    assert "  [count]" in msg and "    | SELECT COUNT(*) AS row_count FROM (" in msg
+    # 렌더 로그는 그 요청의 식별자(req-<X-Request-ID>)로 찍힌다.
+    assert labels == ["req-" + resp.headers["x-request-id"]]
+
+
+def test_query_count_logs_render_even_when_validation_fails(qe_client, monkeypatch, caplog, tmp_path):  # noqa: F811
+    """검증이 실패해 422 가 나가도 원인이 된 렌더 SQL 은 로그에 남는다."""
+    import logging
+
+    from coordinator.config import settings
+    tdir = tmp_path / "bad"
+    tdir.mkdir()
+    (tdir / "manifest.yml").write_text("id: bad\nexec_mode: copy\nfiles: {select: s.j2}\n", encoding="utf-8")
+    (tdir / "s.j2").write_text("DELETE FROM orders\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "template_dir", str(tmp_path), raising=False)
+    client = qe_client()
+    with caplog.at_level(logging.INFO, logger="core.sql"):
+        resp = client.post("/query-count", json={"template_id": "bad", "params": [], "datasource": "greenplum"})
+    assert resp.status_code == 422
+    assert any("    | DELETE FROM orders" in r.getMessage() for r in caplog.records)

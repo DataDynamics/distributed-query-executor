@@ -144,7 +144,7 @@ def test_coordinator_proxy_to_executor(client, monkeypatch):
         async def __aexit__(self, *a):
             return False
 
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
             assert url == "http://exec:8001/datasources/impala/query"
             assert json["sql"] == "SELECT 1"
             return _Resp()
@@ -177,7 +177,7 @@ def test_coordinator_proxy_propagates_error(client, monkeypatch):
         async def __aexit__(self, *a):
             return False
 
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
             return _Resp()
 
     monkeypatch.setattr(ca.httpx, "AsyncClient", _FakeClient)

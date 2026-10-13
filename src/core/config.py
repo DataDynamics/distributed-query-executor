@@ -218,11 +218,15 @@ class Settings:
         # 메인 로그 파일명의 stem 뒤에 붙일 접미사다(foo.log 라면 foo-warn.log 가 된다).
         self.log_warn_suffix: str = _get_nested("logging", "warn", "suffix", "-warn")
 
-        # HTTP 요청/응답을 DEBUG 로 남긴다(core.http). 로그 레벨이 DEBUG 일 때만 자동으로 기록하며,
-        # enabled=false 면 DEBUG 여도 끈다. 본문과 헤더는 마스킹·절단하고 잡음 경로는 제외한다.
+        # HTTP 요청/응답 로깅(core.http). API 호출과 실패 응답은 level, 성공한 조회(폴링)는
+        # read_level 로 남긴다. 본문과 헤더는 마스킹·절단하고 잡음 경로는 제외한다.
         self.log_http_enabled: bool = _to_bool(_get_nested("logging", "http", "enabled", True))
+        self.log_http_level: str = str(_get_nested("logging", "http", "level", "INFO") or "INFO")
+        self.log_http_read_level: str = str(
+            _get_nested("logging", "http", "read_level", "DEBUG") or "DEBUG"
+        )
         self.log_http_bodies: bool = _to_bool(_get_nested("logging", "http", "bodies", True))
-        self.log_http_max_body: int = int(_get_nested("logging", "http", "max_body", 2048))
+        self.log_http_max_body: int = int(_get_nested("logging", "http", "max_body", 8192))
         self.log_http_headers: bool = _to_bool(_get_nested("logging", "http", "headers", False))
         self.log_http_exclude_paths: list[str] = _csv_list(
             _get_nested(
@@ -236,8 +240,12 @@ class Settings:
         # 정작 필요한 순간(운영 기본 레벨 INFO)에 기록이 없다. 감사 용도라 끄는 것은
         # 명시적 설정으로만 가능하게 했다.
         self.log_sql_enabled: bool = _to_bool(_get_nested("logging", "sql", "enabled", True))
+        # SQL 을 줄바꿈·들여쓰기 그대로(multiline) 남길지, 한 줄로 접어(oneline) 남길지 정한다.
+        self.log_sql_format: str = str(
+            _get_nested("logging", "sql", "format", "multiline") or "multiline"
+        ).strip().lower()
         # 로그에 남길 SQL 의 최대 길이다. 넘으면 잘라 내고 원문 길이를 함께 표기한다.
-        self.log_sql_max_length: int = int(_get_nested("logging", "sql", "max_length", 4000))
+        self.log_sql_max_length: int = int(_get_nested("logging", "sql", "max_length", 20000))
         # 바인드 파라미터를 함께 남길지 정한다(예: overwrite_partitions 선삭제의 파티션 값).
         self.log_sql_params: bool = _to_bool(_get_nested("logging", "sql", "params", True))
 

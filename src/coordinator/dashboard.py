@@ -206,10 +206,20 @@ def masked_config(settings) -> list[dict]:
          "로그 보관 일수(초과분 자동 삭제)"),
         ("logging", "sql.enabled", settings.log_sql_enabled,
          "실행 SQL 로깅(core.sql, INFO 로 항상 기록 — 로그 레벨과 무관)"),
+        ("logging", "sql.format", settings.log_sql_format,
+         "SQL 로그 형식(multiline=원문 줄 보존, oneline=한 줄로 접기)"),
         ("logging", "sql.max_length", settings.log_sql_max_length,
          "실행 SQL 로그 최대 길이(초과분 절단 표기)"),
         ("logging", "sql.params", settings.log_sql_params,
          "실행 SQL 의 바인드 파라미터 동반 기록"),
+        ("logging", "http.enabled", settings.log_http_enabled,
+         "HTTP 요청·응답 로깅(core.http, 요청 하나를 레코드 하나로)"),
+        ("logging", "http.level", settings.log_http_level,
+         "API 호출(POST 등)·실패 응답을 남길 레벨"),
+        ("logging", "http.read_level", settings.log_http_read_level,
+         "성공한 조회(GET 등, 폴링)를 남길 레벨"),
+        ("logging", "http.max_body", settings.log_http_max_body,
+         "HTTP 본문 로그 최대 바이트(초과분 절단)"),
     ]
     return [{"section": s, "key": k, "value": v, "desc": d} for s, k, v, d in rows]
 

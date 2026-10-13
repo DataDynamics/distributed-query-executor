@@ -19,6 +19,23 @@ from core.config import settings as default_settings
 # 동시에 여러 job 을 처리해도 로그의 식별자가 서로 섞이지 않는다.
 job_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("job_id", default="-")
 task_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("task_id", default="-")
+# 현재 처리 중인 HTTP 요청의 식별자(없으면 "-")다. core.http_logging 미들웨어가 요청마다 넣는다.
+# job 컨텍스트가 없는 로그(query-execute·query-count·템플릿 렌더 등)는 job_id 자리에
+# ``req-<id>`` 를 대신 찍어, 같은 요청에서 나온 coordinator·executor 로그를 grep 한 번으로 묶는다.
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+def current_job_label() -> str:
+    """로그의 job_id 자리에 찍을 값을 정한다. job 컨텍스트가 우선이고, 없으면 요청 식별자를 쓴다.
+
+    job 이 만들어진 뒤의 로그는 job_id 로 찍혀야 job 단위 추적(대시보드·이력)과 맞으므로, 요청
+    식별자는 job 컨텍스트가 없을 때만 대신 쓴다. 둘 다 없으면 ``-`` 다.
+    """
+    jid = job_id_var.get()
+    if jid != "-":
+        return jid
+    rid = request_id_var.get()
+    return f"req-{rid}" if rid != "-" else "-"
 
 
 @contextmanager
@@ -152,7 +169,7 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
 
     def _record_factory(*args, **kwargs):
         record = _base_factory(*args, **kwargs)
-        record.job_id = job_id_var.get()
+        record.job_id = current_job_label()
         record.task_id = task_id_var.get()
         return record
 

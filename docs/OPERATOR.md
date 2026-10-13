@@ -88,20 +88,55 @@ tail -f $L/query-executor-server-8087-warn.log
 grep 'a1b2c3d4' $L/query-coordinator-server.log $L/query-executor-server-*.log
 ```
 
+`/query-execute`·`/query-count` 처럼 작업을 만들지 않는 요청은 작업 식별자 자리에 `req-<요청 식별자>`
+가 찍힌다. 요청 식별자는 응답 헤더 `X-Request-ID` 로 클라이언트에 돌아가고, coordinator 가 executor
+를 부를 때도 같은 값을 실어 보낸다. 사용자가 이 헤더 값을 알려 주면 그 요청이 두 서비스에 남긴 로그를
+한 번에 모을 수 있다.
+
+```bash
+grep -A40 'req-ce5ee974149a' $L/query-coordinator-server.log $L/query-executor-server-*.log
+```
+
+SQL 과 HTTP 로그는 레코드 하나가 여러 줄이므로 `grep` 에 `-A` 를 붙여 뒤따르는 줄까지 본다.
+
 실행 SQL은 `logging.sql.enabled=true`일 때 INFO로 기록된다. 로거와 핸들러의 레벨을
-WARNING 이상으로 높이면 기록되지 않으므로, SQL 추적이 필요하면 INFO 이하를 유지한다.
+WARNING 이상으로 높이면 기록되지 않으므로, SQL 추적이 필요하면 INFO 이하를 유지한다. 기본 형식
+(`logging.sql.format=multiline`)은 머리줄 아래에 SQL 원문을 줄바꿈과 들여쓰기 그대로, 줄마다
+`    | ` 를 붙여 남긴다.
 
 ```
-SQL 실행 datasource=impala phase=SELECT | SELECT user_id, ... WHERE dt IN ('2026-01-01')
-SQL 실행 datasource=greenplum phase=INSERT target=public.sales | INSERT INTO ...
+SQL 실행 datasource=impala phase=SOURCE_SELECT (4줄)
+    | SELECT user_id, amount, region, dt
+    | FROM sales
+    | WHERE dt IN ('2026-01-01')
+    |   AND region IN ( 'KR' )
+```
+
+coordinator 는 템플릿을 렌더한 직후에도 어떤 파라미터로 어떤 SQL 이 만들어졌는지를 조각별로 남긴다.
+검증에 걸려 422 가 나간 요청도 이 기록이 남으므로, 사용자가 "요청이 거절됐다" 고 할 때 실제로 만들어진
+SQL 을 확인할 수 있다.
+
+```
+템플릿 렌더 template=order_count params={'regions': ['KR'], ...} (datasource=trino)
+  [select]
+    | SELECT o.order_id,
+    | ...
+  [count]
+    | SELECT COUNT(*) AS row_count FROM (
+    | ...
 ```
 
 `datasource` 로 어느 엔진에 던진 문장인지 갈리므로 소스에서 못 읽은 것인지 대상에 못 넣은 것인지가
 한눈에 구분된다. Trino 로 읽을 줄 알았던 쿼리가 Impala 로 나간 것 같은 사고도 이 표시 하나로
-판별된다. 아주 긴 SQL 은 잘리는데, 잘린 경우에는 전문이 아니라는 표시가 함께 남는다.
+판별된다. `logging.sql.max_length`(기본 20000자)를 넘는 SQL 은 잘리는데, 잘린 경우에는 전문이
+아니라는 표시가 함께 남는다. 로그를 한 줄 단위로 처리하는 도구를 붙인다면 `logging.sql.format=oneline`
+으로 바꿔 예전처럼 한 줄로 접는다.
 
-HTTP 요청과 응답까지 보려면 로그 레벨을 DEBUG 로 내린다. 다만 양이 크게 늘므로 문제를 좇는 동안만
-쓰고 되돌린다.
+HTTP 요청과 응답은 기본 INFO 에서도 API 호출(POST 등)과 실패 응답(400 이상)이 남는다. 요청 하나가
+머리줄(메서드·경로·상태·소요시간·`req_id`)과 요청·응답 본문을 담은 레코드 하나가 되며, 본문은
+마스킹을 거쳐 `logging.http.max_body`(기본 8192바이트)에서 잘린다. 성공한 조회(GET 등)는 대시보드
+폴링이 몇 초마다 들어오므로 `logging.http.read_level`(기본 DEBUG)로만 남는다. 조회까지 따라가야 하면
+이 값을 INFO 로 올리고 문제를 좇은 뒤 되돌린다.
 
 ---
 

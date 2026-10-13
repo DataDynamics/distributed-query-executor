@@ -11,16 +11,26 @@ import asyncio
 import logging
 
 from core.logging import job_log_context, job_id_var, task_id_var, with_log_context
-from core.sqllog import collapse_sql, format_params, format_sql, log_sql, datasource_of
+from core.sqllog import (
+    BLOCK_PREFIX,
+    collapse_sql,
+    datasource_of,
+    format_params,
+    format_sql,
+    format_sql_block,
+    log_sql,
+    log_template_render,
+)
 
 
 class _Cfg:
     """log_sql 이 읽는 설정만 갖춘 최소 더블."""
 
-    def __init__(self, enabled=True, max_length=4000, params=True):
+    def __init__(self, enabled=True, max_length=4000, params=True, fmt="multiline"):
         self.log_sql_enabled = enabled
         self.log_sql_max_length = max_length
         self.log_sql_params = params
+        self.log_sql_format = fmt
 
 
 # ───────────────────────── 순수 포매터 ─────────────────────────
@@ -101,6 +111,78 @@ def test_log_sql_은_예외를_밖으로_올리지_않는다(caplog):
 
     # 로깅 실패가 적재를 깨뜨리면 안 된다.
     log_sql("impala", "SELECT 1", settings=_Boom())
+
+
+# ───────────────────────── multiline 형식 ─────────────────────────
+
+TEMPLATE_SQL = """
+        SELECT o.order_id,
+               o.amount
+        FROM orders o   
+        WHERE o.region IN ( 'KR' )
+
+"""
+
+
+def test_format_sql_block_은_줄과_상대_들여쓰기를_지킨다():
+    """공통 들여쓰기·앞뒤 빈 줄·줄 끝 공백만 걷고 원래 모양은 그대로 둔다."""
+    assert format_sql_block(TEMPLATE_SQL, 0) == [
+        "SELECT o.order_id,",
+        "       o.amount",
+        "FROM orders o",
+        "WHERE o.region IN ( 'KR' )",
+    ]
+
+
+def test_format_sql_block_절단은_마지막_줄에_표기한다():
+    lines = format_sql_block("SELECT 1\nFROM t\nWHERE x = 1", 10)
+    assert lines[0] == "SELECT 1"
+    assert "절단" in lines[-1]
+
+
+def test_log_sql_multiline_은_레코드_하나에_원문_줄을_남긴다(caplog):
+    with caplog.at_level(logging.INFO, logger="core.sql"):
+        log_sql("trino", TEMPLATE_SQL, phase="QUERY_EXECUTE", params=["KR"], settings=_Cfg())
+    recs = [r for r in caplog.records if r.name == "core.sql"]
+    assert len(recs) == 1
+    lines = recs[0].getMessage().split("\n")
+    assert lines[0] == "SQL 실행 datasource=trino phase=QUERY_EXECUTE (4줄)"
+    assert lines[1] == BLOCK_PREFIX + "SELECT o.order_id,"
+    assert lines[2] == BLOCK_PREFIX + "       o.amount"
+    assert lines[-1] == "    params=['KR']"
+
+
+def test_log_sql_oneline_은_예전처럼_한_줄로_접는다(caplog):
+    with caplog.at_level(logging.INFO, logger="core.sql"):
+        log_sql("trino", TEMPLATE_SQL, settings=_Cfg(fmt="oneline"))
+    msg = caplog.records[-1].getMessage()
+    assert "\n" not in msg
+    assert msg.endswith("| SELECT o.order_id, o.amount FROM orders o WHERE o.region IN ( 'KR' )")
+
+
+def test_log_template_render_는_조각별로_남기고_빈_조각은_건너뛴다(caplog):
+    with caplog.at_level(logging.INFO, logger="core.sql"):
+        log_template_render(
+            "order_count", [{"name": "regions", "value": ["KR"]}],
+            {"select": TEMPLATE_SQL, "count": "SELECT COUNT(*) FROM (\nSELECT 1\n) qc_src", "insert": None},
+            note="datasource=trino", settings=_Cfg(),
+        )
+    msg = caplog.records[-1].getMessage()
+    lines = msg.split("\n")
+    assert lines[0].startswith("템플릿 렌더 template=order_count params=")
+    assert lines[0].endswith("(datasource=trino)")
+    assert "  [select]" in lines and "  [count]" in lines and "  [insert]" not in lines
+    assert BLOCK_PREFIX + "       o.amount" in lines
+
+
+def test_log_template_render_oneline_과_비활성(caplog):
+    with caplog.at_level(logging.INFO, logger="core.sql"):
+        log_template_render("t", None, {"select": "SELECT 1", "count": "SELECT 2"},
+                            settings=_Cfg(fmt="oneline"))
+        n = len(caplog.records)
+        log_template_render("t", None, {"select": "SELECT 1"}, settings=_Cfg(enabled=False))
+    assert n == 2 and len(caplog.records) == 2
+    assert caplog.records[0].getMessage().endswith("[select] | SELECT 1")
 
 
 def test_datasource_of():

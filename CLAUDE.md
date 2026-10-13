@@ -224,17 +224,23 @@ INSERT 치환·DROP 이 같은 이름을 공유하며, 비우면 예전처럼 se
 
 **`core/logging.py`** 는 일별 로그 보관, `[job_id][task_id]` 컨텍스트와 WARNING 전용 파일을
 관리한다. `run_in_executor`는 컨텍스트를 복사하지 않으므로 백엔드 호출을
-`with_log_context(fn, *args)`로 감싸 식별자를 유지한다.
+`with_log_context(fn, *args)`로 감싸 식별자를 유지한다. job 컨텍스트가 없으면 job_id 자리에
+요청 식별자 `req-<id>` 를 대신 찍는다(`request_id_var`·`current_job_label`).
 
-**`core/sqllog.py`** 는 SQL을 마스킹·한 줄 압축·길이 제한 후 INFO로 기록한다.
-`logging.sql.enabled=false`로 끌 수 있고, 로거와 핸들러의 레벨 필터를 따른다.
-`datasource_of(cursor)`로 소스를 판별하며 소스 읽기, GP 실행, 미리보기를 계측한다.
-검증은 `tests/test_sql_logging.py`에 있다.
+**`core/sqllog.py`** 는 SQL을 마스킹·길이 제한 후 INFO로 기록한다. 기본 형식(`logging.sql.format=
+multiline`)은 머리줄 아래에 원문 줄을 `    | ` 를 붙여 그대로 남기는 레코드 하나이고, `oneline` 은
+한 줄로 접는다. `log_template_render` 는 coordinator 가 템플릿 렌더 직후(검증 전) 조각별 SQL 을,
+`log_sql_parts` 는 dry-run 계획을 같은 형식으로 남긴다. `logging.sql.enabled=false`로 끌 수 있고,
+로거와 핸들러의 레벨 필터를 따른다. `datasource_of(cursor)`로 소스를 판별하며 소스 읽기, GP 실행,
+미리보기를 계측한다. 검증은 `tests/test_sql_logging.py`에 있다.
 
-**`core/http_logging.py`** 는 DEBUG에서 요청·응답을 기록하는 순수 ASGI 미들웨어다.
-원본은 그대로 전달하고 본문 복사본만 `max_body`까지 보관한다. 본문·헤더는
-`core.masking`으로 가리며 health·metrics·정적 파일·docs는 기본 제외한다.
-두 앱의 `install_http_logging`으로 등록하며 순수 포매팅 함수는 별도로 테스트한다.
+**`core/http_logging.py`** 는 요청 하나를 머리줄과 본문을 담은 레코드 하나로 남기는 순수 ASGI
+미들웨어다. API 호출(POST 등)과 실패 응답은 `logging.http.level`(INFO), 성공한 조회는
+`read_level`(DEBUG)로 남긴다(`completion_level`). 요청마다 `X-Request-ID` 를 정해 응답 헤더로
+돌려주고(들어온 값은 이어 쓴다) `request_id_var` 에 넣으며, coordinator 는 executor 호출에
+`outgoing_headers()` 로 실어 보낸다. 원본은 그대로 전달하고 본문 복사본만 `max_body`까지 보관한다.
+본문·헤더는 `core.masking`으로 가리며 health·metrics·정적 파일·docs는 기본 제외한다. 두 앱의
+`install_http_logging`으로 등록하며 순수 포매팅 함수는 별도로 테스트한다.
 
 ### 데이터소스 미리보기(`core/dbprobe.py`)
 
@@ -349,11 +355,11 @@ VU 감소와 drain 중에는 진행 중인 작업을 기다린다. drain 시간�
   `coordinator.max_dispatch_concurrency`(task 디스패치 32),
   `executor.max_concurrent_tasks`(executor 당 8), `greenplum.pool_max`(GP 커넥션 풀, 0 이면 동시
   task 수와 동일)가 다층으로 걸린다.
-- **HTTP 로깅** — `logging.http.{enabled,bodies,max_body,headers,exclude_paths}`(기본 on/on/
-  2048/off/health·metrics·정적·docs). 별도 스위치가 아니라 **로그 레벨이 DEBUG 일 때만** 기록되며,
-  `enabled=false` 로 DEBUG 여도 끌 수 있다.
-- **실행 SQL 로깅** — `logging.sql.{enabled,max_length,params}`(기본 on/4000/on). HTTP 로깅과 달리
-  INFO로 기록하며 로거·핸들러의 레벨 필터를 따른다.
+- **HTTP 로깅** — `logging.http.{enabled,level,read_level,bodies,max_body,headers,exclude_paths}`
+  (기본 on/INFO/DEBUG/on/8192/off/health·metrics·정적·docs). API 호출과 실패 응답은 `level`, 성공한
+  조회(폴링)는 `read_level` 로 남긴다. `X-Request-ID` 는 로깅이 꺼져 있어도 붙는다.
+- **실행 SQL 로깅** — `logging.sql.{enabled,format,max_length,params}`(기본 on/multiline/20000/on).
+  INFO로 기록하며 로거·핸들러의 레벨 필터를 따른다. 템플릿 렌더 로그도 같은 설정을 따른다.
 - **멀티 coordinator** — `store.backend=postgres` 와 공유 `history.db_dsn`,
   `executor.self_report=true` 를 함께 켠다.
 - **백엔드 선택** — `build_backend` 는 **`greenplum.dsn` 하나만** 본다. 비어 있으면 경고를 남기고

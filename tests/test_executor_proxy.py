@@ -35,7 +35,7 @@ def _fake_get_client(handler):
         async def __aexit__(self, *a):
             return False
 
-        async def get(self, url, params=None):
+        async def get(self, url, params=None, headers=None):
             return handler(url, params)
 
     return _FakeClient

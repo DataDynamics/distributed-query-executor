@@ -200,7 +200,7 @@ def _fake_client_factory(recorder, *, fail_urls=(), status_map=None):
         async def __aexit__(self, *a):
             return False
 
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
             recorder.append(url)
             base = "/".join(url.split("/")[:3])  # scheme://host:port (경로 무관하게 executor base)
             if base in fail_urls:

@@ -181,13 +181,19 @@ bin/load-test run -c http://coord:8088 --body job.json --vus 20 --ramp-up 60s --
 나간 것 같은 사고를 로그만으로 판별할 수 있습니다.
 
 ```
-INFO 2026-08-07 09:51:15.091 18355 executor sqllog.py:log_sql:121 [job_abc123][task_0] - SQL 실행 datasource=trino phase=SOURCE_SELECT | SELECT a, b FROM hive.default.sales WHERE dt BETWEEN DATE '2026-07-01' AND DATE '2026-07-03'
-INFO 2026-08-07 09:51:15.091 18355 executor sqllog.py:log_sql:121 [job_abc123][task_0] - SQL 실행 datasource=greenplum phase=INSERT | INSERT INTO public.sales SELECT * FROM dwtemp.s3ext_job_abc123
+INFO 2026-08-07 09:51:15.091 18355 executor sqllog.py:log_sql:177 [job_abc123][task_0] - SQL 실행 datasource=trino phase=SOURCE_SELECT (3줄)
+    | SELECT a, b
+    | FROM hive.default.sales
+    | WHERE dt BETWEEN DATE '2026-07-01' AND DATE '2026-07-03'
 ```
 
-비밀값은 마스킹되고 SQL 은 한 줄로 접혀 `log.sql.max_length`(기본 4000자)에서 잘립니다(잘린 경우
-`… (총 N자 중 M자 절단)` 이 붙습니다). 끄려면 `log.sql.enabled=false`. `app.debug=true`(또는
-`log.level=DEBUG`)이면 HTTP 요청/응답도 `core.http` 로거로 기록됩니다(비밀값 마스킹). 설정 항목의
+SQL 은 기본으로 줄바꿈과 들여쓰기를 그대로 남기며(`log.sql.format=multiline`, 한 줄로 접으려면
+`oneline`), coordinator 는 템플릿을 렌더한 직후의 SQL 도 조각별로 남깁니다. 비밀값은 마스킹되고
+`log.sql.max_length`(기본 20000자)에서 잘립니다(잘린 경우 `… (총 N자 중 M자 절단)` 이 붙습니다).
+끄려면 `log.sql.enabled=false`. HTTP 요청/응답은 API 호출(POST 등)과 실패 응답이 INFO 로, 성공한
+조회(GET)는 DEBUG 로 `core.http` 로거에 남습니다(비밀값 마스킹). 요청마다 `X-Request-ID` 가 붙어
+job 이 없는 요청의 로그에는 `[req-<id>]` 가 찍히고, coordinator 가 executor 를 부를 때도 같은 값이
+전달됩니다. 설정 항목의
 전체 목록과 세부 동작은 `config.yml` 과 [`docs/DESIGN.md`](docs/DESIGN.md) 를 참고하세요.
 
 ## 핵심 개념

@@ -77,6 +77,9 @@ ENUM_CHOICES: dict[str, list[str]] = {
     "copy.format": ["text", "binary"],
     "log.level": ["DEBUG", "INFO", "WARNING", "ERROR"],
     "log.warn.level": ["WARNING", "ERROR"],
+    "log.http.level": ["DEBUG", "INFO", "WARNING"],
+    "log.http.read_level": ["DEBUG", "INFO", "WARNING"],
+    "log.sql.format": ["multiline", "oneline"],
     "query.sql_dialect": ["hive", "impala", "trino", "postgres"],
 }
 

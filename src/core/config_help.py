@@ -172,24 +172,37 @@ FIELD_HELP: dict[str, str] = {
 
     # ── 로깅 ──────────────────────────────────────────────────────────────
     "log.level": (
-        "메인 로그에 남길 최소 레벨이다. 운영은 INFO 로 두고, DEBUG 는 HTTP 요청·응답 본문까지 "
-        "쏟아지므로 문제를 좇는 동안만 잠깐 쓴다."
+        "메인 로그에 남길 최소 레벨이다. 운영은 INFO 로 두고, DEBUG 는 단계 전이와 대시보드 폴링 같은 "
+        "조회 요청까지 쏟아지므로 문제를 좇는 동안만 잠깐 쓴다."
     ),
     "log.sql.enabled": (
         "소스와 대상에 실제로 던진 SQL 을 모두 남긴다. 무엇을 읽어 무엇을 적재했는지가 사고 추적의 "
         "출발점이라 로그 레벨과 무관하게 INFO 로 항상 기록하며, 특별한 사정이 없으면 켜 둔다."
     ),
+    "log.sql.format": (
+        "multiline 은 템플릿으로 렌더한 SQL 을 줄바꿈과 들여쓰기 그대로, 각 줄 앞에 '    | ' 를 붙여 "
+        "남긴다. 로그 수집기가 한 줄을 한 레코드로 다룬다면 oneline 으로 바꿔 한 줄로 접는다."
+    ),
     "log.sql.max_length": (
         "SQL 한 건을 몇 글자까지 남길지 정한다. IN 목록이 긴 쿼리는 로그를 크게 부풀리므로 상한을 두되, "
-        "잘린 경우에는 전문이 아니라는 표시가 함께 남는다."
+        "잘린 경우에는 전문이 아니라는 표시가 함께 남는다. 0 이면 자르지 않는다."
     ),
     "log.sql.params": (
         "바인드 파라미터(파티션 값 등)를 SQL 과 함께 남긴다. 어느 값 범위를 처리했는지 알려면 켜 두는 편이 "
         "좋고, 값 자체가 민감하다면 끈다."
     ),
     "log.http.enabled": (
-        "HTTP 요청과 응답을 남긴다. 로그 레벨이 DEBUG 일 때만 실제로 기록되므로, 이 값은 'DEBUG 로 내려도 "
-        "HTTP 만은 남기지 않겠다'는 뜻의 스위치에 가깝다."
+        "HTTP 요청과 응답을 남긴다. 요청 하나가 끝나면 머리줄과 본문을 레코드 하나로 남기며, 어느 요청을 "
+        "어느 레벨로 남길지는 log.http.level 과 log.http.read_level 이 정한다. 끄더라도 X-Request-ID "
+        "헤더와 로그의 req-<id> 표시는 그대로 붙는다."
+    ),
+    "log.http.level": (
+        "API 호출(POST·PUT·PATCH·DELETE)과 실패 응답(400 이상)을 남길 레벨이다. 기본 INFO 라 운영 레벨에서도 "
+        "무엇을 요청받아 무엇을 돌려줬는지가 남는다. 메인 로그 레벨보다 낮게 두면 기록되지 않는다."
+    ),
+    "log.http.read_level": (
+        "성공한 조회(GET·HEAD·OPTIONS)를 남길 레벨이다. 대시보드와 클라이언트 폴링이 몇 초마다 들어오므로 "
+        "기본 DEBUG 로 두고, 조회까지 따라가야 할 때만 INFO 로 올린다."
     ),
     "log.http.bodies": (
         "요청·응답 본문까지 남길지 정한다. 본문에는 SQL 전문이나 자격증명이 담길 수 있어 마스킹을 거치지만, "
@@ -359,7 +372,8 @@ RELATED: dict[str, list[str]] = {
     "s3.bucket": ["s3.pxf_server", "s3.external_schema", "s3.delete_on_cleanup"],
     "s3.pxf_server": ["s3.bucket"],
     "log.sql.enabled": ["log.sql.max_length", "log.sql.params"],
-    "log.http.enabled": ["log.level", "log.http.bodies"],
+    "log.http.enabled": ["log.level", "log.http.level", "log.http.read_level", "log.http.bodies"],
+    "log.sql.format": ["log.sql.max_length"],
     "coordinator.executor_select": ["coordinator.executor_health_source", "monitor.enabled"],
     "coordinator.task_timeout_s": ["coordinator.task_connect_timeout_s"],
     "coordinator.task_connect_timeout_s": ["coordinator.task_max_retries", "coordinator.task_failover"],

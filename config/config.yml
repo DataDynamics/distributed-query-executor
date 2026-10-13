@@ -37,13 +37,17 @@ logging:
     enabled: ${log.warn.enabled:true}             # WARNING 전용 로그 사용 여부
     level: ${log.warn.level:WARNING}              # 전용 로그에 모을 최소 레벨(WARNING/ERROR)
     suffix: ${log.warn.suffix:-warn}              # 메인 파일명 stem 뒤에 붙는 접미사
-  # HTTP 요청/응답 로깅(core.http 로거). 메인 로그 레벨이 DEBUG 일 때만 자동으로 기록된다
-  # (app.debug=true 또는 log.level=DEBUG). enabled=false 면 DEBUG 여도 끈다. 본문·헤더는
-  # 마스킹·절단하며, 잡음 경로(health/metrics/정적/docs)는 exclude_paths 로 제외한다.
+  # HTTP 요청/응답 로깅(core.http 로거). 요청 하나가 끝나면 머리줄(메서드·경로·상태·소요시간·
+  # req_id)과 본문을 레코드 하나로 남긴다. API 호출(POST 등)과 실패 응답(400 이상)은 level,
+  # 성공한 조회(GET 등, 대시보드 폴링)는 read_level 로 남긴다. 요청마다 X-Request-ID 를 붙여
+  # job 이 없는 로그의 job_id 자리에 req-<id> 를 찍는다. 본문·헤더는 마스킹·절단하며,
+  # 잡음 경로(health/metrics/정적/docs)는 exclude_paths 로 제외한다.
   http:
-    enabled: ${log.http.enabled:true}             # DEBUG 여도 끌 수 있는 스위치
+    enabled: ${log.http.enabled:true}             # HTTP 요청/응답 기록 여부
+    level: ${log.http.level:INFO}                 # API 호출(POST 등)·실패 응답을 남길 레벨
+    read_level: ${log.http.read_level:DEBUG}      # 성공한 조회(GET 등)를 남길 레벨(폴링 잡음)
     bodies: ${log.http.bodies:true}               # 요청/응답 본문 포함(마스킹·max_body 절단)
-    max_body: ${log.http.max_body:2048}           # 본문 로그 최대 바이트(초과분 절단)
+    max_body: ${log.http.max_body:8192}           # 본문 로그 최대 바이트(초과분 절단)
     headers: ${log.http.headers:false}            # 요청/응답 헤더 포함(민감 헤더 값 마스킹)
     # 로깅 제외 경로(쉼표 구분, 정확 일치 또는 prefix/ 하위)
     exclude_paths: ${log.http.exclude_paths:/health,/metrics,/assets,/favicon.ico,/docs,/redoc,/openapi.json}
@@ -51,9 +55,11 @@ logging:
   # 남긴다 — 어떤 데이터소스(impala/trino/greenplum/history)에 어떤 쿼리를 던졌는지는
   # 사고 추적의 1차 근거라, 운영 기본 레벨에서 기록이 없으면 안 된다. 로그 줄에는
   # core.logging 이 [job_id][task_id] 를 자동으로 붙인다.
+  # coordinator 가 템플릿을 렌더한 직후의 SQL(조각별)도 같은 설정으로 남긴다.
   sql:
     enabled: ${log.sql.enabled:true}              # 실행 SQL 기록 여부(감사 목적이라 기본 on)
-    max_length: ${log.sql.max_length:4000}        # SQL 한 건의 최대 기록 길이(초과분 절단 표기)
+    format: ${log.sql.format:multiline}           # multiline(줄바꿈·들여쓰기 보존) | oneline(한 줄로 접기)
+    max_length: ${log.sql.max_length:20000}       # SQL 한 건의 최대 기록 길이(초과분 절단 표기)
     params: ${log.sql.params:true}                # 바인드 파라미터(파티션 값 등) 동반 기록
 
 # ───────── Coordinator ─────────

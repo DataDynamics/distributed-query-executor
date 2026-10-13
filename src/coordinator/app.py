@@ -37,9 +37,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
 
 from core.dbprobe import clamp_limit, run_postgres_select
-from core.http_logging import install_http_logging
+from core.http_logging import install_http_logging, outgoing_headers
 from core.logging import job_log_context
 from core.metrics import collect_system_metrics
+from core.sqllog import log_sql_parts, log_template_render
 from core import s3_stage
 from core.timeutil import format_at_fields, now_dt
 from core.version import __version__
@@ -363,9 +364,19 @@ def _build_fanout(
 
     dialect = req.sql_dialect or default_dialect
     sub_queries: list = []
-    for pair in pairs:
+    for idx, pair in enumerate(pairs):
         ctx = _ctx(pair)
         select_sql = engine.render_query(req.template_id, ctx)
+        if idx == 0:
+            # task 마다 SELECT 는 날짜만 다르므로 첫 task 것과 job 이 공유하는 INSERT·staging 을
+            # 한 번만 남긴다(구간이 길면 task 가 수백 개라 전부 남기면 로그가 묻힌다). 각 task 의
+            # 실제 SELECT 는 executor 가 실행 직전에 SOURCE_SELECT 로 남긴다.
+            log_template_render(req.template_id, req.params, {
+                "select": select_sql,
+                "staging_ddl": base.staging_ddl,
+                "insert": base.insert,
+                "external_columns": base.external_columns,
+            }, note=f"날짜 fan-out task {len(pairs)}개, select 는 첫 task({ctx['task_date']}) 것")
         validate_select_query(select_sql, dialect=dialect)  # 다중 문과 비-SELECT 를 막는 방어다
         # 관측용 파티션 값이다. point 는 그 하루를, pair 는 [시작일, 끝일) 구간을 담는다.
         marks = [ctx["task_date"]] if req.task_bound == "point" else [ctx["task_date"], ctx["task_date_end"]]
@@ -397,6 +408,15 @@ def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
     result = engine.render(
         req.template_id, _render_params(values, signs), request_scalars=request_scalars
     )
+    # 어떤 파라미터로 어떤 SQL 이 만들어졌는지를 렌더 시점에 남긴다. 이후 검증(parser)이
+    # 실패해도 원인이 된 SQL 이 로그에 남아 있도록 검증보다 먼저 기록한다.
+    log_template_render(req.template_id, req.params, {
+        "select": result.select,
+        "wrapper": result.wrapper,
+        "staging_ddl": result.staging_ddl,
+        "insert": result.insert,
+        "external_columns": result.external_columns,
+    }, note=f"exec_mode={result.exec_mode}")
 
     # 요청이 명시하지 않은 스칼라만 manifest 기본값으로 채운다(exec_mode 는 아래에서 확정).
     for key, val in result.defaults.items():
@@ -824,22 +844,23 @@ def create_app(
                     "partition_values": sq.partition_values,
                     "sub_query": sq.sql,
                 }
-                logger.info(
-                    "[dry-run] task#%d (exec_mode=%s) sub_query=%s",
-                    idx, req.exec_mode, sq.sql,
-                )
+                parts = {"sub_query": sq.sql}
                 if req.exec_mode == "stage_insert":
                     entry["staging_table"] = req.staging_table
                     entry["staging_ddl"] = req.staging_ddl
                     entry["insert_sql"] = req.wrapper_query
-                    logger.info("[dry-run] task#%d staging_ddl=%s", idx, req.staging_ddl)
-                    logger.info("[dry-run] task#%d insert_sql=%s", idx, req.wrapper_query)
+                    parts.update(staging_ddl=req.staging_ddl, insert_sql=req.wrapper_query)
                 elif req.exec_mode == "s3_stage":
                     entry["staging_table"] = req.staging_table
                     entry["external_columns"] = req.external_columns
                     entry["insert_sql"] = req.insert_sql
-                    logger.info("[dry-run] task#%d external_columns=%s insert_sql=%s",
-                                idx, req.external_columns, req.insert_sql)
+                    parts.update(external_columns=req.external_columns, insert_sql=req.insert_sql)
+                # task 하나가 실행할 SQL 들을 실행 SQL 로그와 같은 형식(조각별 원문 줄)으로 남긴다.
+                log_sql_parts(
+                    f"[dry-run] task#{idx} exec_mode={req.exec_mode} executor={url} "
+                    f"partition_values={sq.partition_values}",
+                    parts,
+                )
                 plan.append(entry)
             return JSONResponse(
                 status_code=200,
@@ -1186,7 +1207,7 @@ def create_app(
         timeout = httpx.Timeout(10.0, connect=settings.task_connect_timeout_s)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.get(target, params=params or {})
+                resp = await client.get(target, params=params or {}, headers=outgoing_headers())
         except httpx.HTTPError as e:
             raise HTTPException(status_code=502, detail=f"executor 프록시 실패({urls[idx]}): {e}")
         if resp.status_code >= 400:
@@ -1452,7 +1473,9 @@ def create_app(
             timeout = httpx.Timeout(settings.task_timeout_s, connect=settings.task_connect_timeout_s)
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.post(target, json={"sql": req.sql, "limit": limit})
+                    resp = await client.post(
+                        target, json={"sql": req.sql, "limit": limit}, headers=outgoing_headers(),
+                    )
             except httpx.HTTPError as e:
                 raise HTTPException(status_code=502, detail=f"executor 프록시 실패({req.executor_url}): {e}")
             if resp.status_code >= 400:
@@ -1542,8 +1565,10 @@ def create_app(
                 target = url.rstrip("/") + "/query-run"
                 try:
                     # datasource 를 함께 실어 executor 쪽 실행 SQL 로그에도 엔진 이름이 남게 한다.
+                    # X-Request-ID 를 실어 보내 executor 쪽 실행 SQL 로그에도 같은 req-<id> 가 찍히게 한다.
                     resp = await http.post(
                         target, json={"sql": sql, "limit": limit, "datasource": name},
+                        headers=outgoing_headers(),
                     )
                 except httpx.HTTPError as e:
                     last_err = e
@@ -1577,7 +1602,7 @@ def create_app(
         ``limit``(최대 10000)으로 강제한다 — 대량 이관은 계속 ``/jobs`` 를 쓴다.
         """
         limit = clamp_limit(req.limit)
-        sql, datasource = _render_template_select(req)
+        sql, _, datasource = _render_template_select(req)
         body = await _execute_select(datasource, sql, limit, op="query-execute")
         # 렌더된 SQL(감사용)과 실제 실행 executor(executed_by, 직접 실행이면 null)를 함께 반환.
         # datasource 는 항상 확정값으로 싣는다(trino /query-run 응답엔 datasource 가 없으므로 보정).
@@ -1596,8 +1621,7 @@ def create_app(
         세므로 행이 coordinator 로 흘러오지 않아, ``limit`` 상한에 묶이지 않고 대량 결과의
         건수도 정확히 얻는다. 이관 전 대상 건수 확인이나 이관 뒤 적재 건수 대조에 쓴다.
         """
-        sql, datasource = _render_template_select(req)
-        count_sql = build_count_query(sql)
+        sql, count_sql, datasource = _render_template_select(req, count=True)
         # 건수 쿼리는 한 행 한 열을 돌려주므로 limit 은 1 이면 충분하다.
         body = await _execute_select(datasource, count_sql, 1, op="query-count")
         return {
@@ -1610,12 +1634,17 @@ def create_app(
             "executed_by": body.get("executed_by"),
         }
 
-    def _render_template_select(req) -> tuple[str, str]:
+    def _render_template_select(req, *, count: bool = False) -> tuple[str, Optional[str], str]:
         """``/query-execute``·``/query-count`` 공통 초입이다. select 조각을 렌더·검증하고 데이터소스를 확정한다.
 
-        템플릿 엔진이 꺼져 있으면 404, 렌더 실패(TemplateError)와 검증 실패(QueryValidationError)는
-        각 예외 핸들러가 422 로 바꾼다. 다중 문과 비-SELECT 는 여기서 막히므로, 뒤에서 이 SQL 을
-        서브쿼리로 감싸도 다른 문이 끼어들 수 없다.
+        ``count=True`` 면 :func:`build_count_query` 로 감싼 건수 쿼리도 함께 만들어
+        ``(SELECT, 건수 쿼리, 데이터소스)`` 를 돌려준다(아니면 건수 쿼리 자리는 None).
+
+        렌더 결과는 검증보다 먼저 로그에 남긴다. 검증이 실패해 422 가 나가도 원인이 된 SQL 을
+        로그에서 볼 수 있게 하기 위해서다. 템플릿 엔진이 꺼져 있으면 404, 렌더 실패
+        (TemplateError)와 검증 실패(QueryValidationError)는 각 예외 핸들러가 422 로 바꾼다. 다중
+        문과 비-SELECT 는 여기서 막히므로, 뒤에서 이 SQL 을 서브쿼리로 감싸도 다른 문이 끼어들 수
+        없다.
         """
         if template_engine is None:
             raise HTTPException(
@@ -1623,10 +1652,15 @@ def create_app(
             )
         params = _query_params_to_dict(req.params)
         sql = template_engine.render_query(req.template_id, params)
-        validate_select_query(sql, dialect=req.sql_dialect or DIALECT)
+        count_sql = build_count_query(sql) if count else None
         # 요청의 datasource 가 서버의 source.type 보다 우선한다.
         datasource = (req.datasource or getattr(settings, "source_type", "impala") or "impala").lower()
-        return sql, datasource
+        log_template_render(
+            req.template_id, params, {"select": sql, "count": count_sql},
+            note=f"datasource={datasource}",
+        )
+        validate_select_query(sql, dialect=req.sql_dialect or DIALECT)
+        return sql, count_sql, datasource
 
     async def _execute_select(datasource: str, sql: str, limit: int, op: str) -> dict:
         """SELECT 를 데이터소스에 맞는 경로로 실행하고 결과 dict(columns·rows·executed_by 등)를 돌려준다.
