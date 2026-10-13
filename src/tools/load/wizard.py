@@ -319,7 +319,7 @@ class Wizard:
         path = self.ask(question, self.opts.get("body") if isinstance(self.opts.get("body"), str)
                         else None, convert=conv, allow_empty=not required, help=(
             "요청에 실어 보낼 JSON 입니다. 문자열 안의 ${vu}·${iter}·${seq}·${uuid}·${run_id}·\n"
-            "${now:%Y%m%d}·${choice:a,b}·${randint:1-9}·${date:today-30~today}·\n"
+            "${now:%Y%m%d}·${choice:a,b[|2]}·${randint:1-9}·${date:today-30~today}·\n"
             "${data:<컬럼>} 가 요청마다 치환됩니다(${data:..} 를 쓰면 데이터 파일을 이어서 묻습니다).\n"
             "예: \"target_table\": \"dwtemp.load_${vu}\" 로 VU 마다 대상을 나눕니다."
             + ("" if suggest else "\nGET 처럼 본문이 없는 요청이면 - 를 입력합니다.")))

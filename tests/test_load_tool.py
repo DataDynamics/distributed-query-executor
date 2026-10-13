@@ -1161,3 +1161,17 @@ def test_마법사는_본문이_data_를_쓸_때만_데이터_파일을_묻는�
     assert argv[argv.index("--data-mode") + 1] == "random"
     text = out.getvalue()
     assert "'d' 컬럼이 없습니다" in text and "데이터: 2행" in text
+
+
+def test_choice_는_개수를_주면_중복_없이_여러_개를_후보_순서대로_고른다():
+    picks = [scenario.render_body("${choice:a,b,c,d|2}", _ctx(seed=s)) for s in range(30)]
+    assert all(isinstance(p, list) and len(p) == 2 and len(set(p)) == 2 for p in picks)
+    assert all(p == sorted(p) for p in picks)  # 후보에 적은 순서를 지킨다
+    sizes = {len(scenario.render_body("${choice:a,b,c|1-3}", _ctx(seed=s))) for s in range(50)}
+    assert sizes == {1, 2, 3}
+    assert scenario.render_body("${choice:a,b,c|3}", _ctx()) == ["a", "b", "c"]
+    assert scenario.render_body("in(${choice:a,b|2})", _ctx()) == "in(a,b)"  # 중간이면 쉼표로 잇는다
+    assert scenario.render_body("${choice:a,b,c}", _ctx()) in ("a", "b", "c")  # 기존 동작 유지
+    for bad in ("${choice:a,b|3}", "${choice:a,b|0}", "${choice:a,b|x}", "${choice:a,b|2-1}"):
+        with pytest.raises(ValueError):
+            scenario.validate_body({"v": bad})

@@ -118,7 +118,7 @@ def _add_arguments(p: argparse.ArgumentParser) -> None:
     g.add_argument("--path", "-p", help="요청 경로 (기본 /jobs)")
     g.add_argument("--body", "-b", metavar="FILE",
                    help="요청 본문(JSON/YAML). ${vu}·${iter}·${seq}·${uuid}·"
-                        "${now:%%Y%%m%%d}·${choice:a,b}·${randint:1-9}·${run_id}·"
+                        "${now:%%Y%%m%%d}·${choice:a,b[|2]}·${randint:1-9}·${run_id}·"
                         "${date:today-30~today}·${data:<컬럼>} 치환")
     g.add_argument("--data", metavar="FILE",
                    help="요청마다 한 행씩 꺼내 본문의 ${data:<컬럼>} 에 채울 데이터 파일 "

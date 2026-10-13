@@ -100,6 +100,8 @@ bin/load-test run -c http://coord:8088 --type sync --path /query-execute --body 
 | `${run_id}` | 이번 실행의 id |
 | `${now:%Y%m%d}` | 현재 시각(형식 지정) |
 | `${choice:a,b,c}` | 목록 중 무작위 하나 |
+| `${choice:a,b,c\|2}` | 목록 중 중복 없이 2개(후보 순서 유지). 문자열 전체면 JSON 배열, 중간이면 `a,c` 처럼 쉼표로 잇는다 |
+| `${choice:a,b,c\|1-3}` | 개수도 1~3개 중 무작위로 정해 고른다 |
 | `${randint:1-9}` | 범위 안 무작위 정수 |
 | `${date:today-7}` | 날짜. `today`·`YYYY-MM-DD` 에 `+N`/`-N` 일을 더한다(기본 형식 `%Y-%m-%d`) |
 | `${date:2024-01-01~2024-12-31}` | 구간(양끝 포함) 안의 무작위 날짜. `\|%Y%m%d` 를 붙여 형식을 바꾼다 |
@@ -112,13 +114,15 @@ bin/load-test run -c http://coord:8088 --type sync --path /query-execute --body 
 ### 요청마다 템플릿 파라미터 바꾸기
 
 `/query-execute`·`/query-count`·`/jobs` 의 `params` 값도 본문의 일부이므로 같은 방식으로 바꾼다.
-값이 서로 독립이면 `${choice}`·`${randint}`·`${date}` 를 바로 쓴다.
+값이 서로 독립이면 `${choice}`·`${randint}`·`${date}` 를 바로 쓴다. 아래 `grades` 는 요청마다
+1~3개의 등급을 `["GOLD", "BRONZE"]` 같은 배열로 보내므로 `sql_in` 으로 받는 IN 목록 파라미터에 맞는다.
 
 ```json
 {
   "template_id": "order_count",
   "params": [
     {"name": "region", "value": "${choice:SEOUL,BUSAN,DAEGU}"},
+    {"name": "grades", "value": "${choice:VIP,GOLD,SILVER,BRONZE|1-3}"},
     {"name": "from_date", "value": "${date:2024-01-01~2024-12-31}"}
   ]
 }

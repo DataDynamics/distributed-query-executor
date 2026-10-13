@@ -218,6 +218,33 @@ def _resolve_date(arg: Optional[str], ctx: RenderContext) -> str:
     return lo.strftime(fmt or _DATE_FORMAT)
 
 
+def _resolve_choice(arg: Optional[str], ctx: RenderContext) -> Any:
+    """``${choice:a,b,c}`` 는 하나를, ``${choice:a,b,c|2}``·``${choice:a,b,c|1-3}`` 는 여러 개를 고른다.
+
+    여러 개는 중복 없이 뽑고 후보에 적은 순서대로 돌려준다. 개수를 범위로 주면 요청마다 개수도
+    무작위다. 목록을 돌려주므로, 문자열 전체가 이 자리표시자 하나뿐이면 JSON 배열로 들어가고(IN 값
+    목록 파라미터) 다른 글자와 섞이면 쉼표로 이어 붙인다.
+    """
+    spec, sep, count = (arg or "").partition("|")
+    items = [x.strip() for x in spec.split(",") if x.strip()]
+    if not items:
+        raise ValueError("${choice:a,b,c} 에 후보가 없습니다")
+    if not sep:
+        return ctx.rng.choice(items)
+    try:
+        lo_s, _, hi_s = count.strip().partition("-")
+        lo = int(lo_s)
+        hi = int(hi_s) if hi_s else lo
+    except ValueError:
+        raise ValueError("${choice:a,b,c|<개수>} 또는 ${choice:a,b,c|<최소>-<최대>} 형식이어야 합니다"
+                         ) from None
+    if not 1 <= lo <= hi <= len(items):
+        raise ValueError(f"${{choice:..|{count.strip()}}} 의 개수는 1 이상 후보 수({len(items)}) "
+                         "이하여야 합니다")
+    picked = set(ctx.rng.sample(range(len(items)), ctx.rng.randint(lo, hi)))
+    return [v for i, v in enumerate(items) if i in picked]
+
+
 def _resolve_data(arg: Optional[str], ctx: RenderContext) -> Any:
     if ctx.row is None:
         raise ValueError(f"${{data:{arg or ''}}} 를 쓰려면 데이터 파일(--data)이 필요합니다")
@@ -243,10 +270,7 @@ def _resolve(name: str, arg: Optional[str], ctx: RenderContext) -> Any:
     if name == "now":
         return datetime.now().strftime(arg or "%Y%m%d%H%M%S")
     if name == "choice":
-        items = [x.strip() for x in (arg or "").split(",") if x.strip()]
-        if not items:
-            raise ValueError("${choice:a,b,c} 에 후보가 없습니다")
-        return ctx.rng.choice(items)
+        return _resolve_choice(arg, ctx)
     if name == "randint":
         try:
             lo, hi = (int(x) for x in (arg or "").split("-", 1))
@@ -265,9 +289,17 @@ def _resolve(name: str, arg: Optional[str], ctx: RenderContext) -> Any:
 
 def _render_str(s: str, ctx: RenderContext) -> Any:
     whole = _PLACEHOLDER.fullmatch(s)
-    if whole and whole.group(1) in _INT_VARS:
+    if whole and (whole.group(1) in _INT_VARS
+                  or (whole.group(1) == "choice" and "|" in (whole.group(2) or ""))):
         return _resolve(whole.group(1), whole.group(2), ctx)
-    return _PLACEHOLDER.sub(lambda m: str(_resolve(m.group(1), m.group(2), ctx)), s)
+    return _PLACEHOLDER.sub(lambda m: _as_text(_resolve(m.group(1), m.group(2), ctx)), s)
+
+
+def _as_text(value: Any) -> str:
+    """문자열 중간에 들어가는 값이다. 여러 개를 고른 choice 같은 목록은 쉼표로 잇는다."""
+    if isinstance(value, list):
+        return ",".join(map(str, value))
+    return str(value)
 
 
 def render_body(template: Any, ctx: RenderContext) -> Any:
