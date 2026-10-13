@@ -165,3 +165,57 @@ def test_query_count_unknown_datasource_404(qe_client):  # noqa: F811
         "template_id": "sales_migration", "params": SALES_PARAMS, "datasource": "oracle",
     })
     assert resp.status_code == 404
+
+
+# ───────────────────────── 예제 템플릿: order_count ─────────────────────────
+
+
+def _post_order_count(client, params):
+    return client.post("/query-count", json={
+        "template_id": "order_count", "params": params, "datasource": "greenplum",
+    })
+
+
+def test_query_count_order_count_example(qe_client, monkeypatch):  # noqa: F811
+    """예제 order_count — 조인한 SELECT 를 감싸 세고, 겹치는 컬럼에는 별칭이 붙어 있다."""
+    import sqlglot
+
+    monkeypatch.setattr(core_config.settings, "greenplum_dsn", "postgresql://x")
+    import coordinator.app as ca
+    captured = {}
+    monkeypatch.setattr(ca, "run_postgres_select",
+                        lambda dsn, sql, *, limit, datasource="greenplum":
+                        (captured.update(sql=sql) or _count_result(321)))
+    resp = _post_order_count(qe_client(), [
+        {"name": "regions", "value": ["KR", "US"]},
+        {"name": "start_dt", "value": "2026-01-01"},
+        {"name": "end_dt", "value": "2026-01-31"},
+        {"name": "grade", "value": "VIP"},
+    ])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["row_count"] == 321 and captured["sql"] == body["count_sql"]
+    sql = body["sql"]
+    assert "o.region IN ( 'KR', 'US' )" in sql
+    assert "o.order_dt BETWEEN '2026-01-01' AND '2026-01-31'" in sql
+    assert "c.grade = 'VIP'" in sql
+    # 감싼 쿼리가 엔진에서 거절되지 않도록 출력 컬럼 이름이 겹치지 않아야 한다.
+    names = [e.alias_or_name for e in sqlglot.parse_one(sql, read="hive").expressions]
+    assert len(names) == len(set(names)), names
+    for dialect in ("hive", "trino", "postgres"):
+        validate_select_query(body["count_sql"], dialect=dialect)
+
+
+def test_query_count_order_count_grade_omitted(qe_client, monkeypatch):  # noqa: F811
+    """grade 를 빼면 등급 조건이 생략된다."""
+    monkeypatch.setattr(core_config.settings, "greenplum_dsn", "postgresql://x")
+    import coordinator.app as ca
+    monkeypatch.setattr(ca, "run_postgres_select",
+                        lambda dsn, sql, *, limit, datasource="greenplum": _count_result(5))
+    resp = _post_order_count(qe_client(), [
+        {"name": "regions", "value": ["KR"]},
+        {"name": "start_dt", "value": "2026-01-01"},
+        {"name": "end_dt", "value": "2026-01-31"},
+    ])
+    assert resp.status_code == 200, resp.text
+    assert "c.grade =" not in resp.json()["sql"]

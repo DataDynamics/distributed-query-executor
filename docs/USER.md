@@ -481,11 +481,19 @@ JSON
 ```bash
 curl -s localhost:8088/query-count -H 'content-type: application/json' --data-binary @- <<'JSON'
 {
-  "template_id": "sales_migration",
-  "params": [{"name": "region", "value": "KR"}]
+  "template_id": "order_count",
+  "params": [
+    {"name": "regions",  "value": ["KR", "US"]},
+    {"name": "start_dt", "value": "2026-01-01"},
+    {"name": "end_dt",   "value": "2026-01-31"}
+  ]
 }
 JSON
 ```
+
+`order_count` 는 이 API 를 보여 주려고 넣어 둔 예제 템플릿이다. 주문에 고객을 조인해 지역·주문일
+구간·고객 등급(`grade`, 선택)으로 거르며, 두 테이블에 모두 있는 컬럼에 별칭을 붙여 둔 모습을 참고할 수
+있다.
 
 응답은 `template_id`·`datasource`·`sql`(감싸기 전 SELECT)·`count_sql`(실제로 실행한 건수 쿼리)·
 `row_count`·`elapsed_ms`·`executed_by` 다. 여기서 `row_count` 는 쿼리 결과의 총 건수이고,

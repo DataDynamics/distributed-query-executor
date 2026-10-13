@@ -1,0 +1,35 @@
+# query-count 예제 템플릿 — 고객 정보를 붙인 주문의 건수.
+#
+# 이 템플릿은 건수 조회(POST /query-count)를 보여 주기 위한 예제다. 클라이언트는
+# template_id="order_count" 와 params(regions/start_dt/end_dt/grade)만 보낸다. coordinator 는
+# select.sql.j2 를 렌더한 SELECT 를 다음처럼 감싸 소스 엔진 안에서 세고 건수 하나를 돌려준다.
+#
+#   SELECT COUNT(*) AS row_count FROM (
+#   <렌더된 SELECT>
+#   ) qc_src
+#
+# 같은 템플릿을 POST /query-execute 로 보내면 상위 N행을 미리 볼 수 있으므로, 행을 확인한 뒤
+# 건수를 세는 식으로 두 API 를 함께 쓴다.
+#
+# 이 예제가 조인을 쓰는 이유는 감싸기의 제약 하나를 보여 주기 위해서다. orders 와 customers 에
+# 모두 customer_id·region 이 있는데, 별칭 없이 o.customer_id, c.customer_id 를 함께 고르면
+# 서브쿼리의 출력 컬럼 이름이 겹친다. 그 SELECT 자체는 실행되지만 COUNT 로 감싸면 Impala 등
+# 엔진이 중복 컬럼 이름으로 거절하므로, 겹치는 컬럼에는 select.sql.j2 처럼 별칭을 붙인다.
+
+id: order_count
+description: 고객을 붙인 주문 건수(query-count 예제) — region IN 목록 + 주문일 BETWEEN + 선택 등급
+
+# query-count·query-execute 는 select 조각만 렌더하지만, manifest 규약상 exec_mode 를 둔다(copy).
+exec_mode: copy
+strict_validation: false            # 렌더 SELECT 에 JOIN 이 있어 lenient 로 둔다
+
+# 파라미터 스키마 — 필수/타입/기본값을 선언한다. 렌더 전 검증에 쓰인다.
+params:
+  - {name: regions,  type: list,   required: true}               # 주문 지역 IN 목록(N개)
+  - {name: start_dt, type: date,   required: true}               # 주문일 BETWEEN 시작(YYYY-MM-DD)
+  - {name: end_dt,   type: date,   required: true}               # 주문일 BETWEEN 종료(YYYY-MM-DD)
+  - {name: grade,    type: string, required: false, default: ""} # 고객 등급(빈 값=조건 생략)
+
+# role → 조각 파일 매핑. 건수 조회는 select 만 있으면 된다.
+files:
+  select: select.sql.j2

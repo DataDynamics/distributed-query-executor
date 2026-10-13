@@ -33,9 +33,11 @@ Coordinator 와 주고받는 것은 상태와 적재된 행 수(row count) 뿐�
 | 실패 파티션 재실행 | `POST {base}/jobs/{job_id}/retry` |
 | 사용 가능한 템플릿 조회 | `GET {base}/templates` |
 | 결과 반환 실행(동기) | `POST {base}/query-execute` |
+| 결과 건수 조회(동기) | `POST {base}/query-count` |
 
 이관(`/jobs`)은 SQL 전문 또는 서버 템플릿(2.2)으로 제출하고, 결과 행이 필요한 동기 조회는
-`POST /query-execute`(9장)로 처리합니다. 전체 호출 흐름은 다음과 같습니다.
+`POST /query-execute`(9장)로, 행 없이 건수만 필요한 동기 조회는 `POST /query-count`(10장)로
+처리합니다. 전체 호출 흐름은 다음과 같습니다.
 
 ![1. 비동기 작업 모델](images/integration-01.svg)
 
@@ -718,3 +720,91 @@ foreach (var row in res.Rows)
 `TEMPLATE_PARAM_ERROR`, 같은 `name` 중복은 `DUPLICATE_PARAM`, 없는 템플릿은 `TEMPLATE_NOT_FOUND`).
 요청/응답 스키마, executor 커스텀 실행 함수 설정(`query.func.module`/`query.func.config.*`), 대시보드
 실행법 등 자세한 내용은 [GUIDE.md](GUIDE.md) 의 `query-execute` 절을 참고하세요.
+
+## 10. 결과 건수만 세기 (`POST /query-count`)
+
+이관 전에 옮길 건수를 미리 확인하거나, 이관이 끝난 뒤 `GET /jobs/{job_id}/result` 의 적재 건수와
+원본 건수를 대조하고 싶을 때는 `POST /query-count` 를 씁니다. 9장과 같은 템플릿과 파라미터를 보내면
+행 대신 **건수 하나**가 동기로 돌아옵니다.
+
+coordinator 는 템플릿으로 만든 SELECT 를 `SELECT COUNT(*) AS row_count FROM ( ... ) qc_src` 로 감싸
+소스 엔진 안에서 셉니다. 그래서 행이 네트워크로 오가지 않고 `/query-execute` 의 `limit`(최대 1만 행)
+상한에도 묶이지 않습니다. 9장과 다른 점은 다음과 같습니다.
+
+- 요청은 9장의 `QueryExecuteRequest` 에서 **`limit` 만 뺀 것**입니다. `params` 가 이름-값 항목
+  배열이라는 점, 실행 executor 를 coordinator 가 고른다는 점은 같습니다.
+- 응답은 `{template_id, datasource, sql, count_sql, row_count, elapsed_ms, executed_by}` 입니다.
+  `sql` 은 감싸기 전 SELECT, `count_sql` 은 실제로 실행한 건수 쿼리입니다.
+- **`row_count` 는 쿼리 결과의 총 건수입니다.** 9장 응답의 `row_count` 가 "돌려준 행 수(최대
+  `limit`)" 인 것과 이름은 같지만 뜻이 다릅니다. 수억 건이 나올 수 있으므로 C# 에서는 `long` 으로
+  받습니다.
+- 건수를 세려면 소스가 결과 전체를 훑어야 하므로 범위가 넓으면 9장보다 오래 걸립니다.
+  `HttpClient.Timeout` 을 넉넉히 잡아 두세요.
+
+`QueryExecutorClient` 에 이어 붙일 모델과 메서드입니다. `QueryParam` 은 9장의 것을 그대로 씁니다.
+
+```csharp
+public class QueryCountRequest
+{
+    public static readonly JsonSerializerSettings Json =
+        new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+    [JsonProperty("template_id")] public string TemplateId { get; set; }
+    [JsonProperty("params")] public IReadOnlyList<QueryParam> Params { get; set; }
+    [JsonProperty("datasource")] public string Datasource { get; set; }  // impala|trino|greenplum|history
+}
+
+public class QueryCountResult
+{
+    [JsonProperty("template_id")] public string TemplateId { get; set; }
+    [JsonProperty("datasource")] public string Datasource { get; set; }
+    [JsonProperty("sql")] public string Sql { get; set; }                // 감싸기 전 SELECT
+    [JsonProperty("count_sql")] public string CountSql { get; set; }     // 실제로 실행한 COUNT 쿼리
+    [JsonProperty("row_count")] public long RowCount { get; set; }       // ‼ 총 건수(9장의 반환 행 수와 다름)
+    [JsonProperty("elapsed_ms")] public double? ElapsedMs { get; set; }
+    [JsonProperty("executed_by")] public string ExecutedBy { get; set; } // 실행 executor(직접이면 null)
+}
+
+// QueryExecutorClient 에 추가: 템플릿+파라미터로 만든 SELECT 의 결과 건수를 동기로 받는다.
+public async Task<QueryCountResult> QueryCountAsync(
+    QueryCountRequest req, CancellationToken ct = default(CancellationToken))
+{
+    using (var content = JsonBody(req, QueryCountRequest.Json))
+    using (var resp = await _http.PostAsync("/query-count", content, ct))
+    {
+        if (!resp.IsSuccessStatusCode)
+        {
+            // 422=렌더/검증 오류(error_code/message), 502=데이터소스 접속·SQL 오류 또는 건수 해석 실패
+            var err = await resp.Content.ReadAsStringAsync();
+            throw new HttpRequestException($"query-count 실패 ({(int)resp.StatusCode}): {err}");
+        }
+        var json = await resp.Content.ReadAsStringAsync();
+        return JsonConvert.DeserializeObject<QueryCountResult>(json);
+    }
+}
+```
+
+사용 예입니다. 이관할 템플릿과 같은 조건으로 원본 건수를 세어 두었다가, 작업이 끝난 뒤 적재 건수와
+비교합니다.
+
+```csharp
+var cnt = await client.QueryCountAsync(new QueryCountRequest
+{
+    TemplateId = "order_count",   // 서버의 건수 조회 예제 템플릿(주문 + 고객 조인)
+    Params = new[]
+    {
+        new QueryParam("regions",  new[] { "KR", "US" }),
+        new QueryParam("start_dt", "2026-01-01"),
+        new QueryParam("end_dt",   "2026-01-31"),
+        new QueryParam("grade",    "VIP"),                 // 선택 — 빼면 등급 조건 생략
+    },
+    Datasource = "trino",   // 생략 시 서버 source.type
+});
+
+Console.WriteLine($"원본 {cnt.RowCount:N0}건, {cnt.ElapsedMs:F1}ms, 실행: {cnt.ExecutedBy ?? "coordinator 직접"}");
+```
+
+오류 규약은 9장과 같습니다. 렌더·검증 실패는 `422 + error_code` 이고, 데이터소스 접속이나 SQL 오류는
+`502` 입니다. 건수 쿼리가 행을 돌려주지 않거나 정수로 읽을 수 없는 값을 돌려줄 때도 `502` 가 옵니다.
+템플릿 SELECT 에 같은 이름의 컬럼이 두 번 나오면(조인한 두 테이블의 `id` 를 별칭 없이 고른 경우 등)
+엔진에 따라 감싼 쿼리가 거절되므로, 템플릿에서 별칭을 붙여 두세요.

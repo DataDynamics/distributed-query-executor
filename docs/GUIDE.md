@@ -670,11 +670,12 @@ executor URL(관측용)이며, impala/trino 는 coordinator 가 고른 executor 
 
 ```bash
 curl -s localhost:8088/query-count -H 'content-type: application/json' -d '{
-  "template_id": "order_search",
+  "template_id": "order_count",
   "params": [
     {"name": "regions",  "value": ["KR", "US", "JP"]},
     {"name": "start_dt", "value": "2026-01-01"},
-    {"name": "end_dt",   "value": "2026-03-31"}
+    {"name": "end_dt",   "value": "2026-03-31"},
+    {"name": "grade",    "value": "VIP"}
   ],
   "datasource": "trino"
 }'
@@ -682,10 +683,10 @@ curl -s localhost:8088/query-count -H 'content-type: application/json' -d '{
 
 ```jsonc
 {
-  "template_id": "order_search",
+  "template_id": "order_count",
   "datasource": "trino",
-  "sql": "SELECT order_id, region, order_dt, amount FROM orders WHERE ...",   // 감싸기 전 SELECT
-  "count_sql": "SELECT COUNT(*) AS row_count FROM (\nSELECT order_id, ...\n) qc_src",
+  "sql": "SELECT o.order_id, o.customer_id, ... FROM orders o JOIN customers c ...",   // 감싸기 전 SELECT
+  "count_sql": "SELECT COUNT(*) AS row_count FROM (\nSELECT o.order_id, ...\n) qc_src",
   "row_count": 1284503,        // 쿼리 결과의 총 건수(query-execute 의 row_count 와 뜻이 다르다)
   "elapsed_ms": 812.4,
   "executed_by": "http://executor-3:8001"
@@ -697,6 +698,26 @@ curl -s localhost:8088/query-count -H 'content-type: application/json' -d '{
 `task_timeout_s` 를 따른다. 감싼 쿼리 안에 같은 이름의 컬럼이 둘 이상이면(별칭 없는 조인 등) 엔진에
 따라 거절되므로 템플릿에서 별칭을 붙인다. 커스텀 실행 함수(`query.func.module`)는 건수 쿼리도 일반
 SELECT 처럼 받아 실행하면 되고 따로 고칠 것은 없다.
+
+예제는 `templates/order_count/` 다. 주문(`orders o`)에 고객(`customers c`)을 조인해 지역 `IN` 목록·
+주문일 `BETWEEN` 구간·선택 고객 등급(`grade`, 비우면 조건 생략)으로 거른다. 두 테이블에 모두 있는
+`region` 은 `c.region AS cust_region` 으로 별칭을 붙이고 `customer_id` 는 한쪽만 골라, 감쌌을 때 출력
+컬럼 이름이 겹치지 않게 했다. 건수에 영향이 없는 `ORDER BY` 는 정렬 비용만 더하므로 두지 않았다.
+
+```sql
+SELECT o.order_id, o.customer_id, o.region, o.order_dt, o.amount,
+       c.grade, c.region AS cust_region
+FROM orders o
+JOIN customers c ON c.customer_id = o.customer_id
+WHERE o.region IN ( {{ regions | sql_in }} )
+  AND o.order_dt BETWEEN {{ start_dt | sql_str }} AND {{ end_dt | sql_str }}
+{%- if grade %}
+  AND c.grade = {{ grade | sql_str }}
+{%- endif %}
+```
+
+같은 `template_id` 를 `/query-execute` 로 보내면 상위 N행을 미리 볼 수 있으므로, 행을 확인한 뒤
+건수를 세는 식으로 두 API 를 함께 쓰면 된다.
 
 ### 예제 템플릿: `order_search`
 
