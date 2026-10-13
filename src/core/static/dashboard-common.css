@@ -84,6 +84,12 @@ tr:hover td { background:#f6f8fa; }
 .qe-field em { font-style:normal; margin-left:5px; font-size:11px; opacity:.75; }
 .qe-field input { background:var(--panel); color:var(--fg); border:1px solid var(--line);
   border-radius:6px; padding:5px 8px; font:inherit; min-width:180px; }
+/* 쿼리 실행 탭의 건수(query-count) 결과: 큰 숫자 한 줄 + 실제로 실행한 COUNT 쿼리 */
+.qe-count { font-size:15px; color:var(--mut); margin-bottom:10px; }
+.qe-count b { font-size:28px; color:var(--fg); margin-right:4px; }
+.qe-sql { white-space:pre-wrap; word-break:break-all; background:#f6f8fa;
+  border:1px solid var(--line); border-radius:6px; padding:12px; margin:0;
+  font:13px/1.55 ui-monospace,Menlo,Consolas,monospace; color:var(--fg); }
 /* 데이터소스 미리보기 SQL 입력창 */
 .sqlbox { width:100%; min-height:90px; resize:vertical; background:#f6f8fa;
   border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:10px;

@@ -311,6 +311,7 @@ coordinator·executor 가 같은 곳을 보게 하는 것입니다.
 | `POST /jobs/{job_id}/cancel` | 작업 취소(각 executor 에 전파, 협조적). 이미 종료면 409 |
 | `POST /jobs/{job_id}/retry` | 실패 파티션만 재실행 → 새 `job_id` 반환 |
 | `POST /query-execute` | 템플릿+파라미터로 SELECT 실행 → 결과(상위 N행) 반환. 이관이 아닌 preview 용 동기 실행 |
+| `POST /query-count` | 템플릿+파라미터로 렌더한 SELECT 를 `COUNT(*)` 로 감싸 실행 → 결과 건수(`row_count`)만 반환 |
 | `GET /cluster` | coordinator·executor 헬스/CPU·메모리·디스크 + 실행 중 job 수 통합 조회 |
 
 `POST /jobs` 에 `dry_run: true` 를 주면 executor 를 호출하지 않고 생성된 sub-query 만 돌려줍니다

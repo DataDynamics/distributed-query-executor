@@ -8,7 +8,7 @@
 `docs/OPERATOR.md`(운영자 — 일상 점검·장애 추적·용량 조정·설정)가 각 역할의 문서이고, GUIDE·
 INTERFACE·INTEGRATION·DEPLOY·PERFORMANCE·DESIGN 은 특정 주제의 심화 문서다.
 `docs/INTERFACE.md` 는 클라이언트가 coordinator 를 부를 때 쓰는 REST 인터페이스 명세로, 엔드포인트
-여덟 개의 요청·응답 JSON 을 엑셀로 옮길 수 있는 평면 표(부모필드명·입출력 구분 열)로 적은 것이다.
+아홉 개의 요청·응답 JSON 을 엑셀로 옮길 수 있는 평면 표(부모필드명·입출력 구분 열)로 적은 것이다.
 엔드포인트를 추가하거나 요청·응답 필드를 바꾸면 이 문서와 짝을 이루는 `docs/INTERFACE.xlsx` 를
 함께 고친다(엑셀은 md 를 파싱해 엔드포인트별 시트로 만든 것이다).
 
@@ -147,6 +147,11 @@ preview 용 API다. coordinator 는 `/jobs` 와 같은 정책으로 가장 한�
 프록시하므로 클라이언트는 executor 의 존재를 모른다. greenplum 과 history 만 coordinator 가 직접
 실행한다. `params` 는 이름-값 항목 배열이고, 응답의 `executed_by` 에 실제 실행한 executor 가
 담긴다(직접 실행이면 null).
+
+`POST /query-count` 는 같은 렌더·검증·라우팅(`_render_template_select`·`_execute_select`)을 공유하고
+SQL 만 `parser.build_count_query()` 로 `SELECT COUNT(*) ... FROM (<원문>) qc_src` 로 감싸 실행해 건수
+하나(`row_count`)를 돌려준다. 원문을 sqlglot 으로 재생성하지 않고 텍스트로 감싸므로 미리보기와 같은
+쿼리를 센다. 이 응답의 `row_count` 는 총 건수라 query-execute 의 `row_count`(반환 행 수)와 뜻이 다르다.
 
 소스 실행은 impala·trino·source 구분 없이 **executor 의 `/query-run` 하나로 통일**돼 있다.
 executor 는 `query.func.module`(dotted path, importlib 로 로딩) 함수를 `run(sql, config, limit)`

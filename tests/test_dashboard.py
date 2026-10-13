@@ -78,6 +78,8 @@ def test_dashboard_has_query_execute_panel(client):
     assert 'data-tab="qe"' in html and 'id="p-qe"' in html
     assert "loadQe" in html and "runQe" in html
     assert "/query-execute" in html
+    # 건수 버튼은 같은 폼으로 POST /query-count 를 부른다.
+    assert "runQeCount" in html and "/query-count" in html
 
 
 def test_config_endpoint(client):

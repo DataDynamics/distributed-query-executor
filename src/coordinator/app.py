@@ -57,6 +57,7 @@ from .models import (
     DatasourceQueryRequest,
     Job,
     JobStatus,
+    QueryCountRequest,
     QueryExecuteRequest,
     Task,
     TaskStatus,
@@ -66,6 +67,7 @@ from .monitor import HealthMonitor
 from .parser import (
     DIALECT,
     QueryValidationError,
+    build_count_query,
     is_row_returning,
     validate_and_parse,
     validate_select_query,
@@ -107,6 +109,24 @@ def _query_params_to_dict(params: list) -> dict:
     """
     values, _ = _split_params(params)
     return values
+
+
+def _extract_count(body: dict) -> int:
+    """건수 쿼리 결과 dict 에서 첫 행 첫 열의 값을 정수로 꺼낸다(``/query-count`` 전용).
+
+    행은 보통 리스트지만 커스텀 실행 함수가 dict 행을 돌려줄 수도 있어 둘 다 받는다. 소스에
+    따라 정수가 문자열(``"123"``)이나 ``Decimal`` 로 올 수 있으므로 ``int()`` 로 맞춘다. 행이
+    없거나 정수로 바꿀 수 없으면 실행 쪽 계약 위반이므로 502 로 돌려준다.
+    """
+    rows = body.get("rows") or []
+    if rows:
+        first = rows[0]
+        value = next(iter(first.values()), None) if isinstance(first, dict) else (first[0] if first else None)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            pass
+    raise HTTPException(status_code=502, detail=f"건수 쿼리 결과를 해석할 수 없습니다: rows={rows[:1]!r}")
 
 
 def _split_params(params) -> tuple[dict, dict]:
@@ -1498,7 +1518,7 @@ def create_app(
         start = next(_qe_rr) % len(cand)
         return cand[start:] + cand[:start]
 
-    async def _run_source_query(name: str, sql: str, limit: int) -> dict:
+    async def _run_source_query(name: str, sql: str, limit: int, op: str = "query-execute") -> dict:
         """렌더된 SELECT 를 **executor 의 커스텀 실행 함수(``POST /query-run``)** 에 위임한다.
 
         query-execute 의 소스 실행(impala/trino 등)은 datasource 종류와 무관하게 이 한 경로로
@@ -1507,7 +1527,7 @@ def create_app(
         **연결(transport) 실패** 시 다음 executor 로 failover 한다(SELECT 는 멱등이라 재시도 안전).
         executor 가 도달 후 돌려준 4xx/5xx(SQL 오류·함수 미설정 등)는 확정 응답이므로 failover
         하지 않고 그대로 전달한다. 성공한 executor URL 은 관측용으로 응답 dict 의 ``executed_by``
-        에 실어 돌려준다.
+        에 실어 돌려준다. ``op`` 는 로그에 남길 호출 API 이름이다(query-execute·query-count).
         """
         order = _pick_executor_order()
         if not order:
@@ -1527,7 +1547,7 @@ def create_app(
                     )
                 except httpx.HTTPError as e:
                     last_err = e
-                    logger.warning("query-execute 프록시 실패, 다음 executor 로 failover: %s (%s)", url, e)
+                    logger.warning("%s 프록시 실패, 다음 executor 로 failover: %s (%s)", op, url, e)
                     continue
                 if resp.status_code >= 400:
                     try:
@@ -1536,7 +1556,7 @@ def create_app(
                     except Exception:
                         detail = None
                     raise HTTPException(status_code=resp.status_code, detail=detail or resp.text)
-                logger.info("query-execute 실행 executor=%s datasource=%s", url, name)
+                logger.info("%s 실행 executor=%s datasource=%s", op, url, name)
                 body = resp.json()
                 # 실제 실행 executor 를 관측용으로 응답에 싣는다(failover 후면 성공한 executor).
                 body["executed_by"] = url
@@ -1556,24 +1576,65 @@ def create_app(
         executor 를 모른다), greenplum/history 는 coordinator 가 직접 실행한다. 응답 크기는
         ``limit``(최대 10000)으로 강제한다 — 대량 이관은 계속 ``/jobs`` 를 쓴다.
         """
+        limit = clamp_limit(req.limit)
+        sql, datasource = _render_template_select(req)
+        body = await _execute_select(datasource, sql, limit, op="query-execute")
+        # 렌더된 SQL(감사용)과 실제 실행 executor(executed_by, 직접 실행이면 null)를 함께 반환.
+        # datasource 는 항상 확정값으로 싣는다(trino /query-run 응답엔 datasource 가 없으므로 보정).
+        return {"template_id": req.template_id, "datasource": datasource, "sql": sql, **body}
+
+    @app.post(
+        "/query-count",
+        tags=["Query"],
+        summary="템플릿+파라미터로 렌더한 SELECT 의 결과 건수(row count)를 반환",
+    )
+    async def query_count(req: QueryCountRequest):
+        """서버 템플릿을 params 로 렌더한 SELECT 를 ``COUNT(*)`` 로 감싸 실행하고 건수만 반환한다.
+
+        렌더·검증·데이터소스 라우팅은 ``/query-execute`` 와 똑같고, 실행하는 SQL 만
+        :func:`build_count_query` 로 감싼 건수 쿼리라는 점이 다르다. 건수를 소스 엔진 안에서
+        세므로 행이 coordinator 로 흘러오지 않아, ``limit`` 상한에 묶이지 않고 대량 결과의
+        건수도 정확히 얻는다. 이관 전 대상 건수 확인이나 이관 뒤 적재 건수 대조에 쓴다.
+        """
+        sql, datasource = _render_template_select(req)
+        count_sql = build_count_query(sql)
+        # 건수 쿼리는 한 행 한 열을 돌려주므로 limit 은 1 이면 충분하다.
+        body = await _execute_select(datasource, count_sql, 1, op="query-count")
+        return {
+            "template_id": req.template_id,
+            "datasource": datasource,
+            "sql": sql,
+            "count_sql": count_sql,
+            "row_count": _extract_count(body),
+            "elapsed_ms": body.get("elapsed_ms"),
+            "executed_by": body.get("executed_by"),
+        }
+
+    def _render_template_select(req) -> tuple[str, str]:
+        """``/query-execute``·``/query-count`` 공통 초입이다. select 조각을 렌더·검증하고 데이터소스를 확정한다.
+
+        템플릿 엔진이 꺼져 있으면 404, 렌더 실패(TemplateError)와 검증 실패(QueryValidationError)는
+        각 예외 핸들러가 422 로 바꾼다. 다중 문과 비-SELECT 는 여기서 막히므로, 뒤에서 이 SQL 을
+        서브쿼리로 감싸도 다른 문이 끼어들 수 없다.
+        """
         if template_engine is None:
             raise HTTPException(
                 status_code=404, detail="템플릿 엔진이 비활성화돼 있습니다(template.enabled=false)"
             )
-        limit = clamp_limit(req.limit)
         params = _query_params_to_dict(req.params)
-
-        # 1) 템플릿에서 select 조각만 렌더한다. TemplateError 는 422 핸들러가 받는다.
         sql = template_engine.render_query(req.template_id, params)
-        # 2) 단일 행 반환 SELECT 인지 가볍게 검증한다. 다중 문과 비-SELECT 를 막고 QueryValidationError 는 422 가 된다.
         validate_select_query(sql, dialect=req.sql_dialect or DIALECT)
-
-        # 3) 데이터소스를 정한다. 요청이 서버의 source.type 보다 우선한다.
+        # 요청의 datasource 가 서버의 source.type 보다 우선한다.
         datasource = (req.datasource or getattr(settings, "source_type", "impala") or "impala").lower()
+        return sql, datasource
 
-        # 4) 실행을 두 갈래로 라우팅한다. 메타·타깃 DB 인 greenplum 과 history 는 coordinator 가
-        #    psycopg 로 직접 실행하고, 그 밖의 소스(impala·trino·source 등)는 종류와 무관하게
-        #    executor 의 커스텀 함수(/query-run)로 위임한다.
+    async def _execute_select(datasource: str, sql: str, limit: int, op: str) -> dict:
+        """SELECT 를 데이터소스에 맞는 경로로 실행하고 결과 dict(columns·rows·executed_by 등)를 돌려준다.
+
+        실행은 두 갈래다. 메타·타깃 DB 인 greenplum 과 history 는 coordinator 가 psycopg 로 직접
+        실행하고(executed_by=null), 그 밖의 소스(impala·trino·source)는 종류와 무관하게 executor 의
+        커스텀 함수(/query-run)로 위임한다. 알 수 없는 데이터소스는 404 다.
+        """
         if datasource in ("greenplum", "history"):
             dsn = settings.greenplum_dsn if datasource == "greenplum" else settings.history_db_dsn
             if not dsn:
@@ -1584,16 +1645,10 @@ def create_app(
                 )
             except Exception as e:  # 연결·인증·SQL 오류는 원인을 담아 502 로 돌려준다
                 raise HTTPException(status_code=502, detail=f"{datasource} 쿼리 실패: {e}")
-            # coordinator 가 직접 실행했으므로 executor 는 없다(executed_by=null).
-            body = {"datasource": datasource, "limit": limit, "executed_by": None, **result.to_dict()}
-        elif datasource in ("impala", "trino", "source"):
-            body = await _run_source_query(datasource, sql, limit)
-        else:
-            raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {datasource}")
-
-        # 렌더된 SQL(감사용)과 실제 실행 executor(executed_by, 직접 실행이면 null)를 함께 반환.
-        # datasource 는 항상 확정값으로 싣는다(trino /query-run 응답엔 datasource 가 없으므로 보정).
-        return {"template_id": req.template_id, "datasource": datasource, "sql": sql, **body}
+            return {"datasource": datasource, "limit": limit, "executed_by": None, **result.to_dict()}
+        if datasource in ("impala", "trino", "source"):
+            return await _run_source_query(datasource, sql, limit, op=op)
+        raise HTTPException(status_code=404, detail=f"알 수 없는 데이터소스: {datasource}")
 
     # 대시보드는 설정으로 끌 수 있다(예: 외부 노출 환경에서 비활성화).
     # 활성화된 경우에만 루트 HTML 및 설정/정보 API 라우트를 등록한다.

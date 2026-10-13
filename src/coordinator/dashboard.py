@@ -266,6 +266,7 @@ DASHBOARD_HTML = """<!doctype html>
       데이터소스 <select id="qe-ds"></select>
       상위 <input id="qe-limit" type="number" value="100" min="1" max="10000" style="width:80px"> 행
       <button class="btn" onclick="runQe()">실행</button>
+      <button class="btn" onclick="runQeCount()" title="POST /query-count — 상위 N행 대신 전체 건수만 센다">건수</button>
       <span class="mut" id="qe-meta"></span>
     </div>
     <div id="qe-params" class="qe-params"></div>
@@ -536,6 +537,25 @@ async function runQe(){
   try{
     const d = await postJSON("/query-execute", body);
     renderProbeResult(d, "#qe-meta", "#qe-out");
+  }catch(e){ $("#qe-out").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+// 건수 버튼: 같은 템플릿·파라미터·데이터소스로 POST /query-count 를 불러 전체 건수만 보여 준다.
+// 건수는 소스 엔진 안에서 세므로 '상위 N행' 입력은 쓰지 않는다. 실제로 실행한 COUNT 쿼리도 함께
+// 보여 줘 무엇을 셌는지 확인할 수 있게 한다(서버 문자열이므로 esc 를 거친다).
+async function runQeCount(){
+  const tid = $("#qe-tpl").value;
+  if(!tid){ alert('템플릿을 선택하세요'); return; }
+  const body = { template_id: tid, params: qeCollectParams() };
+  const ds = $("#qe-ds").value; if(ds) body.datasource = ds;
+  $("#qe-meta").textContent = '';
+  $("#qe-out").innerHTML = '<p class="mut">건수 세는 중…</p>';
+  try{
+    const d = await postJSON("/query-count", body);
+    $("#qe-meta").textContent = `${d.elapsed_ms ?? '-'}ms`
+      + (d.executed_by ? ` · 실행 executor: ${d.executed_by}` : '');
+    $("#qe-out").innerHTML =
+      `<div class="qe-count"><b>${Number(d.row_count).toLocaleString('en-US')}</b> 건</div>` +
+      `<pre class="qe-sql">${esc(d.count_sql)}</pre>`;
   }catch(e){ $("#qe-out").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 // 데이터소스 탭 초기화(1회): 소스/실행 위치 select 를 채운다. 결과 영역은 실행 시에만 갱신

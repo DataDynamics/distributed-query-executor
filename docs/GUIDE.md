@@ -571,13 +571,14 @@ coordinator 를 거쳐 클라이언트로 반환되는 preview 용 실행이다.
 
 ### "쿼리 실행" 엔드포인트 지도
 
-혼동을 막기 위해, 목적이 다른 세 가지 쿼리 실행 표면을 구분한다.
+혼동을 막기 위해, 목적이 다른 네 가지 쿼리 실행 표면을 구분한다.
 
 | 개념 | 진입 엔드포인트 | 무엇 | 결과 |
 |---|---|---|---|
 | **이관**(migration) | `POST /jobs` → (executor) `POST /tasks` | 소스 SELECT → **Greenplum 적재**(대량 이동) | job_id·상태·row count (**행 반환 ✕**) |
 | **미리보기/연결 테스트** | `POST /datasources/{name}/query` | **임의 SQL** 을 built-in 드라이버로 실행(운영 점검용) | 상위 N행 |
 | **결과 반환 실행**(이 절) | `POST /query-execute` → (executor) `POST /query-run` | **템플릿** 렌더 SELECT 를 실행 | 상위 N행 |
+| **건수 조회**(이 절) | `POST /query-count` → (executor) `POST /query-run` | **템플릿** 렌더 SELECT 를 `COUNT(*)` 로 감싸 실행 | 총 건수 하나 |
 
 query-execute 의 소스 실행은 impala/trino 구분 없이 모든 소스를 executor 의 커스텀
 함수(`query.func.module`)에 위임하는 것으로 통일돼 있다. 미리보기(`/datasources/{name}/query`)는
@@ -657,6 +658,46 @@ curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
 executor URL(관측용)이며, impala/trino 는 coordinator 가 고른 executor URL(failover 됐다면 최종
 성공한 executor), greenplum/history 는 coordinator 직접 실행이라 `null` 이다.
 
+### 건수 조회 (`POST /query-count`)
+
+행이 아니라 건수만 필요하면 `POST /query-count` 를 쓴다. 요청은 위 요청 JSON 에서 `limit` 만 뺀
+것이고, 렌더·검증·데이터소스 라우팅도 query-execute 와 같은 경로(`_render_template_select` →
+`_execute_select`)를 탄다. 다른 점은 실행하는 SQL 하나다. coordinator 는 검증을 통과한 SELECT 를
+`parser.build_count_query()` 로 `SELECT COUNT(*) AS row_count FROM (\n<원문>\n) qc_src` 처럼 감싸고,
+그 건수 쿼리를 `limit=1` 로 실행해 첫 행 첫 열을 정수로 읽는다. 원문은 sqlglot 으로 다시 만들지
+않고 텍스트 그대로 감싸므로 미리보기와 똑같은 쿼리를 세며, 끝의 세미콜론은 떼고 닫는 괄호 앞에
+줄바꿈을 두어 마지막 줄의 `--` 주석에 괄호가 먹히지 않게 한다.
+
+```bash
+curl -s localhost:8088/query-count -H 'content-type: application/json' -d '{
+  "template_id": "order_search",
+  "params": [
+    {"name": "regions",  "value": ["KR", "US", "JP"]},
+    {"name": "start_dt", "value": "2026-01-01"},
+    {"name": "end_dt",   "value": "2026-03-31"}
+  ],
+  "datasource": "trino"
+}'
+```
+
+```jsonc
+{
+  "template_id": "order_search",
+  "datasource": "trino",
+  "sql": "SELECT order_id, region, order_dt, amount FROM orders WHERE ...",   // 감싸기 전 SELECT
+  "count_sql": "SELECT COUNT(*) AS row_count FROM (\nSELECT order_id, ...\n) qc_src",
+  "row_count": 1284503,        // 쿼리 결과의 총 건수(query-execute 의 row_count 와 뜻이 다르다)
+  "elapsed_ms": 812.4,
+  "executed_by": "http://executor-3:8001"
+}
+```
+
+건수는 소스 엔진 안에서 세므로 행이 coordinator 로 오지 않고 `limit` 상한에도 묶이지 않는다. 대신
+소스가 결과 전체를 훑어야 하므로 범위가 넓으면 미리보기보다 오래 걸리고, 시간 제한은 프록시 경로의
+`task_timeout_s` 를 따른다. 감싼 쿼리 안에 같은 이름의 컬럼이 둘 이상이면(별칭 없는 조인 등) 엔진에
+따라 거절되므로 템플릿에서 별칭을 붙인다. 커스텀 실행 함수(`query.func.module`)는 건수 쿼리도 일반
+SELECT 처럼 받아 실행하면 되고 따로 고칠 것은 없다.
+
 ### 예제 템플릿: `order_search`
 
 `templates/order_search/` 는 query-execute 전용 예제로, WHERE 절에 지역 `IN` 목록(N개)과 주문일
@@ -705,6 +746,10 @@ coordinator 대시보드(`/`)의 `쿼리 실행` 탭에서 브라우저로 바�
 중에서 고른다. 상위 N행과 함께 실행하면 `POST /query-execute` 가 호출되고 결과 표와 메타(행수·
 소요시간·`실행 executor: <URL>` = `executed_by`)가 표시된다. 렌더/검증/실행 오류는 결과 영역에
 `error_code`·메시지로 나온다.
+
+같은 폼의 `건수` 버튼은 입력한 템플릿·파라미터·데이터소스로 `POST /query-count` 를 부른다. 상위 N행
+입력은 쓰지 않으며, 결과 영역에 전체 건수와 실제로 실행한 COUNT 쿼리(`count_sql`)를, 메타에 소요시간과
+`실행 executor` 를 보여 준다.
 
 ### 설정 (coordinator · executor)
 
@@ -935,3 +980,4 @@ def run(sql, *, config, limit):
 | 템플릿 엔진 비활성(`template.enabled=false`) | 404 | — |
 | impala/trino 인데 executor 미설정 | 400 | `executor 가 설정되지 않았습니다` |
 | 데이터소스 접속/SQL 오류 | 502 | 원인 메시지 |
+| (query-count) 건수 쿼리가 행을 돌려주지 않거나 정수가 아님 | 502 | `건수 쿼리 결과를 해석할 수 없습니다` |

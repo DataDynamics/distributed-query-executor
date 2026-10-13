@@ -470,6 +470,31 @@ JSON
 이것은 미리보기이므로 결과가 `limit` 에서 잘린다. 이관에 쓰면 잘린 데이터가 그대로 적재되므로 옮기는
 일은 반드시 `POST /jobs` 로 한다.
 
+### 건수만 세어 보기
+
+행은 필요 없고 이 쿼리가 몇 건인지만 알고 싶다면 `POST /query-count` 를 쓴다. 요청은
+`/query-execute` 와 같되 `limit` 이 없다. coordinator 는 렌더한 SELECT 를
+`SELECT COUNT(*) AS row_count FROM ( ... ) qc_src` 로 감싸 소스 엔진 안에서 세므로, 행이 오가지 않고
+`limit` 상한에도 묶이지 않는다. 이관 전에 옮길 건수를 확인하거나, 이관 뒤 `GET /jobs/{job_id}/result`
+의 적재 건수와 대조할 때 쓴다.
+
+```bash
+curl -s localhost:8088/query-count -H 'content-type: application/json' --data-binary @- <<'JSON'
+{
+  "template_id": "sales_migration",
+  "params": [{"name": "region", "value": "KR"}]
+}
+JSON
+```
+
+응답은 `template_id`·`datasource`·`sql`(감싸기 전 SELECT)·`count_sql`(실제로 실행한 건수 쿼리)·
+`row_count`·`elapsed_ms`·`executed_by` 다. 여기서 `row_count` 는 쿼리 결과의 총 건수이고,
+`/query-execute` 의 `row_count` 가 실제로 돌려준 행 수(최대 `limit`)인 것과 뜻이 다르다. 건수를 세려면
+소스가 결과 전체를 훑어야 하므로 범위가 넓으면 미리보기보다 오래 걸린다. 또 감싼 쿼리 안에 같은 이름의
+컬럼이 두 번 나오면(조인한 두 테이블의 `id` 를 별칭 없이 고른 경우 등) 엔진에 따라 거절되므로
+템플릿에서 별칭을 붙여 둔다. 건수 쿼리가 행을 돌려주지 않거나 정수로 읽을 수 없는 값을 돌려주면
+`502` 로 응답한다.
+
 ---
 
 ## 오류 대처
@@ -589,7 +614,7 @@ coordinator 를 여러 대 두고 로드밸런서 뒤에 놓았는데 상태 저
 `POST /jobs/{job_id}/cancel`, 실패분 재실행은 `POST /jobs/{job_id}/retry` 다.
 
 그 밖에 `GET /jobs` 로 작업 목록을, `GET /history` 로 지난 실행 이력을, `GET /templates` 로 쓸 수
-있는 템플릿 목록을 본다. 결과를 바로 받는 실행은 `POST /query-execute` 이며, 서버 상태가 궁금하면
+있는 템플릿 목록을 본다. 결과를 바로 받는 실행은 `POST /query-execute`, 건수만 세는 것은 `POST /query-count` 이며, 서버 상태가 궁금하면
 `GET /health` 와 `GET /cluster` 를 쓴다.
 
 모든 API 를 직접 호출해 보려면 `http://<coordinator>:8088/docs` 의 Swagger UI 를 연다. 브라우저로

@@ -667,7 +667,9 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 - **이관 소스와의 분리**: `datasource`를 생략하면 전역 `source.type`을 쓰지만, 명시하면 그 소스로 라우팅된다. `source.type=impala`로 두고 query-execute에 `datasource:"trino"`를 명시하면 "이관은 Impala, query-execute는 Trino"처럼 기능별로 소스를 나눌 수 있다.
 - **경계**: 결과가 coordinator 메모리를 거치므로 `limit`(≤10000)으로 응답 크기를 강제하는 **미리보기 규모 전용**이다. 대량 이관은 계속 `/jobs`. executor의 `/query-run`·`/datasources/{name}/query`는 task 세마포어를 거치지 않으므로 무거운 사용이 예상되면 별도 동시성 가드를 후속 고려한다.
 
-**테스트**: `tests/test_query_execute.py`(render_query·coordinator 직접 실행·trino→/query-run 프록시· failover·오류 전파) + `tests/test_datasource_query.py`(executor `/query-run` 커스텀 함수·dict 반환·미설정 400·함수 예외 502·`_load_query_func`·`_collect_prefix`)를 실 DB 없이 검증.
+- **건수 조회(`POST /query-count`)**: 같은 렌더·검증·라우팅을 공유하되(`_render_template_select`·`_execute_select`), 검증된 SELECT 를 `parser.build_count_query()` 가 `SELECT COUNT(*) AS row_count FROM (\n<원문>\n) qc_src` 로 감싸 `limit=1` 로 실행하고 첫 행 첫 열을 `int()` 로 읽는다(`_extract_count`, 리스트·dict 행 모두 허용, 해석 불가면 502). 원문을 sqlglot 으로 재생성하지 않고 텍스트로 감싸는 이유는 방언(dialect)별 표기가 바뀌어 미리보기와 다른 쿼리를 세는 일을 막기 위해서다. 건수를 소스 안에서 세므로 행이 coordinator 를 거치지 않고 `limit` 상한과 무관하다. 응답은 `{template_id, datasource, sql, count_sql, row_count, elapsed_ms, executed_by}` 이며 `row_count` 는 총 건수다(query-execute 의 `row_count` 는 반환 행 수).
+
+**테스트**: `tests/test_query_count.py`(건수 쿼리 조립·직접 실행·/query-run 위임·값 형태 정규화·오류) + `tests/test_query_execute.py`(render_query·coordinator 직접 실행·trino→/query-run 프록시· failover·오류 전파) + `tests/test_datasource_query.py`(executor `/query-run` 커스텀 함수·dict 반환·미설정 400·함수 예외 502·`_load_query_func`·`_collect_prefix`)를 실 DB 없이 검증.
 
 ### 18.8 날짜 fan-out (`/jobs`, IN 분할 대체)
 

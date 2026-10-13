@@ -680,6 +680,29 @@ class QueryExecuteRequest(BaseModel):
     )
 
 
+class QueryCountRequest(BaseModel):
+    """``POST /query-count`` 의 요청 스키마다. 서버 템플릿을 params 로 렌더한 SELECT 의 결과 건수만
+    동기로 돌려받는다.
+
+    ``/query-execute`` 와 같은 템플릿·파라미터·데이터소스 규칙을 쓰지만 행을 돌려주지 않으므로
+    ``limit`` 이 없다. 이관(``/jobs``) 전에 대상 건수를 미리 확인하거나, 이관 뒤 적재 건수와
+    대조할 때 쓴다.
+    """
+
+    template_id: str = Field(..., description="서버 템플릿 ID(디렉터리명). params 로 SELECT 를 렌더한다.")
+    params: list[QueryParam] = Field(
+        default_factory=list,
+        description="쿼리 빌드 파라미터(이름-값 항목 배열). 내부에서 {name: value} 로 접어 렌더한다.",
+    )
+    datasource: Optional[str] = Field(
+        default=None,
+        description="실행 데이터소스(impala|trino|greenplum|history). 미지정 시 서버 source.type.",
+    )
+    sql_dialect: Optional[str] = Field(
+        default=None, description="렌더된 SELECT 검증에 쓸 SQL 방언(dialect). 미지정 시 서버 기본 hive."
+    )
+
+
 class DatasourceQueryRequest(BaseModel):
     """``POST /datasources/{name}/query`` 의 요청 스키마다. 임의 SELECT 미리보기와 연결 테스트에 쓴다.
 

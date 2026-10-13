@@ -134,6 +134,21 @@ def validate_select_query(sql: str, dialect: str = DIALECT) -> None:
         raise QueryValidationError("NOT_A_SELECT", "SELECT(행 반환) 문만 지원합니다.")
 
 
+def build_count_query(sql: str) -> str:
+    """검증을 통과한 SELECT 를 ``SELECT COUNT(*) ... FROM ( <원문> ) t`` 로 감싸 건수 쿼리를 만든다.
+
+    ``/query-count`` 가 쓴다. sqlglot 으로 다시 생성하지 않고 원문을 텍스트 그대로 감싸는데,
+    재생성하면 방언(dialect)별 함수 표기나 힌트가 바뀌어 미리보기(``/query-execute``)와 다른
+    쿼리를 세게 될 수 있기 때문이다. 원문 끝의 세미콜론은 서브쿼리 안에서 문법 오류가 되므로
+    떼어 내고, 마지막 줄이 ``--`` 주석으로 끝나도 닫는 괄호가 주석에 먹히지 않도록 괄호 앞에
+    줄바꿈을 둔다. 서브쿼리 별칭은 Impala·PostgreSQL 이 필수로 요구하므로 항상 붙인다.
+    """
+    body = sql.strip()
+    while body.endswith(";"):
+        body = body[:-1].rstrip()
+    return f"SELECT COUNT(*) AS row_count FROM (\n{body}\n) qc_src"
+
+
 def validate_and_parse(
     sql: str,
     partition_column: str,
