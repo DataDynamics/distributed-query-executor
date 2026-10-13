@@ -19,6 +19,7 @@ Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분�
 
 | 문서 | 내용 | 누구를 위한 것인가 |
 |---|---|---|
+| [`docs/TECHNICAL_PROPOSAL.md`](docs/TECHNICAL_PROPOSAL.md) | 제안서 기술 상세 — 도입 목적·PNG 구성도·처리 원리·적재 방식·장애 복구·검수 계획 | 처음 검토하는 업무·기술 담당자 |
 | [`docs/USER.md`](docs/USER.md) | **사용자 가이드(self-contained)** — 작업 제출·모드 선택·템플릿·조회·오류 대처 | 사용자 |
 | [`docs/OPERATOR.md`](docs/OPERATOR.md) | **운영자 가이드(self-contained)** — 일상 점검·로그 추적·장애 대응·용량 조정·설정 | 운영자 |
 | [`docs/GUIDE.md`](docs/GUIDE.md) | 실행 모드별 심화(2-phase 내부 흐름, 통합 테스트 하니스 등) | 사용자 |
