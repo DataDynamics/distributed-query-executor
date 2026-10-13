@@ -490,12 +490,19 @@ def iter_download_pairs(
     if recursive or key.endswith("/"):
         prefix = as_directory(key) if key else ""
         objects = list_objects(client, bucket, prefix)
+        root = Path(destination).resolve()
         pairs = []
         for obj in sorted(objects, key=lambda o: o["Key"]):
             if obj["Key"].endswith("/"):
                 continue  # 디렉터리 표시용 빈 오브젝트는 건너뛴다
             relative = obj["Key"][len(prefix):]
-            pairs.append((obj["Key"], str(Path(destination) / relative)))
+            target = Path(destination) / relative
+            if Path(relative).is_absolute() or ".." in Path(relative).parts:
+                raise ValueError(f"다운로드 경로가 대상 디렉터리를 벗어납니다: {obj['Key']!r}")
+            resolved = target.resolve()
+            if root not in resolved.parents:
+                raise ValueError(f"다운로드 경로가 대상 디렉터리를 벗어납니다: {obj['Key']!r}")
+            pairs.append((obj["Key"], str(target)))
         return pairs
 
     target = Path(destination)
@@ -651,6 +658,18 @@ def iter_copy_pairs(
     return [(source_key, dest_key)]
 
 
+def validate_copy_prefixes(
+    source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, recursive: bool
+) -> None:
+    """같은 버킷의 겹치는 접두사는 복사 전에 거절한다."""
+    if source_bucket != dest_bucket or not (recursive or source_key.endswith("/")):
+        return
+    source = as_directory(source_key) if source_key else ""
+    destination = as_directory(dest_key) if dest_key else ""
+    if source.startswith(destination) or destination.startswith(source):
+        raise ValueError("같은 버킷의 원본과 대상 접두사가 겹칩니다.")
+
+
 def copy_objects(
     client: Any,
     source_bucket: str,
@@ -658,19 +677,15 @@ def copy_objects(
     pairs: Sequence[Tuple[str, str]],
     args: argparse.Namespace,
     verb: str,
-) -> int:
-    """서버측 복사로 오브젝트를 옮긴다. 실제로 복사한 개수를 돌려준다.
-
-    copy_object 는 S3 안에서 처리되므로 받아서 다시 올리지 않는다. 큰 파일도
-    네트워크를 타지 않는다.
-    """
+) -> List[str]:
+    """서버측 복사를 끝낸 원본 키를 돌려준다."""
     reporter = progress.Progress(
         verb,
         total=len(pairs),
         unit="개",
         enabled=len(pairs) > 1 and not getattr(args, "no_progress", False),
     )
-    copied = 0
+    copied = []
     for done, (source_key, dest_key) in enumerate(pairs, 1):
         if source_bucket == dest_bucket and source_key == dest_key:
             print(f"원본과 대상이 같습니다. 건너뜁니다: {source_key}", file=sys.stderr)
@@ -683,7 +698,7 @@ def copy_objects(
             Key=dest_key,
             CopySource={"Bucket": source_bucket, "Key": source_key},
         )
-        copied += 1
+        copied.append(source_key)
         reporter.update(done)
         print(f"s3://{source_bucket}/{source_key} → s3://{dest_bucket}/{dest_key}")
     reporter.finish()
@@ -693,6 +708,7 @@ def copy_objects(
 def cmd_cp(client: Any, args: argparse.Namespace, bucket: Optional[str] = None) -> int:
     source_bucket, source_key = resolve_target(args.source, bucket)
     dest_bucket, dest_key = resolve_target(args.uri, bucket)
+    validate_copy_prefixes(source_bucket, source_key, dest_bucket, dest_key, args.recursive)
     pairs = iter_copy_pairs(client, source_bucket, source_key, dest_key, args.recursive)
     if not pairs:
         print(f"복사할 오브젝트가 없습니다: s3://{source_bucket}/{source_key}")
@@ -700,7 +716,7 @@ def cmd_cp(client: Any, args: argparse.Namespace, bucket: Optional[str] = None) 
 
     copied = copy_objects(client, source_bucket, dest_bucket, pairs, args, "복사")
     if not args.dry_run:
-        print(f"\n{copied}개 복사했습니다.")
+        print(f"\n{len(copied)}개 복사했습니다.")
     return 0
 
 
@@ -712,17 +728,18 @@ def cmd_mv(client: Any, args: argparse.Namespace, bucket: Optional[str] = None) 
     """
     source_bucket, source_key = resolve_target(args.source, bucket)
     dest_bucket, dest_key = resolve_target(args.uri, bucket)
+    validate_copy_prefixes(source_bucket, source_key, dest_bucket, dest_key, args.recursive)
     pairs = iter_copy_pairs(client, source_bucket, source_key, dest_key, args.recursive)
     if not pairs:
         print(f"옮길 오브젝트가 없습니다: s3://{source_bucket}/{source_key}")
         return 0
 
-    copied = copy_objects(client, source_bucket, dest_bucket, pairs, args, "이동")
+    moved_keys = copy_objects(client, source_bucket, dest_bucket, pairs, args, "이동")
     if args.dry_run:
         print(f"[예행] 원본 {len(pairs)}개는 지우지 않았습니다.")
         return 0
 
-    moved_keys = [src for src, _ in pairs[:copied]]
+    copied = len(moved_keys)
     deleted = delete_keys(client, source_bucket, moved_keys) if moved_keys else 0
     print(f"\n{copied}개 복사, 원본 {deleted}개 삭제했습니다.")
     return 0 if deleted == copied else 1

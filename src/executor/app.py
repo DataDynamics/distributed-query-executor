@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import re
 import socket
 import time
 from contextlib import asynccontextmanager
@@ -77,6 +78,14 @@ def _load_query_func(dotted: str):
         raise ValueError(f"커스텀 실행 함수가 호출 가능하지 않습니다: {dotted}")
     _query_func_cache[dotted] = fn
     return fn
+
+
+def _validate_cleanup_job_id(job_id: str) -> None:
+    """정리 경로와 S3 프리픽스에 쓸 단일 job 식별자를 검증한다."""
+    if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", job_id):
+        raise HTTPException(status_code=422, detail={
+            "code": "INVALID_JOB_ID", "message": "안전한 단일 job 식별자가 필요합니다.",
+        })
 
 
 def _src_kw(task) -> dict:
@@ -151,6 +160,7 @@ def create_app(
     backend = backend or _build_backend()
     history = task_history or TaskHistoryRepository(settings)
     tasks: dict[str, Task] = {}
+    task_requests: dict[str, dict] = {}
     # 동시 task 상한이다(admission control). 0 이면 무제한으로 본다.
     _max = settings.executor_max_concurrent_tasks
     sem = asyncio.Semaphore(_max) if _max and _max > 0 else None
@@ -379,13 +389,15 @@ def create_app(
         description="sub-query를 받아 Impala 읽기 → Greenplum 적재를 비동기로 시작한다.",
     )
     async def create_task(req: CreateTaskRequest):
-        """sub-query task 를 접수해 비동기 실행을 시작한다(HTTP 202).
-
-        요청을 ``Task`` 로 변환해 인메모리 ``tasks`` 에 등록하고, QUEUED 이력을 남긴 뒤
-        ``_run_with_ctx`` 를 백그라운드 task 로 띄운다. 실행 완료를 기다리지 않고 즉시
-        task_id 와 현재 상태(QUEUED)를 반환하므로, 호출자(coordinator)는 폴링으로 진행을
-        추적한다. 동일 task_id 재요청 시 기존 항목을 덮어쓴다.
-        """
+        """task_id 를 선점하고 같은 요청은 재생하며 다른 요청은 409 로 거절한다."""
+        request_body = req.model_dump(mode="json")
+        if req.task_id in tasks:
+            if task_requests[req.task_id] != request_body:
+                raise HTTPException(status_code=409, detail={
+                    "code": "TASK_ID_CONFLICT", "message": "task_id가 다른 요청에 사용되었습니다.",
+                })
+            existing = tasks[req.task_id]
+            return {"task_id": existing.task_id, "status": existing.status.value}
         # 드레이닝 중에는 신규 task 를 받지 않는다. coordinator 가 다른 executor 로 failover 하거나
         # 재시도하도록 503 으로 거부한다.
         if drain["on"]:
@@ -416,13 +428,18 @@ def create_app(
         # 접수 시각부터 슬롯 확보까지의 대기(QUEUE_WAIT) 단계를 연다. _run 진입 시 닫힌다.
         task.on_stage("QUEUE_WAIT", "start")
         tasks[task.task_id] = task
-        with job_log_context(task.job_id, task.task_id):
-            await history.record(task)  # QUEUED 이력을 남긴다
-            # 백그라운드 실행 task 를 추적해 종료 시 드레이닝(완료 대기)할 수 있게 한다.
-            bg = asyncio.create_task(_run_with_ctx(task))
-            inflight.add(bg)
-            bg.add_done_callback(inflight.discard)
-            logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
+        task_requests[task.task_id] = request_body
+
+        async def accepted():
+            with job_log_context(task.job_id, task.task_id):
+                await history.record(task)
+                await _run_with_ctx(task)
+
+        # 응답 연결이 끊겨도 선점한 task 는 독립적으로 이력을 남기고 실행한다.
+        bg = asyncio.create_task(accepted())
+        inflight.add(bg)
+        bg.add_done_callback(inflight.discard)
+        logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
         return {"task_id": task.task_id, "status": task.status.value}
 
     @app.get("/tasks", tags=["Tasks"], summary="태스크 목록(현재 executor 보유분)")
@@ -524,20 +541,21 @@ def create_app(
         summary="local_stage 로컬 CSV 디렉터리 정리",
     )
     def cleanup_stage(job_id: str):
-        """local_stage 의 로컬 CSV 디렉터리(``{stage.local_dir}/{job_id}``)를 삭제한다.
-
-        Phase 2(GP file:// 적재)가 끝난 뒤 coordinator 가 각 executor 에 호출한다. 경로
-        이탈을 막기 위해 job_id 의 basename 으로 만든 하위 디렉터리만 지우며, 없으면 조용히
-        통과한다(멱등). 반환: 실제 삭제 여부.
-        """
+        """검증된 job 하위 디렉터리를 멱등하게 삭제한다."""
         import os
         import shutil
 
-        safe = os.path.basename(job_id)  # 경로 조작을 막으려고 하위 디렉터리명만 쓴다
-        target = os.path.join(settings.stage_local_dir, safe)
+        _validate_cleanup_job_id(job_id)
+        root = os.path.realpath(settings.stage_local_dir)
+        target = os.path.join(root, job_id)
+        resolved = os.path.realpath(target)
+        if os.path.islink(target) or os.path.commonpath([root, resolved]) != root or resolved == root:
+            raise HTTPException(status_code=422, detail={
+                "code": "INVALID_JOB_ID", "message": "스테이징 디렉터리 밖의 경로입니다.",
+            })
         removed = False
         with job_log_context(job_id):
-            if safe and os.path.isdir(target):
+            if os.path.isdir(target):
                 shutil.rmtree(target, ignore_errors=True)
                 removed = True
                 logger.info("local_stage 로컬 CSV 정리: %s 삭제", target)
@@ -552,17 +570,11 @@ def create_app(
         summary="s3_stage S3 스테이징 객체 정리",
     )
     def cleanup_s3(job_id: str):
-        """s3_stage 의 S3 스테이징 프리픽스(``{s3.prefix}/{job_id}/``) 아래 객체를 삭제한다.
-
-        Phase 2(GP PXF 적재)가 끝난 뒤 coordinator 가 executor 하나에 호출한다(S3 는 세그먼트
-        로컬이 아니라 executor 아무나 삭제 가능). job_id 의 basename 으로 프리픽스를 만들어
-        해당 job 하위 객체만 지운다(멱등). 반환: 삭제한 객체 수."""
-        import os
-
+        """검증된 job 의 정확한 S3 프리픽스를 best-effort 로 정리한다."""
         from core import s3_stage as s3sql
 
-        safe = os.path.basename(job_id)  # 경로 조작을 막으려고 job 하위 프리픽스만 쓴다
-        prefix = s3sql.s3_job_prefix(settings.s3_prefix, safe)
+        _validate_cleanup_job_id(job_id)
+        prefix = s3sql.s3_job_prefix(settings.s3_prefix, job_id)
         deleted = 0
         with job_log_context(job_id):
             try:

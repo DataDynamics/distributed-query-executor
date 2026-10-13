@@ -305,17 +305,18 @@ IF in_node == NULL THEN THROW NO_PARTITION_IN_CLAUSE
 
 **6. IN 절 자체의 제약 검사**
 
-찾은 `IN` 이 나눌 수 있는 모양인지 본다. 세 가지 모두 나눌 수 없는 경우다.
+찾은 `IN`은 해당 WHERE의 필수 양의 조건이어야 한다. OR·부정·값 표현식 안에 있으면 거절한다.
 
 ```
 IF in_node 가 NOT IN 임        THEN THROW NEGATED_IN
+IF 필수 WHERE 조건이 아님      THEN THROW UNSAFE_PARTITION_PREDICATE
 IF in_node 값목록이 비었음      THEN THROW EMPTY_IN_LIST
 IF in_node 안에 서브쿼리 있음   THEN THROW SUBQUERY_IN_CLAUSE
 ```
 
 **7. 파싱 결과 반환**
 
-원문과 트리, 컬럼과 방언을 함께 담아 돌려준다. 분할기가 원문 포맷을 보존한 채 값만 바꾸려면 원문과
+중복 값을 입력 순서대로 제거하고 원문과 트리, 컬럼과 방언을 함께 담아 돌려준다. 분할기가 원문 포맷을 보존한 채 값만 바꾸려면 원문과
 트리가 모두 필요하다.
 
 ```
@@ -374,11 +375,12 @@ buckets = 빈 버킷을 제거한 결과
 
 **3. 원문에서 값 구간 찾기**
 
-원문 문자열에서 값 목록이 시작하고 끝나는 위치를 한 번만 계산한다. 버킷마다 같은 구간을 쓰므로
+AST가 선택한 컬럼의 원문 위치와 SQL 토큰으로 값 목록의 시작·끝을 계산한다.
+문자열·주석 안의 IN과 괄호는 구문으로 취급하지 않는다. 버킷마다 같은 구간을 쓰므로
 반복문 밖에서 구한다.
 
 ```
-span = VALUE_SPAN(parsed.sql, partition_column)   // (시작, 끝) 또는 NULL
+span = VALUE_SPAN(parsed.sql, src_in, parsed.dialect)   // (시작, 끝) 또는 NULL
 IF span == NULL THEN
     로그: 포맷 보존 실패 → AST 재직렬화로 폴백
 ```
@@ -627,7 +629,7 @@ CONTEXT slot():
 **개요**
 
 접수된 작업 하나를 실제로 끝까지 몰고 가는 프로그램이며 이 시스템에서 가장 복잡한 자리다. 조각들을
-executor 들에게 나눠 보내고, 진행 상황을 물어보며 기다리고, 실패하면 다른 executor 로 넘기고,
+executor 들에게 나눠 보내고, 진행 상황을 물어보며 기다리고, 미접수가 확실한 실패만 다른 executor 로 넘기고,
 마지막에 작업 전체의 상태를 판정한다.
 
 **데이터는 여기를 지나가지 않는다.** coordinator 는 "이 SQL 을 실행해 저 테이블에 넣어라"라고 시키고
@@ -712,36 +714,27 @@ FUNCTION RUN_TASK(client, job, task):
 
 **6. 조각 하나의 전송·재시도·폴링**
 
-조각을 후보 executor 순서대로 시도한다. 시작 전 연결 실패는 재시도해도 안전하므로 지수 백오프로
-다시 시도하고, 소진하면 다음 executor 로 넘긴다. 시작한 뒤에는 끝날 때까지 상태를 물어본다.
+같은 executor에 동일 task_id로 재시도한다. 접속 실패·429·503처럼 미접수가 확실한 경우에만
+다른 후보로 넘긴다. 접수 여부가 불확실한 응답 유실과 폴링 장애에서는 자동 재배정하지 않는다.
+Executor는 보유 중인 task_id와 같은 본문의 재접수를 재실행 없이 처리하고, 다른 본문이면 409로 거절한다.
 
 ```
-후보 = FAILOVER_ORDER(task)          // 배정 executor 우선, 헬스 기반이면 한가한 순
+후보 = FAILOVER_ORDER(task)
 FOR url IN 후보:
-    TRY:
-        RETRY(최대 task_max_retries, 지수백오프):
-            POST url + "/tasks"  {task_id, job_id, sub_query, target_table, ...}
-        POLL(client, job, task)      // 아래 반복
-        RETURN                       // 종료 상태에 도달
-    CATCH 연결오류:
-        CONTINUE                     // 다음 executor 로 failover
-task.status = FAILED
-
-FUNCTION POLL(client, job, task):
-    transient = 0
-    WHILE task.status NOT IN (DONE, FAILED, CANCELLED):
-        IF CANCEL_OBSERVED(job) THEN task.status = CANCELLED; RETURN
-        SLEEP(설정.poll_interval_s)
-        TRY:
-            resp = GET url + "/tasks/" + task.task_id
-            transient = 0
-        CATCH 일시오류:
-            transient += 1
-            IF transient > task_max_retries THEN RETHROW    // 상위가 failover 판단
-            CONTINUE
-        task.status = resp.status
-        task.rows_written / rows_read / current_phase / phases 갱신
+    접수불확실 = false
+    RETRY(최대 task_max_retries, 지수백오프):
+        TRY: POST url + "/tasks" {task_id, job_id, sub_query, target_table, ...}
+        CATCH 미접수가확실한오류: 다음 재시도
+        CATCH 응답유실등: 접수불확실 = true; 같은 url에서만 재시도
+        CATCH 요청충돌등: FAILED; RETURN
+    IF 접수실패 AND 접수불확실 THEN FAILED; RETURN
+    IF 접수실패 THEN 다음 후보
+    TRY: 종료 상태까지 같은 url에서 POLL
+    CATCH 폴링재시도소진: FAILED; RETURN
+    RETURN
 ```
+
+Task가 실패로 표시돼도 기존 실행이 끝났다는 보장은 없다. 대상 데이터와 실행 상태를 확인한 뒤 재처리한다.
 
 **7. 배리어 뒤 2단계 적재(스테이징 모드만)**
 
@@ -1151,17 +1144,22 @@ coordinator 는 이후 상태를 물어보며 진행을 따라간다.
 
 **1. 접수**
 
-조각을 받아 저장하고 곧바로 응답한다. 이때 대기 단계를 열어 두어 슬롯을 기다린 시간이 측정되게
-한다.
+보유 중인 task_id에 같은 요청이 오면 현재 상태를 반환하고, 본문이 다르면 409로 거절한다.
+새 요청은 await 전에 task_id와 본문을 선점한다. 대기 시간을 측정하고 이력 저장과 실행은
+응답 연결과 독립된 백그라운드에서 수행한다. 멱등 정보는 executor 프로세스 수명 동안 유지된다.
 
 ```
 FUNCTION CREATE_TASK(요청):
+    IF 요청.task_id IN tasks THEN
+        IF 저장한본문 != 요청본문 THEN THROW 409 TASK_ID_CONFLICT
+        RETURN 202 {task_id, status:현재상태}
+    IF 드레이닝중 THEN THROW 503
     task = NEW Task(요청의 모든 필드)
     task.status = QUEUED
     task.on_stage("QUEUE_WAIT", "start")     // 슬롯 대기 시작
     tasks[task.task_id] = task
-    HISTORY.RECORD(task)
-    백그라운드 시작: RUN_WITH_SEMAPHORE(task)
+    task_requests[task.task_id] = 요청본문
+    백그라운드 시작: HISTORY.RECORD(task) 후 RUN_WITH_SEMAPHORE(task)
     RETURN 202 {task_id, status:"QUEUED"}
 ```
 

@@ -6,7 +6,10 @@ HttpDispatcher 가 재시도/failover/실패를 올바르게 처리하는지 검
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
+import pytest
 
 import coordinator.dispatcher as disp_mod
 from coordinator.dispatcher import HttpDispatcher
@@ -67,14 +70,21 @@ def _down_up_handler(calls):
     return handler
 
 
-async def test_failover_to_live_executor(monkeypatch):
+@pytest.mark.parametrize("connect_error", [httpx.ConnectError, httpx.ConnectTimeout])
+async def test_failover_to_live_executor(monkeypatch, connect_error):
     calls: list = []
-    _patch_client(monkeypatch, _down_up_handler(calls))
+    original_handler = _down_up_handler(calls)
+    def handler(request):
+        try:
+            return original_handler(request)
+        except httpx.ConnectError as exc:
+            raise connect_error(str(exc), request=request) from exc
+    _patch_client(monkeypatch, handler)
     s = _settings(monkeypatch, executors=[DOWN, UP], retries=1)
     disp = HttpDispatcher(s)
 
     job = _job(DOWN)
-    await disp.run(job)
+    await asyncio.wait_for(disp.run(job), timeout=3)
 
     t = job.tasks[0]
     assert t.status == TaskStatus.DONE
@@ -94,7 +104,7 @@ async def test_all_executors_fail_marks_task_failed(monkeypatch):
     disp = HttpDispatcher(s)
 
     job = _job(DOWN)
-    await disp.run(job)
+    await asyncio.wait_for(disp.run(job), timeout=3)
 
     t = job.tasks[0]
     assert t.status == TaskStatus.FAILED
@@ -109,7 +119,7 @@ async def test_failover_disabled_does_not_switch(monkeypatch):
     disp = HttpDispatcher(s)
 
     job = _job(DOWN)
-    await disp.run(job)
+    await asyncio.wait_for(disp.run(job), timeout=3)
 
     t = job.tasks[0]
     assert t.status == TaskStatus.FAILED        # failover 꺼짐 → UP 로 안 넘어감
@@ -134,9 +144,72 @@ async def test_retry_succeeds_on_same_executor(monkeypatch):
     disp = HttpDispatcher(s)
 
     job = _job(UP)
-    await disp.run(job)
+    await asyncio.wait_for(disp.run(job), timeout=3)
 
     t = job.tasks[0]
     assert t.status == TaskStatus.DONE
     assert t.executor_url == UP
     assert state["posts"] == 2  # 실패 1회 + 성공 1회
+
+
+async def test_ambiguous_start_never_fails_over_even_after_connect_error(monkeypatch):
+    calls = []
+    def handler(request):
+        calls.append((request.method, str(request.url)))
+        if str(request.url).startswith(DOWN):
+            if len(calls) == 1:
+                raise httpx.ReadTimeout('response lost', request=request)
+            raise httpx.ConnectError('later unavailable', request=request)
+        return httpx.Response(200, json={'status': 'DONE', 'rows_written': 1})
+    _patch_client(monkeypatch, handler)
+    disp = HttpDispatcher(_settings(monkeypatch, executors=[DOWN, UP], retries=1))
+    job = _job(DOWN)
+    await asyncio.wait_for(disp.run(job), timeout=3)
+    assert job.tasks[0].status == TaskStatus.FAILED
+    assert len(calls) == 2
+    assert all(url.startswith(DOWN) for _, url in calls)
+
+
+async def test_ambiguous_start_can_replay_on_same_executor(monkeypatch):
+    posts = []
+    def handler(request):
+        if request.method == 'POST':
+            posts.append(str(request.url))
+            if len(posts) == 1:
+                raise httpx.ReadTimeout('response lost', request=request)
+            return httpx.Response(202, json={'status': 'QUEUED'})
+        return httpx.Response(200, json={'status': 'DONE', 'rows_written': 1})
+    _patch_client(monkeypatch, handler)
+    disp = HttpDispatcher(_settings(monkeypatch, executors=[DOWN, UP], retries=1))
+    job = _job(DOWN)
+    await asyncio.wait_for(disp.run(job), timeout=3)
+    assert job.tasks[0].status == TaskStatus.DONE
+    assert posts == [DOWN + '/tasks', DOWN + '/tasks']
+
+
+async def test_poll_failure_does_not_start_concurrent_overwrite(monkeypatch):
+    posts = []
+    def handler(request):
+        if request.method == 'POST':
+            posts.append(str(request.url))
+            return httpx.Response(202, json={'status': 'QUEUED'})
+        raise httpx.ReadTimeout('still running remotely', request=request)
+    _patch_client(monkeypatch, handler)
+    disp = HttpDispatcher(_settings(monkeypatch, executors=[DOWN, UP], retries=0))
+    job = _job(DOWN, write_mode='overwrite_partitions')
+    await asyncio.wait_for(disp.run(job), timeout=3)
+    assert job.tasks[0].status == TaskStatus.FAILED
+    assert posts == [DOWN + '/tasks']
+
+
+async def test_task_conflict_is_not_retried_or_failed_over(monkeypatch):
+    posts = []
+    def handler(request):
+        posts.append(str(request.url))
+        return httpx.Response(409, json={'detail': {'code': 'TASK_ID_CONFLICT'}})
+    _patch_client(monkeypatch, handler)
+    disp = HttpDispatcher(_settings(monkeypatch, executors=[DOWN, UP], retries=1))
+    job = _job(DOWN)
+    await asyncio.wait_for(disp.run(job), timeout=3)
+    assert job.tasks[0].status == TaskStatus.FAILED
+    assert posts == [DOWN + '/tasks']

@@ -132,12 +132,12 @@ FIELD_HELP: dict[str, str] = {
     ),
     "coordinator.task_max_retries": (
         "연결에 실패했을 때 같은 executor 로 다시 시도할 횟수이며 시도마다 대기가 배로 늘어난다. "
-        "재시도가 끝나도 안 되면 task_failover 설정에 따라 다른 executor 로 넘어간다."
+        "접수 여부가 불확실하면 같은 executor에만 재시도한다. 미접수가 확실할 때만 다른 후보로 넘긴다."
     ),
     "coordinator.task_failover": (
-        "재시도를 다 쓴 task 를 다른 executor 로 옮겨 실행할지 정한다. 켜 두면 executor 한 대가 죽어도 "
-        "job 이 살아남는다. 다만 local_stage 는 executor 와 GP 세그먼트가 짝지어 있어 옮겨 가면 짝이 "
-        "깨지므로 그 모드에서는 신중히 쓴다."
+        "미접수가 확실한 접속 실패·429·503에서만 다른 executor로 재배정한다. "
+        "응답 유실이나 폴링 장애는 기존 실행이 계속될 수 있어 재배정하지 않는다. "
+        "local_stage는 executor와 GP 세그먼트의 배치 관계도 확인해야 한다."
     ),
     "coordinator.orphan_reconcile_interval_s": (
         "죽은 coordinator 가 들고 있던 job 을 정리하는 주기다. 멀티 coordinator 에서만 뜻이 있고 "

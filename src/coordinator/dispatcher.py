@@ -52,11 +52,7 @@ from core.timeutil import now_iso as _now_iso  # KST 기준 naive ISO 시각을 
 # 종료 여부 판정 등에서 "끝났는가?"의 기준으로 재사용한다.
 _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
 
-# 재시도/failover 대상으로 보는 예외: 연결 계열(TransportError: connect/read 타임아웃,
-# 네트워크 오류 등) + executor 가 5xx/4xx 로 응답한 경우(HTTPStatusError).
-# 이들은 "executor 에 닿지 못했거나 일시적으로 처리하지 못한" 상황이라 재시도가 의미 있다.
-# 반대로 executor 가 task 를 정상 접수해 FAILED 로 보고한 백엔드 오류는 여기 해당하지 않는다
-# (재시도해도 같은 결과이므로 그대로 실패 처리한다).
+# 전송·HTTP 오류는 접수 여부와 상태 코드에 따라 재시도 또는 실패 처리한다.
 _RETRYABLE = (httpx.TransportError, httpx.HTTPStatusError)
 
 
@@ -763,14 +759,10 @@ class HttpDispatcher(_DispatcherBase):
     async def _dispatch_with_failover(
         self, client: httpx.AsyncClient, job: Job, task: Task
     ) -> None:
-        """task 를 executor 후보들에 순서대로 시도한다(재시도 + failover).
+        """접수 전 실패만 failover 하고, 응답 유실은 같은 executor 에서 재시도한다.
 
-        - 시작(POST /tasks) 단계의 연결 실패는 같은 executor 에 지수 백오프로 재시도하고,
-          재시도를 소진하면 다음 후보 executor 로 넘어간다(failover). 시작 전이라 재시도는
-          항상 안전하다(중복 적재 위험 없음).
-        - 시작에 성공한 뒤 폴링 단계에서 연결이 끊기면, 멱등 모드(overwrite_partitions)이고
-          남은 후보가 있을 때만 다른 executor 로 재실행한다. append 는 중복 적재 위험이
-          있으므로 재배정하지 않고 실패 처리한다.
+        접수 여부가 불명확하거나 폴링이 끊기면 다른 executor 에 재배정하지 않는다.
+        executor 간 중복 실행 방지나 기존 실행 중단을 보장할 수 없기 때문이다.
         """
         order = self._failover_order(task)
         last_err: Exception | None = None
@@ -778,6 +770,7 @@ class HttpDispatcher(_DispatcherBase):
         for idx, url in enumerate(order):
             # 1) 시작 단계에서는 같은 executor 에 1 + task_max_retries 회까지 시도한다.
             started = False
+            ambiguous = False
             for attempt in range(self.settings.task_max_retries + 1):
                 if self._cancel_observed(job):
                     task.status = TaskStatus.CANCELLED
@@ -797,6 +790,18 @@ class HttpDispatcher(_DispatcherBase):
                 except _RETRYABLE as exc:
                     last_err = exc
                     task.error = str(exc)
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        status = exc.response.status_code
+                        if 400 <= status < 500 and status != 429:
+                            task.status = TaskStatus.FAILED
+                            self._save(job)
+                            return
+                        definite_rejection = status in (429, 503)
+                    else:
+                        definite_rejection = isinstance(
+                            exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+                        )
+                    ambiguous = ambiguous or not definite_rejection
                     self._save(job)
                     logger.warning(
                         "task %s 시작 실패(executor=%s, 시도=%s/%s): %s",
@@ -809,6 +814,11 @@ class HttpDispatcher(_DispatcherBase):
                             self.settings.task_retry_backoff_s * (2 ** attempt)
                         )
             if not started:
+                if ambiguous:
+                    task.status = TaskStatus.FAILED
+                    task.error = f"executor 접수 여부 불명확 — 원격 상태 확인 필요: {last_err}"
+                    self._save(job)
+                    return
                 if idx + 1 < len(order):
                     logger.warning(
                         "task %s → 다른 executor 로 failover (%s)", task.task_id, url,
@@ -822,18 +832,10 @@ class HttpDispatcher(_DispatcherBase):
                 return
             except _RETRYABLE as exc:
                 last_err = exc
-                can_redo = (
-                    self.settings.task_failover
-                    and job.write_mode == "overwrite_partitions"
-                    and idx + 1 < len(order)
-                )
                 logger.warning(
-                    "task %s 폴링 중 연결 실패(executor=%s): %s%s",
+                    "task %s 폴링 실패 — 원격 실행 상태 확인 필요(executor=%s): %s",
                     task.task_id, url, exc,
-                    " → 다른 executor 로 재실행(멱등)" if can_redo else "",
                 )
-                if can_redo:
-                    continue  # 멱등이라 다른 executor 에서 다시 실행해도 안전하다
                 task.status = TaskStatus.FAILED
                 task.error = f"폴링 실패: {exc}"
                 self._save(job)
@@ -886,7 +888,7 @@ class HttpDispatcher(_DispatcherBase):
                 ),
             },
         )
-        resp.raise_for_status()  # 4xx·5xx 는 HTTPStatusError(=_RETRYABLE)가 되어 재시도나 failover 로 간다
+        resp.raise_for_status()  # 상위에서 접수 여부와 상태 코드로 처리 방향을 정한다
 
     async def _poll(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         # executor가 task를 종료 상태로 보고할 때까지 주기적으로 상태를 조회한다.
@@ -907,7 +909,7 @@ class HttpDispatcher(_DispatcherBase):
             except _RETRYABLE:
                 transient += 1
                 if transient > self.settings.task_max_retries:
-                    raise  # 한도를 넘겼으니 상위에서 failover 하거나 실패 처리하게 한다
+                    raise  # 한도를 넘겼으니 상위에서 실패 처리한다
                 continue
             data = resp.json()
             # executor가 보고한 상태/진척으로 로컬 task를 갱신한다. rows_written 은

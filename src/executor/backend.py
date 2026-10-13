@@ -825,12 +825,13 @@ class ImpalaToGreenplumBackend:
                 producer_err.append(exc)
             finally:
                 read_wait_box[0] = rw
-                # 종료(또는 오류) 신호 — 라이터의 get 을 깨운다. 큐가 차 있으면(라이터가 이미
-                # 떠났을 때) 건너뛴다(어차피 라이터는 더 이상 읽지 않음).
-                try:
-                    q.put_nowait(None)
-                except _queue.Full:
-                    pass
+                # 소비자가 살아 있는 동안 EOF 를 재시도해 가득 찬 큐에서도 종료를 전달한다.
+                while not stop.is_set():
+                    try:
+                        q.put(None, timeout=0.5)
+                        break
+                    except _queue.Full:
+                        continue
 
         thread = threading.Thread(target=_producer, name="copy-reader", daemon=True)
         thread.start()
@@ -848,6 +849,8 @@ class ImpalaToGreenplumBackend:
                     batch = q.get()               # 큐가 비면 대기한다. 이 시간이 곧 소스를 기다리며 굶는 시간이다
                     read_starve += time.monotonic() - t
                     if batch is None:
+                        if producer_err:
+                            raise producer_err[0]
                         break
                     t = time.monotonic()
                     for row in batch:

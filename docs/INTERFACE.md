@@ -70,17 +70,26 @@ coordinator 는 기본적으로 `8088` 포트에서 듣는다. 이 문서의 모
 | `429` | 동시에 처리할 수 있는 작업 수를 넘겼을 때. `Retry-After` 헤더가 함께 온다 |
 | `502` | coordinator 가 executor 나 데이터베이스에 닿지 못했을 때 |
 
-실패 응답의 본문은 두 가지다. `422` 만 프로그램이 사유를 갈라 볼 수 있도록 코드를 함께 준다.
+422 응답은 오류 원인에 따라 두 형식이다. SQL·템플릿 검증 실패는 `error_code`와 `message`를,
+요청 필드의 타입·범위 위반은 `detail` 배열을 반환한다. 그 밖의 오류는 `detail` 문자열을 반환한다.
+클라이언트는 HTTP 상태 코드와 본문 형식을 함께 확인한다.
 
 | NO | 필드명(한글) | 필드명(영문) | 부모필드명 | 데이터 타입 | 길이 | 반복 건수 | 입출력 구분 | 설명 |
 |---|---|---|---|---|---|---|---|---|
-| 1 | 오류 코드 | `error_code` | - | string | 최대 40 | - | O | `422` 응답에만 있다. 실패 사유를 나타내는 고정 코드다 |
-| 2 | 오류 메시지 | `message` | - | string | 가변 | - | O | `422` 응답에만 있다. 무엇을 고쳐야 하는지 설명한다 |
-| 3 | 오류 상세 | `detail` | - | string | 가변 | - | O | `400`·`404`·`409`·`429`·`502` 응답의 사람이 읽을 설명이다 |
+| 1 | 오류 코드 | `error_code` | - | string | 최대 40 | - | O | SQL·템플릿 검증 422 응답의 고정 코드다. 요청 스키마 오류에는 없다 |
+| 2 | 오류 메시지 | `message` | - | string | 가변 | - | O | SQL·템플릿 검증 422 응답의 설명이다. 요청 스키마 오류에는 없다 |
+| 3 | 오류 상세 | `detail` | - | string 또는 array | 가변 | 1~N (배열) | O | 요청 스키마 위반 422는 오류 객체 배열이다. `400`·`404`·`409`·`429`·`502`는 설명 문자열이다 |
+
+요청 스키마 오류의 각 배열 항목에는 `loc`(필드 경로 배열), `msg`(설명), `type`(오류 종류)가 있다.
+`input`과 `ctx`는 오류에 따라 추가될 수 있다.
+
+```json
+{"detail": [{"loc": ["body", "parallelism"], "msg": "Input should be greater than or equal to 1", "type": "greater_than_equal", "input": 0, "ctx": {"ge": 1}}]}
+```
 
 주요 `error_code` 는 `NOT_A_SELECT`·`MULTIPLE_STATEMENTS`·`PARSE_ERROR`(보낸 SQL 자체의 문제),
 `MISSING_PARTITION_COLUMN`·`NO_PARTITION_IN_CLAUSE`·`EMPTY_IN_LIST`·`NEGATED_IN`·
-`SUBQUERY_IN_CLAUSE`(분할 기준의 문제), `MISSING_REQUIRED_FIELDS`·`STAGE_INSERT_REQUIRES_FIELDS`
+`SUBQUERY_IN_CLAUSE`·`UNSAFE_PARTITION_PREDICATE`(분할 기준의 문제), `MISSING_REQUIRED_FIELDS`·`STAGE_INSERT_REQUIRES_FIELDS`
 (필수 필드 누락), `TEMPLATE_NOT_FOUND`·`TEMPLATE_PARAM_ERROR`·`TEMPLATE_MISSING_SIGN_VAR`(템플릿
 문제), `TASK_RANGE_EMPTY`·`TASK_RANGE_TOO_LARGE`(날짜 분할 구간 문제)다.
 

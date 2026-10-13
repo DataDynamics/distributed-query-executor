@@ -48,6 +48,10 @@ preview 용 실행**이 큰 갈래이고, 이관은 다시 적재 방식(`exec_m
 coordinator 는 `GET /tasks/{id}/status` 로 폴링한다. 모든 task 가 끝나면 finalize 로 종료 상태를
 집계한다(DONE/PARTIAL/FAILED/CANCELLED).
 
+분할 IN은 WHERE에서 반드시 적용되는 양의 조건이어야 한다. OR·NOT·값 표현식으로 조건을
+우회하면 `UNSAFE_PARTITION_PREDICATE`로 거절한다. 중복 IN 값은 한 번만 배정한다.
+`strict_validation=false`의 복합 쿼리는 분할 결과를 합쳐도 원본 결과가 유지되는지 확인한다.
+
 각 task 는 한 Greenplum 세션 안에서 소스 SELECT 를 행 단위로 스트리밍 fetch 하고, (staging_ddl
 이 있으면) TEMP staging 을 만든 뒤 psycopg `COPY` 로 실어 `INSERT … SELECT FROM staging` 을
 실행하고 `COMMIT` 한다. 연결 반납 시 **`DISCARD ALL`** 로 TEMP staging 이 자동 정리되어 다음
@@ -280,7 +284,8 @@ executor.max_concurrent_tasks=8   # executor 1대 동시 task 수
 > `file://` 외부테이블을 쓴다.
 
 `stage_insert` 와 달리 `local_stage` 는 `write_mode` 를 지원한다 — `overwrite_partitions` 를 주면
-적재 전 해당 파티션을 DELETE 로 선삭제하므로 **재실행 멱등**이 성립한다.
+같은 트랜잭션에서 해당 파티션을 DELETE한 뒤 적재한다. 소스 범위와 삭제 범위가 일치하고
+같은 파티션의 실행이 겹치지 않을 때 재실행 중복을 막는다.
 
 ### 언제 쓰나
 
@@ -394,7 +399,8 @@ failover·gp_hostname 수집·cleanup 팬아웃을 얇게 덮는다. 순수 함�
 위치 무관하게 읽히므로 `local_stage` 가 요구하는 **executor↔세그먼트 co-locate·파일 예산 배분이
 필요 없다**. 외부테이블 생성과 INSERT 는 `local_stage` 처럼 **coordinator 가 중앙에서** 하고,
 executor 는 Impala 읽기와 S3 업로드까지만 한다(GP 를 직접 건드리지 않는다).
-`write_mode: overwrite_partitions` 로 재실행 멱등이 성립한다.
+`write_mode: overwrite_partitions`는 소스 범위와 삭제 범위가 일치하고 같은 파티션의 실행이
+겹치지 않을 때 재실행 중복을 막는다.
 
 ### 언제 쓰나
 

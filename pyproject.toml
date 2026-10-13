@@ -6,12 +6,13 @@ dynamic = ["version"]
 description = "Coordinator + N Executor API: Impala SELECT를 파티션 IN 목록으로 분할해 Greenplum에 적재"
 requires-python = ">=3.9"
 dependencies = [
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.29",
-    "sqlglot>=23",
-    "httpx>=0.27",
-    "pydantic>=2.6",
+    "fastapi>=0.110,<0.129",
+    "uvicorn[standard]>=0.29,<0.40",
+    "sqlglot>=30,<31",
+    "httpx>=0.28,<1.0",
+    "pydantic>=2.13,<3.0",
     "PyYAML>=6.0",
+    "Jinja2>=3.1,<4.0",
     "psutil>=5.9",
     "psycopg[binary]>=3.2",
 ]
@@ -19,12 +20,15 @@ dependencies = [
 [project.optional-dependencies]
 # executor 런타임 DB 드라이버. coordinator 단위 테스트에는 필요 없음.
 executor = [
-    "impyla>=0.18",
-    "psycopg[binary]>=3.1",
+    "impyla>=0.19",
+    "trino>=0.320",
+    "thrift-sasl>=0.4.3",
+    "pure-sasl>=0.6",
+    "boto3>=1.34",
 ]
 dev = [
-    "pytest>=8",
-    "pytest-asyncio>=0.23",
+    "pytest>=8.0,<9.0",
+    "pytest-asyncio>=0.23,<1.0",
 ]
 
 [tool.pytest.ini_options]
@@ -36,9 +40,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-# src 레이아웃: 소스는 src/ 아래에 있고 패키지명은 그대로(core/coordinator/executor).
+# src 레이아웃: 소스는 src/ 아래에 있고 패키지명은 그대로 유지한다.
 package-dir = {"" = "src"}
-packages = ["core", "coordinator", "executor"]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["core*", "coordinator*", "executor*", "tools*"]
+namespaces = false
 
 # 동적 버전: src/core/version.py 의 __version__ 을 패키지 버전으로 읽는다(단일 소스).
 [tool.setuptools.dynamic]

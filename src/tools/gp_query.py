@@ -281,10 +281,11 @@ def make_engine(args: argparse.Namespace, psycopg: Any, password: Optional[str])
     def enable_autocommit(conn: Any) -> None:
         conn.autocommit = True
         probe(conn)
-        if args.schema:
+        if args.schema or args.session_sql:
             cursor = conn.cursor()
             try:
-                cursor.execute(f"SET search_path TO {args.schema}")
+                if args.schema:
+                    cursor.execute(f"SET search_path TO {args.schema}")
                 for statement in args.session_sql:
                     cursor.execute(statement)
             finally:
@@ -481,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     session.add_argument(
         "--dry-run",
         action="store_true",
-        help="실행은 하되 커밋하지 않고 롤백합니다.",
+        help="배치 실행 후 커밋하지 않고 롤백합니다. --interactive 와 함께 쓸 수 없습니다.",
     )
     session.add_argument(
         "--debug",
@@ -536,6 +537,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     args = parser.parse_args(argv)
+    if args.interactive and args.dry_run:
+        parser.error("--interactive 와 --dry-run 은 함께 쓸 수 없습니다. -q 또는 -f 로 배치 실행하세요.")
     apply_config(args, load_greenplum_settings(args), parser, sqlfile.load_sql_settings(args))
 
     # 셸은 구간별 소요 시간을 내지 않는다. 세션 전체를 재봐야 의미가 없고,

@@ -71,11 +71,11 @@ coordinator:
   stage_unique_staging: ${coordinator.stage_unique_staging:true}   # stage_insert: staging 테이블명에 task_id 접미사(task별 고유) + task 종료 시 DROP. 풀 재사용 시 TEMP "already exists" 충돌 방지
   poll_interval_s: ${coordinator.poll_interval_s:1.0}     # task 상태 폴링 간격(초)
   task_timeout_s: ${coordinator.task_timeout_s:3600}      # task HTTP 전체(read) 타임아웃(초)
-  # executor 장애 대응(연결 실패 시 재시도 → 다른 executor 로 failover)
+  # executor 장애 대응(동일 노드 재시도, 미접수가 확실할 때만 failover)
   task_connect_timeout_s: ${coordinator.task_connect_timeout_s:5.0}  # 접속 전용 타임아웃(초). 죽은 executor 빠르게 실패
   task_max_retries: ${coordinator.task_max_retries:2}     # 연결 실패 시 같은 executor 재시도 횟수(지수 백오프)
   task_retry_backoff_s: ${coordinator.task_retry_backoff_s:0.5}      # 재시도 백오프 기준(초): backoff*2**시도
-  task_failover: ${coordinator.task_failover:true}        # 재시도 소진 시 다른 executor 로 재배정
+  task_failover: ${coordinator.task_failover:true}        # 미접수가 확실한 접속 실패·429·503에서만 다른 executor로 재배정
 
   executor_select: ${coordinator.executor_select:round_robin}  # executor 선택: round_robin(기본) | least_loaded | p2c(HA 권장)
   # Phase 3(HA): 부하 뷰 소스 auto(멀티=self_report, 단일=monitor) | monitor | self_report

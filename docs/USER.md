@@ -30,18 +30,22 @@ preview 용 조회만 예외인데, 그것은 `POST /query-execute` 라는 별�
 가장 단순한 형태는 SQL 과 분할 기준 컬럼, 대상 테이블 세 가지다.
 
 ```bash
-curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' --data-binary @- <<'JSON'
+{
   "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('2026-01-01','2026-01-02') AND region='KR'",
   "partition_column": "dt",
   "target_table": "public.sales_mirror",
   "parallelism": 2
-}'
+}
+JSON
 # → 202 {"job_id": "job_ab12cd34"}
 ```
 
 여기서 `partition_column` 은 `IN` 목록으로 나눌 기준 컬럼이다. 위 요청은 `dt IN ('2026-01-01',
 '2026-01-02')` 를 두 task 로 갈라 각각 하루씩 읽는다. 그러므로 이 컬럼에 대한 `IN` 절이 SQL 안에
-반드시 있어야 하고, 값이 `parallelism` 보다 적으면 그만큼만 나뉜다.
+반드시 있어야 한다. 중복 값은 한 번만 배정하며, 고유 값이 `parallelism`보다 적으면 task 수도 줄어든다.
+파티션 조건을 우회하는 `OR`나 부정 조건은 `UNSAFE_PARTITION_PREDICATE`로 거절한다.
+복합 쿼리는 분할 결과를 합쳐도 원본 결과가 유지되는지 별도로 확인해야 한다.
 
 자주 쓰는 나머지 필드를 훑어보면 이렇다. `parallelism` 은 몇 task 로 나눌지를 1에서 128 사이로
 정하며 기본값은 4다. `split_strategy` 는 값을 잇달아 묶을지( `contiguous` , 기본) 번갈아 나눌지 (
@@ -52,8 +56,8 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 
 파싱과 관련된 두 필드도 알아 둘 만하다. `sql_dialect` 는 SQL 을 해석할 방언(dialect)이며 기본값은
 `hive` 다. `strict_validation` 은 기본값이 `true` 로 단순한 SELECT 만 받는데, JOIN 이나 서브쿼리,
-GROUP BY 가 섞인 복합 쿼리를 보내려면 `false` 로 둔다. 그러면 파티션 `IN` 절을 쿼리 트리 어디에
-있든 찾아 나눈다. 소스가 Impala 라면 `impala_query_options` 로 그 작업에만 적용할 SET 옵션을
+GROUP BY 가 섞인 복합 쿼리를 보내려면 `false` 로 둔다. 그러면 중첩 SELECT의 WHERE에 있는 파티션 `IN`도 찾는다.
+다만 분할 조건을 우회하는 OR·NOT·값 표현식은 허용하지 않는다. 소스가 Impala 라면 `impala_query_options` 로 그 작업에만 적용할 SET 옵션을
 넘길 수 있다(예: `{"MEM_LIMIT": "2g", "REQUEST_POOL": "etl"}`). 이 옵션은 소스 SELECT 에만 붙고
 Greenplum 쪽 INSERT 에는 영향을 주지 않는다.
 
@@ -70,7 +74,7 @@ Greenplum 쪽 INSERT 에는 영향을 주지 않는다.
 curl -s localhost:8088/jobs \
   -H 'content-type: application/json' \
   -H 'Idempotency-Key: sales-mirror-2026-01-02' \
-  -d '{...}'
+  -d @job.json
 ```
 
 같은 키로 같은 본문이 다시 오면 서버는 새 작업을 만들지 않고 원래 작업을 그대로 돌려준다. 이때는
@@ -107,7 +111,8 @@ staging 테이블에 COPY 한 뒤 그것을 target 으로 INSERT 하는데, 이 
 한다면 `wrapper_query` 에 감쌀 쿼리를 두고 `{{SUBQUERY}}` 자리에 각 task 가 치환되게 한다
 (placeholder 는 `wrapper_placeholder` 로 바꿀 수 있다).
 
-`write_mode: overwrite_partitions` 를 지원하므로 재실행 멱등이 성립한다.
+`write_mode: overwrite_partitions`는 파티션 DELETE와 COPY를 같은 트랜잭션에서 수행한다.
+소스 범위와 삭제 범위가 일치하고 같은 파티션의 실행이 겹치지 않을 때 재실행 중복을 막는다.
 
 ### statement — 옮기지 않고 대상에서 실행
 
@@ -221,11 +226,13 @@ SQL 전문을 매번 만들어 보내는 대신, 서버에 등록된 템플릿�
 그대로다.
 
 ```bash
-curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' --data-binary @- <<'JSON'
+{
   "template_id": "sales_migration",
   "params": {"start_dt": "2026-07-01", "end_dt": "2026-07-07", "regions": ["KR"]},
   "parallelism": 4
-}'
+}
+JSON
 ```
 
 쓸 수 있는 템플릿은 `GET /templates` 로 확인한다. `template_id` 를 주면 `sql`·`staging_ddl`·
@@ -352,9 +359,8 @@ curl -s localhost:8088/jobs/$JOB_ID          # task 목록까지 함께
 이름이 `_at` 로 끝나는 필드는 모두 시각이며 밀리초 세 자리까지 담은 `yyyy-MM-dd HH:mm:ss.sss`
 문자열이다. 해당 사건이 아직 일어나지 않았으면 `null` 이다.
 
-상태는 `PENDING` 으로 시작한다. 접수는 됐지만 실행 슬롯을 기다리는 중이라는 뜻이다. 슬롯을 잡으면
-`SPLITTING` 으로 넘어가 쿼리를 검증하고 task 로 나누며, 그다음 `RUNNING` 에서 executor 들이 task 를
-실행한다. 종료 상태는 넷이다. `DONE` 은 모든 task 가 성공한 것이고, `PARTIAL` 은 일부만 성공한
+요청을 검증·분할한 뒤 Job을 `SPLITTING`으로 저장한다. 백그라운드 실행은 `PENDING`에서
+슬롯을 기다리고, 슬롯을 얻으면 `RUNNING`으로 전환해 task를 실행한다. 종료 상태는 넷이다. `DONE` 은 모든 task 가 성공한 것이고, `PARTIAL` 은 일부만 성공한
 것으로 `best_effort` 정책에서 나온다. `FAILED` 는 실패, `CANCELLED` 는 취소다. 이 넷에 도달하면 더
 변하지 않으므로 폴링을 멈추면 된다.
 
@@ -443,11 +449,13 @@ curl -s -X POST localhost:8088/jobs/$JOB_ID/retry    # 실패한 task 만 다시
 템플릿의 SELECT 부분만 렌더해 실행하고 상위 몇 행을 동기로 돌려주므로 폴링이 필요 없다.
 
 ```bash
-curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
+curl -s localhost:8088/query-execute -H 'content-type: application/json' --data-binary @- <<'JSON'
+{
   "template_id": "sales_migration",
   "params": [{"name": "region", "value": "KR"}],
   "limit": 100
-}'
+}
+JSON
 ```
 
 여기서 `params` 는 언제나 이름과 값을 담은 배열이다. `/jobs` 의 템플릿 모드가 객체 형태도 받는 것과
@@ -479,7 +487,7 @@ curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
 
 `422` 가 두 형태라는 점에 주의한다. 위처럼 이 애플리케이션이 던지는 도메인 검증 오류는 `error_code`
 와 `message` 를 담아 원인을 코드로 분기할 수 있지만, 요청 본문이 스키마 자체에 어긋나 프레임워크가
-막는 경우(예: `sql` 을 아예 빠뜨리거나 `parallelism` 이 범위를 벗어난 경우)는 `detail` 배열 형태로
+막는 경우(예: `parallelism`이 허용 범위를 벗어나거나 필드 타입이 잘못된 경우)는 `detail` 배열 형태로
 온다. 클라이언트를 만든다면 두 형태를 모두 처리한다.
 
 ```json
@@ -499,7 +507,8 @@ curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
 `UNSUPPORTED_JOIN` 과 `UNSUPPORTED_GROUP_BY`, `UNSUPPORTED_HAVING`, `UNSUPPORTED_DISTINCT`,
 `UNSUPPORTED_AGGREGATE` 는 모두 원인이 하나다. 기본값인 `strict_validation: true` 가 단순한 SELECT
 만 받는데 JOIN 이나 GROUP BY 가 섞인 쿼리를 보냈다는 뜻이다. `false` 로 두면 복합 쿼리도 받으면서
-파티션 `IN` 절을 쿼리 어디에 있든 찾아 나눈다.
+중첩 SELECT의 WHERE에 있는 파티션 `IN`도 찾아 나눈다. 이 경우에도 분할 조건은 반드시 적용되는
+양의 필터여야 하며, 위반하면 `UNSAFE_PARTITION_PREDICATE`가 나온다.
 
 필드가 모자란 경우는 메시지가 무엇이 빠졌는지 짚어 준다. `MISSING_REQUIRED_FIELDS` 는 공통 필수
 필드가 빠진 것이고, `STAGE_INSERT_REQUIRES_FIELDS`·`LOCAL_STAGE_REQUIRES_FIELDS`·

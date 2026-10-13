@@ -24,15 +24,16 @@
 target INSERT 를 중앙에서 실행**합니다. 후자에서도 행 자체는 스테이지에서 GP 세그먼트로 직접
 병렬 유입되며 coordinator 는 SQL 만 보냅니다 — data plane 은 여전히 coordinator 를 비껴갑니다.
 
-데이터가 coordinator 를 통과하지 않으므로 처리량 ceiling 은 coordinator 가 아니라 executor 의 수와 그
-뒤의 Impala·Greenplum 용량으로 정해집니다. coordinator 를 아무리 키워도 처리량은 늘지 않습니다.
+대량 적재 처리량은 주로 executor와 소스·대상 DB, 네트워크 용량에 좌우됩니다.
+Coordinator의 요청 처리나 디스패치가 병목이면 해당 자원과 동시성 설정도 조정해야 합니다.
+병렬 처리 효과는 파티션 분포와 각 계층의 여유 용량을 측정해 판단합니다.
 
 ![0. 큰 그림 — data plane과 제어 평면 분리](images/performance-01.svg)
 
 `(데이터)` 로 표시한 선은 모두 소스·executor·스테이지·Greenplum 사이에서만 오가고, coordinator 에
-걸린 선은 전부 `(제어)` — task 디스패치와 Phase 2 SQL 뿐입니다. 결론은 둘입니다. 처리량을 늘리려면
-executor 수 또는 executor 당 동시 task 수를 늘리고(Scale Out), coordinator 는 처리량이 아니라
-가용성을 위해 늘립니다(HA).
+걸린 선은 전부 `(제어)` — task 디스패치와 Phase 2 SQL 뿐입니다. 결론은 둘입니다. 적재 계층이 병목이면
+executor 수와 동시 task 수를 조정합니다(Scale Out). Coordinator 증설은 가용성(HA)과
+요청 처리 용량을 함께 고려합니다.
 
 ---
 
@@ -111,11 +112,11 @@ coordinator.orphan_reconcile_interval_s=30
 
 ### 2.2 두 종류의 장애와 대응
 
-**(a) executor 장애.** coordinator 가 task 를 보내려다 연결이 실패하면 곧장 포기하지 않고 같은
-executor 로 다시 시도합니다. 재시도 횟수는 `task_max_retries`, 간격은 지수 백오프(2배씩 증가)를
-씁니다. 끝내 안 되면 `task_failover=true` 일 때만 다른 executor 로 재배정하며, 새 후보는
-`executor_select` 정책(p2c 라면 살아 있는·한가한 쪽)을 따릅니다. 재배정받은 executor 는 task 를
-수락해 READING → WRITING → DONE 으로 정상 진행합니다.
+**(a) executor 장애.** 같은 executor에 `task_max_retries`만큼 지수 백오프로 재시도합니다.
+접속 자체가 실패했거나 429·503으로 접수를 거절한 경우에만 `task_failover`에 따라 다른 후보로
+넘깁니다. 응답 유실 등으로 접수 여부가 불확실해지면 같은 executor에만 재시도합니다.
+폴링 연결이 끊겨 재시도를 소진하면 task를 실패 처리하며 자동 재배정하지 않습니다.
+`overwrite_partitions`도 기존 실행과 겹치면 안전하지 않으므로 실행·커밋 여부를 확인한 뒤 재처리합니다.
 
 **(b) coordinator 장애.** 각 coordinator 는 살아 있다는 heartbeat 를 `coordinator_status` 테이블에
 `heartbeat_interval_s` 마다 남깁니다. 어떤 job 의 소유 coordinator 가 `coordinator_stale_s` 를
@@ -180,7 +181,7 @@ coordinator 가 task 진행을 확인하고(폴링), 응답이 없을 때 얼마
 | `coordinator.task_connect_timeout_s` | 5.0 | **접속** 전용 타임아웃. 죽은 executor 를 빨리 실패시켜 failover 가속 |
 | `coordinator.task_max_retries` | 2 | 연결 실패 시 같은 executor 재시도 횟수(지수 백오프) |
 | `coordinator.task_retry_backoff_s` | 0.5 | 백오프 기준: `backoff × 2^시도` |
-| `coordinator.task_failover` | true | 재시도 소진 시 다른 executor 로 재배정 |
+| `coordinator.task_failover` | true | 미접수가 확실한 연결 실패·429·503에서 재시도 소진 후 다른 executor로 재배정 |
 
 타임아웃은 두 종류입니다. `task_timeout_s` 는 task 전체가 끝날 때까지, `task_connect_timeout_s` 는
 연결을 맺는 순간까지만 기다립니다. 후자를 짧게 두면 죽은 executor 를 빨리 가려내 failover 를

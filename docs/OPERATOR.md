@@ -88,8 +88,8 @@ tail -f $L/query-executor-server-8087-warn.log
 grep 'a1b2c3d4' $L/query-coordinator-server.log $L/query-executor-server-*.log
 ```
 
-실행한 SQL 도 전부 기록된다. 로그 레벨과 무관하게 INFO 로 남으므로 평소 설정에서도 무엇을 읽어
-무엇을 적재했는지가 비어 있지 않다.
+실행 SQL은 `logging.sql.enabled=true`일 때 INFO로 기록된다. 로거와 핸들러의 레벨을
+WARNING 이상으로 높이면 기록되지 않으므로, SQL 추적이 필요하면 INFO 이하를 유지한다.
 
 ```
 SQL 실행 datasource=impala phase=SELECT | SELECT user_id, ... WHERE dt IN ('2026-01-01')
@@ -499,7 +499,8 @@ bin/s3-ops ls s3://<버킷>/<프리픽스>/$JOB_ID/
 ### 자주 나오는 원인
 
 가장 먼저 의심할 것은 executor 에 닿지 못한 경우다. coordinator 는 연결에 실패하면 몇 번 재시도했다가
-다른 executor 로 넘기므로(`coordinator.task_failover`), 로그에 연결 실패가 반복된다면 그 executor 의
+미접수가 확실한 접속 실패·429·503에 한해 다른 executor로 넘긴다(`coordinator.task_failover`).
+응답 유실이나 실행 중 연결 끊김은 재배정하지 않으므로 기존 실행을 먼저 확인한다. 반복 장애는 해당 executor의
 프로세스와 포트를 확인한다. 다만 `local_stage` 는 executor 와 세그먼트가 짝지어 있어 다른 곳으로
 넘어가면 그 짝이 깨지므로, 이 모드에서는 failover 가 도는 것 자체가 이미 신호다.
 
@@ -750,7 +751,7 @@ S3 를 쓴다면 `s3.delete_on_cleanup` 이 꺼져 있는지 확인한다. 꺼�
 에는 새로 생긴 키만 손으로 더한다. 운영자가 채운 값은 그대로 둔다.
 
 ```bash
-NEW=<새-버전-소스-트리>
+NEW='/path/to/new-source'  # 새 버전 소스 경로로 바꾼다
 CONF=/data1/distributed-query-executor/config
 
 # 1) 무엇이 달라졌는지 본다(새로 생긴 설정 키 확인)
@@ -798,3 +799,6 @@ coordinator 를 여러 대 띄우려면 작업 저장소와 이력을 반드시 
 마지막으로 시험해 볼 일이 있을 때는 executor 프로세스를 따로 띄우지 않아도 된다.
 `coordinator.executor_mode=local` 로 두면 coordinator 안에서 백엔드를 직접 실행하므로, 설정이나
 쿼리가 의도대로 도는지만 확인할 때 편하다.
+
+스테이징 정리 API는 안전한 job 식별자만 받으며, 잘못된 값은 422로 거절한다.
+로컬 정리는 해당 job의 하위 디렉터리만 삭제하며 외부 경로를 가리키는 심볼릭 링크는 거절한다.

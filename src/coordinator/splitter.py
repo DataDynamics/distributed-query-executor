@@ -5,9 +5,9 @@
 생성한다. 이렇게 만든 sub-query들은 서로 다른 executor에 분산 실행된다.
 
 핵심 설계: 원문 SQL 포맷(들여쓰기·대소문자·주석 등)을 최대한 보존하기 위해 AST를 통째로
-재직렬화하지 않고 **파티션 IN 절의 값 목록(괄호 안) 부분만 문자열로 치환**한다. 정규식으로
+재직렬화하지 않고 **파티션 IN 절의 값 목록(괄호 안) 부분만 문자열로 치환**한다. 토큰으로
 값 목록의 문자 구간을 찾고 그 구간만 갈아끼우므로 나머지 SQL은 원문 그대로 남는다. 단,
-정규식으로 구간을 찾지 못하면 AST를 복제·수정 후 재직렬화하는 방식으로 폴백한다.
+토큰으로 구간을 찾지 못하면 AST를 복제·수정 후 재직렬화하는 방식으로 폴백한다.
 
 분배 전략(strategy):
   - contiguous(기본)는 값을 연속된 덩어리로 나눈다. [a,b,c,d] 는 [a,b] 와 [c,d] 가 된다.
@@ -19,7 +19,9 @@
 from __future__ import annotations
 
 import logging
-import re
+import sqlglot
+from sqlglot import exp
+from sqlglot.tokens import TokenType
 from dataclasses import dataclass
 
 from .parser import ParsedQuery, find_partition_in
@@ -87,44 +89,28 @@ def _chunk(values: list, n: int, strategy: str) -> list[list]:
     return buckets
 
 
-def _value_span(sql: str, partition_column: str) -> tuple[int, int] | None:
-    """원문 SQL에서 파티션 컬럼 IN 절의 *값 목록*(괄호 안) 문자 구간을 찾는다.
-
-    포맷 보존 치환을 위해, AST가 아니라 원문 문자열 상에서 갈아끼울 정확한 구간을
-    찾는 함수다.
-
-    반환:
-        (start, end) — 여는 괄호 바로 다음 위치 ~ 짝이 맞는 닫는 괄호 직전 위치.
-        IN 절을 못 찾으면 None.
-
-    동작:
-        1) 정규식으로 ``<선택적 한정자><컬럼> IN (`` 패턴을 찾는다. 테이블 한정자
-           유무·대소문자는 무시하며, lookbehind ``(?<![\\w.])`` 로 ``xcol``·``a.col``
-           같이 식별자 중간에 걸리는 오매칭을 막는다.
-        2) 여는 괄호 다음부터 괄호 깊이(depth)를 세며 스캔해, 깊이가 0이 되는
-           '짝이 맞는' 닫는 괄호를 찾는다. 값 목록 안에 함수 호출 등 중첩 괄호가
-           있어도 올바른 끝을 찾기 위함이다.
-    """
-    bare = re.escape(partition_column.split(".")[-1])
-    # 선택적 한정자와 <컬럼> IN ( ... 을 잡는다. 식별자 중간에 매칭되지 않도록 lookbehind 를 쓴다.
-    pat = re.compile(
-        r"(?<![\w.])(?:[A-Za-z_]\w*\.)?" + bare + r"\s+IN\s*\(",
-        re.IGNORECASE,
-    )
-    m = pat.search(sql)
-    if not m:
+def _value_span(sql: str, in_node: exp.In, dialect: str) -> tuple[int, int] | None:
+    """선택한 AST 컬럼의 원문 위치와 토큰으로 IN 괄호 구간을 찾는다."""
+    column_end = in_node.this.this.meta.get("end")
+    if column_end is None:
         return None
-
-    start = m.end()  # 여는 괄호 바로 다음 위치다
-    depth = 1  # 매치가 여는 괄호까지 포함하므로 깊이 1 에서 시작한다
-    for i in range(start, len(sql)):
-        c = sql[i]
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-            if depth == 0:  # 처음 여는 괄호와 짝이 맞는 닫는 괄호에 도달했다
-                return (start, i)
+    tokens = sqlglot.tokenize(sql, read=dialect)
+    for i, token in enumerate(tokens):
+        if token.end != column_end:
+            continue
+        if (i + 2 >= len(tokens) or tokens[i + 1].token_type != TokenType.IN
+                or tokens[i + 2].token_type != TokenType.L_PAREN):
+            return None
+        start = tokens[i + 2].end + 1
+        depth = 1
+        for following in tokens[i + 3:]:
+            if following.token_type == TokenType.L_PAREN:
+                depth += 1
+            elif following.token_type == TokenType.R_PAREN:
+                depth -= 1
+                if depth == 0:
+                    return start, following.start
+        return None
     return None
 
 
@@ -146,7 +132,7 @@ def split(
         1) IN 노드를 다시 찾아 값 표현식들을 ``_chunk`` 로 버킷 분할한다(빈 버킷 제거).
         2) 원문에서 값 목록 구간(span)을 한 번만 찾아 두고, 버킷마다 그 구간만
            새 값 문자열로 치환해 sub-query를 만든다(원문 포맷 보존).
-        3) 정규식으로 span을 못 찾으면 AST를 복제해 IN 값 목록만 교체 후 재직렬화하는
+        3) 토큰으로 span을 못 찾으면 AST를 복제해 IN 값 목록만 교체 후 재직렬화하는
            폴백 경로를 쓴다(포맷은 보존되지 않을 수 있음).
 
     파티션 IN 절은 트리 어디에 있든(중첩 서브쿼리 포함) ``find_partition_in`` 으로
@@ -157,14 +143,14 @@ def split(
     buckets = [b for b in _chunk(value_exprs, parallelism, strategy) if b]
 
     # 원문 치환 구간은 버킷마다 동일하므로 루프 밖에서 한 번만 계산한다.
-    span = _value_span(parsed.sql, parsed.partition_column)
+    span = _value_span(parsed.sql, src_in, parsed.dialect)
     # 요청 parallelism 보다 적은 task 가 왜 생겼는지(값 개수로 클램프) 추적할 수 있게 남긴다.
     logger.debug(
         "분할: 요청 parallelism=%d → %d버킷 (파티션 값 %d개, 전략=%s, 컬럼=%s)",
         parallelism, len(buckets), len(value_exprs), strategy, parsed.partition_column,
     )
     if span is None:
-        # 정규식으로 값 구간을 찾지 못해 AST 재직렬화로 폴백한다. 이 경우 원문 포맷이 바뀔 수 있다.
+        # 토큰으로 값 구간을 찾지 못해 AST 재직렬화로 폴백한다. 이 경우 원문 포맷이 바뀔 수 있다.
         logger.debug(
             "포맷 보존 실패(값 span 미발견) → AST 재직렬화 폴백 (컬럼=%s)",
             parsed.partition_column,
@@ -179,7 +165,7 @@ def split(
             s, e = span
             sub_sql = parsed.sql[:s] + ", ".join(rendered) + parsed.sql[e:]
         else:
-            # 폴백 경로: 정규식으로 구간을 못 찾았을 때 AST를 복제·수정 후 재직렬화.
+            # 폴백 경로: 토큰으로 구간을 못 찾았을 때 AST를 복제·수정 후 재직렬화.
             # 원본 AST를 건드리지 않도록 copy() 후 작업한다.
             cloned = parsed.expression.copy()
             target_in = find_partition_in(cloned, parsed.partition_column)

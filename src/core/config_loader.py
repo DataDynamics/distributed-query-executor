@@ -1,14 +1,7 @@
-"""properties 변수 치환을 지원하는 설정 로더다.
+"""properties 값으로 YAML의 ${변수:기본값}을 치환하는 설정 로더다.
 
-config.properties(Java 스타일 key=value)와 config.yml 을 읽어,
-YAML 값 안의 ``${variable}`` / ``${variable:default}`` 자리표시자를 properties
-값으로 치환한 최종 설정 dict 를 만든다. 이렇게 분리해 두면 환경별로 달라지는
-값(호스트, 포트, 비밀번호 등)은 properties 에만 두고, 구조(YAML)는 공통으로
-재사용할 수 있다. Spring Boot 의 ``${...:default}`` 관례를 그대로 흉내 낸 것이다.
-
-core.config 모듈이 이 로더의 load_config() 를 호출해 원시 설정 dict 를 얻는다.
-(argus-catalog backend의 config_loader 와 동일한 방식)
-"""
+환경별 값은 config.properties에, 구조는 config.yml에 둔다.
+core.config는 load_config()의 반환값을 사용한다."""
 
 # Python 3.9 호환: PEP 604 (``X | None``) 유니언을 함수 시그니처에서 쓰므로,
 # 어노테이션 평가를 지연(문자열화)시켜 3.9 에서도 런타임 오류 없이 동작하게 한다.
@@ -33,21 +26,10 @@ DEFAULT_CONFIG_DIR = Path("/data1/distributed-query-executor/config")
 
 
 def load_properties(path: Path) -> dict[str, str]:
-    """Java 스타일 .properties 파일을 읽어 키와 값의 dict 로 돌려준다.
+    """properties 파일을 키·값 사전으로 읽는다. 파일이 없으면 빈 사전을 반환한다.
 
-    인자:
-        path: 읽을 .properties 파일 경로.
-
-    반환:
-        파싱된 key/value dict. 파일이 없으면(선택적 설정일 수 있으므로) 빈 dict.
-
-    파싱 규칙(Java properties 관례를 단순화한 형태):
-        - 앞뒤 공백은 제거한다.
-        - 빈 줄과 ``#``/``!`` 로 시작하는 주석 줄은 건너뛴다.
-        - 구분자는 ``=`` 또는 ``:`` 둘 다 허용하며, 줄에서 **먼저 등장하는**
-          구분자 한 개만 기준으로 key/value 를 나눈다. value 쪽에 구분자가 더
-          들어 있어도(예: URL 의 ``:``) 잘리지 않게 하기 위함이다.
-    """
+    빈 줄과 #/! 주석은 건너뛴다. 구분자는 =를 우선하고, 없으면 :를 사용한다.
+    키·값의 앞뒤 공백을 제거하며 첫 구분자 뒤의 내용은 값으로 보존한다."""
     props: dict[str, str] = {}
 
     # 파일 부재는 오류가 아니라 정상 상황(설정이 선택적일 수 있음)이므로 debug 로만 남긴다.
@@ -62,8 +44,7 @@ def load_properties(path: Path) -> dict[str, str]:
             if not line or line.startswith("#") or line.startswith("!"):
                 continue
 
-            # '=' 와 ':' 중 줄에서 더 앞에 오는 구분자로 나눈다. find 가 -1 을 돌려주면 다음
-            # 구분자를 시도하고, 둘 다 없으면 그 줄을 무시한다.
+            # '='를 우선하고 없으면 ':'로 나눈다. 둘 다 없으면 이 줄을 무시한다.
             for sep in ("=", ":"):
                 idx = line.find(sep)
                 if idx >= 0:
@@ -76,22 +57,9 @@ def load_properties(path: Path) -> dict[str, str]:
 
 
 def _resolve_value(value: str, props: dict[str, str]) -> str:
-    """문자열 하나에 들어 있는 ``${variable}`` / ``${variable:default}`` 를 모두 치환한다.
+    """문자열의 자리표시자를 properties 값, 명시한 기본값 순으로 치환한다.
 
-    인자:
-        value: 자리표시자를 포함할 수 있는 원본 문자열.
-        props: 치환에 사용할 변수 사전.
-
-    반환:
-        모든 자리표시자가 치환된 문자열. 한 문자열에 자리표시자가 여러 개 있어도
-        re.sub 가 전부 처리한다.
-
-    치환 우선순위:
-        1) props 에 변수명이 있으면 그 값.
-        2) 없으면 ``:`` 뒤에 적힌 기본값(있을 경우).
-        3) 둘 다 없으면 경고 로그를 남기고 **원본 자리표시자를 그대로 둔다**
-           (예외로 죽이지 않고, 미치환 사실을 흔적으로 남겨 디버깅을 돕기 위함).
-    """
+    둘 다 없으면 경고를 남기고 원본 자리표시자를 보존한다."""
 
     def replacer(match: re.Match) -> str:
         var_name = match.group(1)
@@ -111,22 +79,9 @@ def _resolve_value(value: str, props: dict[str, str]) -> str:
 
 
 def _resolve_dict(data: dict[str, Any], props: dict[str, str]) -> dict[str, Any]:
-    """중첩 dict 전체를 순회하며 문자열 값의 자리표시자를 재귀 치환한다.
+    """중첩 사전의 문자열 값을 치환한 새 사전을 반환한다.
 
-    인자:
-        data: YAML 에서 읽은 설정 dict(중첩 dict/list 포함 가능).
-        props: 치환에 사용할 변수 사전.
-
-    반환:
-        구조는 동일하되 모든 문자열 값이 치환된 **새 dict**.
-
-    타입별 처리:
-        - str: 그 자리에서 치환.
-        - dict: 한 단계 깊이 들어가 재귀 처리.
-        - list: 원소 중 문자열만 치환하고 나머지 타입은 그대로 둔다
-          (숫자/불리언 원소를 문자열로 바꾸지 않기 위함).
-        - 그 외(int/bool/None 등): 치환 대상이 아니므로 그대로 복사.
-    """
+    리스트는 문자열 원소만 치환하며, 나머지 타입과 리스트 안의 사전은 그대로 둔다."""
     resolved = {}
     for key, value in data.items():
         if isinstance(value, str):
@@ -144,18 +99,7 @@ def _resolve_dict(data: dict[str, Any], props: dict[str, str]) -> dict[str, Any]
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    """YAML 파일을 안전하게 읽어 dict 로 반환한다.
-
-    인자:
-        path: 읽을 YAML 파일 경로.
-
-    반환:
-        파싱된 dict. 파일이 없거나, 비어 있거나, 최상위가 dict 가 아닌 경우
-        (예: 리스트나 스칼라 한 개)에는 빈 dict 를 돌려준다 — 이후 단계가
-        항상 dict 를 가정하고 동작하기 때문에 형태를 강제로 통일하는 것이다.
-
-    임의 객체 생성을 막기 위해 ``yaml.safe_load`` 를 사용한다.
-    """
+    """safe_load로 YAML을 읽는다. 파일이 없거나 최상위가 사전이 아니면 빈 사전을 반환한다."""
     if not path.is_file():
         logger.debug("YAML 설정 파일을 찾을 수 없음: %s", path)
         return {}
@@ -173,25 +117,10 @@ def load_config(
     yaml_path: Path | str | None = None,
     properties_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    """properties 변수로 YAML 을 치환하여 최종 설정 dict 를 만든다.
+    """properties 값을 YAML에 적용한 설정 사전을 반환한다.
 
-    이 모듈의 공개 진입점이다. properties 를 먼저 읽어 변수 사전을 만든 뒤,
-    YAML 을 읽어 그 안의 자리표시자를 치환한다.
-
-    인자:
-        config_dir: 설정 파일들이 들어 있는 디렉터리. None 이면 DEFAULT_CONFIG_DIR.
-        yaml_file: 디렉터리 안 YAML 파일명(yaml_path 가 없을 때만 사용).
-        properties_file: 디렉터리 안 properties 파일명(properties_path 가 없을 때만 사용).
-        yaml_path: YAML 파일의 명시적 전체 경로. 지정 시 config_dir/yaml_file 보다 우선.
-        properties_path: properties 파일의 명시적 전체 경로. 지정 시 우선.
-
-    반환:
-        모든 자리표시자가 치환된 설정 dict. YAML 이 비어 있으면(설정 없음) 빈 dict.
-
-    경로 결정 규칙:
-        명시적 ``*_path`` 인자가 있으면 그것을 그대로 쓰고(테스트/임베디드에서
-        임의 위치 파일을 지정하기 위함), 없으면 ``base_dir / *_file`` 로 조합한다.
-    """
+    명시한 yaml_path/properties_path가 디렉터리와 파일명 조합보다 우선한다.
+    config_dir가 없으면 DEFAULT_CONFIG_DIR를 사용한다. YAML이 없으면 빈 사전을 반환한다."""
     base_dir = config_dir or DEFAULT_CONFIG_DIR
 
     # 명시한 경로가 있으면 그것을 쓰고, 없으면 디렉터리와 파일명을 합쳐 만든다.

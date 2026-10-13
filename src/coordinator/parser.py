@@ -13,8 +13,8 @@ strict 모드(1단계 기본): *단순* SELECT만 지원한다.
   - 파티션 IN은 최상위 WHERE 절에 존재해야 함
 
 lenient 모드(strict=False): 중첩 서브쿼리·JOIN·GROUP BY 등 복합 쿼리도 허용하며,
-파티션 컬럼의 IN 절을 AST 트리 어디에 있든 찾아 분할한다. 다만 IN 절 자체의
-제약(리터럴·비부정·비어있지 않음)은 두 모드 모두 동일하게 검사한다.
+중첩 WHERE의 필수 양수 파티션 IN 조건을 찾아 분할한다. OR·NOT으로 우회되는
+조건은 거절하고 같은 리터럴과 숫자 값은 첫 표기를 남겨 중복을 제거한다.
 
 공통적으로 IN 목록은 리터럴 값이어야 하고(서브쿼리 불가), 비어 있지 않으며,
 부정(NOT IN)이 아니어야 한다.
@@ -26,6 +26,7 @@ Impala SQL은 전용 방언(dialect)이 없으므로 sqlglot의 ``hive`` 방언�
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 import sqlglot
 from sqlglot import exp
@@ -144,8 +145,7 @@ def validate_and_parse(
     strict=True (1단계 기본): 단순 SELECT만 허용한다. GROUP BY/집계/DISTINCT/JOIN을
         거부하고, 파티션 IN이 최상위 WHERE에 있어야 한다.
     strict=False (lenient): 복합 쿼리(중첩 서브쿼리/JOIN/GROUP BY/unnest 등)를 허용하며,
-        파티션 컬럼의 IN 절을 트리 어디에 있든 찾아 분할한다. IN 절 자체에 대한
-        제약(리터럴·비부정·비어있지 않음)만 검사한다.
+        중첩 WHERE의 필수 양수 파티션 IN을 분할한다. 둘러싼 OR·NOT도 거절한다.
         ※ 결과 보존 가정: 분할 기준 컬럼이 출력 행을 분할하는 위치(주로 소스 스캔의
           필터)에 있어야 한다. 분할 기준 컬럼 위에서 집계/DISTINCT 하는 쿼리는 결과가
           달라질 수 있으므로 호출자가 책임진다.
@@ -212,6 +212,27 @@ def validate_and_parse(
             "NEGATED_IN", "NOT IN 조건은 분할 시 의미가 달라지므로 지원하지 않습니다."
         )
 
+    # 선택한 IN 은 해당 WHERE 의 필수 양수 조건이어야 한다.
+    ancestor = in_node.parent
+    while isinstance(ancestor, (exp.And, exp.Paren)):
+        ancestor = ancestor.parent
+    if not isinstance(ancestor, exp.Where) or (
+        strict and ancestor is not stmt.args.get("where")
+    ):
+        raise QueryValidationError(
+            "UNSAFE_PARTITION_PREDICATE",
+            "파티션 IN은 WHERE의 필수 양수 조건이어야 합니다(OR·NOT·값 표현식 불가).",
+        )
+
+    enclosing = ancestor.parent
+    while enclosing is not None:
+        if isinstance(enclosing, (exp.Or, exp.Not)):
+            raise QueryValidationError(
+                "UNSAFE_PARTITION_PREDICATE",
+                "중첩 파티션 IN을 감싼 OR·NOT 조건은 분할할 수 없습니다.",
+            )
+        enclosing = enclosing.parent
+
     # ``IN (SELECT ...)`` 형태는 분할할 리터럴 목록이 없으므로 지원하지 않는다.
     if in_node.args.get("query") is not None:
         raise QueryValidationError(
@@ -222,8 +243,18 @@ def validate_and_parse(
     if not values:
         raise QueryValidationError("EMPTY_IN_LIST", "IN 값 목록이 비어 있습니다.")
 
-    # 각 값 노드를 방언 기준 SQL 문자열로 직렬화해 보관한다. splitter 가 이 값을 다시 조합에 쓴다.
-    partition_values = [v.sql(dialect=dialect) for v in values]
+    # 같은 리터럴과 수치가 여러 task 에 배분되지 않도록 첫 표기를 남긴다.
+    unique_values = {}
+    for value in values:
+        literal = value.this if isinstance(value, exp.Neg) else value
+        if isinstance(literal, exp.Literal) and not literal.is_string:
+            number = Decimal(literal.this)
+            key = ("number", number.copy_negate() if isinstance(value, exp.Neg) else number)
+        else:
+            key = ("sql", value.sql(dialect=dialect))
+        unique_values.setdefault(key, value)
+    in_node.set("expressions", list(unique_values.values()))
+    partition_values = [v.sql(dialect=dialect) for v in unique_values.values()]
     return ParsedQuery(
         sql=sql,
         partition_column=partition_column,

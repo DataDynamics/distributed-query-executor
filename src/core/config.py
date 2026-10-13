@@ -325,7 +325,7 @@ class Settings:
         self.task_retry_backoff_s: float = float(
             _get("coordinator", "task_retry_backoff_s", 0.5)
         )
-        # 재시도를 모두 소진하고도 연결에 실패했을 때 다른 살아 있는 executor 로 재배정할지 정한다.
+        # 미접수가 확실한 접속 실패·429·503에서 재시도 소진 후 다른 executor로 넘길지 정한다.
         self.task_failover: bool = _to_bool(
             _get("coordinator", "task_failover", True)
         )

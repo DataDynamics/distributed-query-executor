@@ -14,8 +14,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Sequence
 
-#: 집계에서 합산하는 시계열 카운터. report.Collector.BUCKET_FIELDS 의 부분집합이다.
-_SUM_FIELDS = ("submitted", "completed", "success", "failed", "rejected_429", "rows")
+#: stats.Collector.BUCKET_FIELDS 중 VU별로 합산할 카운터다.
+_SUM_FIELDS = ("submitted", "completed", "success", "failed", "request_errors", "rejected_429", "rows")
 
 
 def _segments(timeline: Sequence[Dict[str, Any]]):
@@ -74,7 +74,7 @@ def per_vu_levels(timeline: Sequence[Dict[str, Any]], warmup_frac: float = 0.3,
             "complete_tps": a["completed"] / s,
             "success_tps": a["success"] / s,
             "rows_per_sec": a["rows"] / s,
-            "error_rate": (a["failed"] / attempts) if attempts > 0 else 0.0,
+            "error_rate": ((a["failed"] + a["request_errors"]) / attempts) if attempts > 0 else 0.0,
             "reject": int(a["rejected_429"]),
         })
     return levels

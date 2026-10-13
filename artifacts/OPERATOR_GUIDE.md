@@ -362,8 +362,8 @@ tail -f $L/query-executor-server-8087-warn.log
 grep 'a1b2c3d4' $L/query-coordinator-server.log $L/query-executor-server-*.log
 ```
 
-실행한 SQL 도 전부 기록된다. 로그 레벨과 무관하게 INFO 로 남으므로 평소 설정에서도 무엇을 읽어
-무엇을 적재했는지가 비어 있지 않다.
+실행 SQL은 `logging.sql.enabled=true`일 때 INFO로 기록된다. 로거와 핸들러의 레벨을
+WARNING 이상으로 높이면 기록되지 않으므로, SQL 추적이 필요하면 INFO 이하를 유지한다.
 
 ```
 SQL 실행 datasource=impala phase=SELECT | SELECT user_id, ... WHERE dt IN ('2026-01-01')
@@ -597,7 +597,8 @@ curl -s localhost:8088/jobs/$JOB_ID | python3 -m json.tool
 
 `error` 에 이유가 있고 `tasks` 배열에서 어느 task 가 어느 executor 에서 실패했는지, 몇 번
 재시도됐는지 보인다. `PARTIAL` 이면 일부만 들어간 것이므로 사용자에게 `POST /jobs/{id}/retry` 를
-안내한다. 이미 성공한 task 는 건너뛰므로 중복 적재 걱정은 없다.
+안내한다. 성공한 task는 제외하지만, 실패로 표시된 task의 적재 여부도 확인해야 한다.
+특히 `append` 작업과 응답 유실은 기존 실행과 대상 데이터를 확인한 뒤 재처리한다.
 
 그다음 그 식별자로 로그를 모은다. 실행한 SQL 이 함께 남아 있으므로 소스 쿼리가 실패했는지 적재
 문장이 실패했는지가 드러난다.
@@ -619,7 +620,8 @@ bin/s3-ops ls s3://<버킷>/<프리픽스>/$JOB_ID/    # s3_stage 중간 산출�
 
 가장 먼저 의심할 것은 executor 에 닿지 못한 경우다. coordinator 는 연결에 실패하면 몇 번
 재시도했다가
-다른 executor 로 넘기므로(`coordinator.task_failover`), 로그에 연결 실패가 반복된다면 그 executor 의
+미접수가 확실한 접속 실패·429·503에 한해 다른 executor로 넘긴다(`coordinator.task_failover`).
+응답 유실이나 실행 중 연결 끊김은 재배정하지 않으므로 기존 실행을 먼저 확인한다. 반복 장애는 해당 executor의
 프로세스와 포트를 확인한다. 다만 `local_stage` 는 executor 와 세그먼트가 짝지어 있어 다른 곳으로
 넘어가면 그 짝이 깨지므로, 이 모드에서는 failover 가 도는 것 자체가 이미 신호다.
 
@@ -1155,9 +1157,9 @@ stderr 로 나간다.** stdout 은 조회 결과 몫이라 파이프로 넘기�
 대부분이며, 도구가 현재 설정과 함께 점검 목록을 출력하므로 위에서부터 하나씩 맞춰 본다.
 
 ```bash
-PYTHONPATH=src python -m tools.impala_query --port 28000 --http-transport -q "SELECT 1"  # HTTP HS2
-PYTHONPATH=src python -m tools.impala_query --no-ssl -q "SELECT 1"                        # 서버가 평문일 때
-PYTHONPATH=src python -m tools.impala_query --auth-mechanism NOSASL -q "SELECT 1"         # 인증 없는 서버
+PYTHONPATH=src .venv/bin/python -m tools.impala_query --port 28000 --http-transport -q "SELECT 1"  # HTTP HS2
+PYTHONPATH=src .venv/bin/python -m tools.impala_query --no-ssl -q "SELECT 1"                        # 서버가 평문일 때
+PYTHONPATH=src .venv/bin/python -m tools.impala_query --auth-mechanism NOSASL -q "SELECT 1"         # 인증 없는 서버
 ```
 
 `--debug` 의 뜻은 도구마다 다르다. `impala_query` 는 실행할 SQL 과 SASL 핸드셰이크 로그를,
@@ -1198,7 +1200,7 @@ bin/s3-ops rmdir s3://dw-stage/dqe-stage/ --older-than 7d --yes
 옮겨야 한다. 이 절은 그 방법을 다룬다.
 
 ```bash
-NEW=<새-버전-소스-트리>
+NEW='/path/to/new-source'  # 새 버전 소스 경로로 바꾼다
 CONF=/data1/distributed-query-executor/config
 
 # 1) 무엇이 달라졌는지 본다(새로 생긴 설정 키 확인)
@@ -1255,3 +1257,6 @@ sudo -u gpadmin vi "$CONF/config.properties"
 **4. 시험할 때는 executor 를 따로 띄우지 않아도 된다.** `coordinator.executor_mode=local` 로 두면
 coordinator 안에서 직접 실행하므로, **설정이나 쿼리가 의도대로 도는지만 확인할 때** 프로세스 하나만
 띄우면 된다.
+
+스테이징 정리 API는 안전한 job 식별자만 받으며, 잘못된 값은 422로 거절한다.
+로컬 정리는 해당 job의 하위 디렉터리만 삭제하며 외부 경로를 가리키는 심볼릭 링크는 거절한다.

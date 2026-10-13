@@ -79,7 +79,7 @@ sudo -u gpadmin /data1/distributed-query-executor/bin/status-executor.sh
 > `config.yml` 을 반드시 교체해야 하는 이유가 있다. config.yml 은 값이 아니라 `${변수:기본값}` **구조**라, 새 버전이 추가한 설정은 config.yml 에 자리(placeholder)가 생겨야 실제로 읽힌다. 이걸 빠뜨리면 properties 에 값을 적어도 조용히 무시된다. 운영자 값은 properties 에 있으므로 교체해도 안전하고, config.yml 을 직접 고쳤다면 `.bak` 에서 확인해 옮긴다.
 >
 > ```bash
-> NEW=<새-버전-소스-트리>
+> NEW='/path/to/new-source'  # 새 버전 소스 경로로 바꾼다
 > CONF=/data1/distributed-query-executor/config
 >
 > # 1) 무엇이 달라졌는지 먼저 본다(새로 생긴 설정 키 확인)

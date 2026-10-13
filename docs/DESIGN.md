@@ -17,7 +17,7 @@ Impala의 큰 `SELECT` 한 건을 여러 executor에게 나눠 병렬로 읽히�
 - **소스 방언(dialect)**: 기본 **Impala**(`sqlglot`의 `hive` 방언), 요청 `sql_dialect`로 재정의(`impala`/`postgres` 등).
 - **타깃**: **Greenplum**(PostgreSQL 기반) → psycopg `COPY` 또는 INSERT.
 - **검증 범위**: 기본 단순 `SELECT`(strict). `strict_validation=false`면 JOIN·서브쿼리·GROUP BY 등 복합 쿼리도 허용(파티션 `IN` 절을 트리 어디서든 탐색).
-- **적재 방식**(`exec_mode`): `copy`(기본) / `statement` / `stage_insert` / `local_stage`(§17).
+- **적재 방식**(`exec_mode`): `copy`(기본) / `statement` / `stage_insert` / `local_stage` / `s3_stage`(§17).
 - **응답 모델**: Job 기반 **비동기** API — job_id 발급 후 polling.
 - **동시성**: admission control(동시 job 슬롯 + 대기 큐) + 디스패치/executor 단 task 상한으로 다층 제어.
 - **운영 형태**: 단일 또는 **멀티 coordinator**(공유 PostgreSQL) + executor N대. 별도 executor 없는 **local 모드**도 지원.
@@ -352,7 +352,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 
 **HTTP 요청/응답 로깅.** 로그 레벨이 **DEBUG일 때만**(`app.debug=true` 또는 `log.level=DEBUG`) 각 요청/응답을 `core.http` 로거로 자동 기록한다(별도 스위치 아님 — DEBUG여도 `logging.http.enabled=false`로 끔). 구현은 **순수 ASGI 미들웨어**(`core.http_logging`)로 `receive`/`send` 메시지를 **엿보기만** 해 downstream 본문 읽기를 깨지 않는다. 본문 복사본은 `max_body`(기본 2KB)까지만 보관하고 원본은 항상 그대로 흘려보내므로 스트리밍/대용량 응답도 로그만 절단될 뿐 정상 전달된다. 본문·헤더 자격증명 (DSN·`password`/`token`/`Authorization` 등)은 마스킹(`core.masking`)하고, 잡음 경로(`/health`· `/metrics`·`/assets`·`/docs` 등)는 기본 제외한다. 설정 `logging.http.{enabled,bodies,max_body, headers,exclude_paths}`, 순수 함수(`format_body`/`format_headers`/`is_excluded`)는 테스트 대상 (`tests/test_http_logging.py`).
 
-**실행 SQL 로깅.** 데이터소스에 실제로 던진 SQL 은 **로그 레벨과 무관하게 INFO 로 모두** `core.sql` 로거에 남긴다(`core.sqllog.log_sql`). HTTP 로깅과 정책이 다른 이유는 목적이 다르기 때문이다 — HTTP 본문은 개발 중 디버깅 재료라 DEBUG 로 충분하지만, "어떤 엔진에 어떤 쿼리를 보내 무엇을 적재했는가"는 **사고 추적·감사의 1차 근거**라 운영 기본 레벨(INFO)에서 비어 있으면 안 된다. 끄려면 `logging.sql.enabled=false` 로 명시해야 한다.
+**실행 SQL 로깅.** `core.sql`은 실행 SQL을 INFO로 기록한다. `logging.sql.enabled=false`로 끌 수 있으며 로거·핸들러의 레벨 필터를 따른다. 운영에서 SQL 추적이 필요하면 INFO 이하를 유지한다.
 
 한 줄 형식은 `SQL 실행 datasource=<엔진> phase=<단계> [target=<대상>] | <SQL> [| params=<바인드값>]` 이고, 앞에는 `core.logging` 이 주입하는 `[job_id][task_id]` 가 붙는다. `datasource` 를 반드시 싣는 이유는 같은 SELECT 라도 Impala 커서로 읽었는지 커스텀 API(Trino 등)로 읽었는지에 따라 결과가 달라지기 때문이다 — 이 값이 없으면 로그만으로는 `datasource` 오설정 사고를 판별할 수 없다. 값은 **커서에서 추론**한다(`datasource_of` — 커스텀 어댑터는 `_name`, impyla 커서는 속성이 없어 `impala`). 덕분에 `_source_execute` 의 시그니처를 바꾸지 않고도 소스별 표기가 갈린다(기존 호출부·테스트 더블 무변경).
 
@@ -372,8 +372,8 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 | 적재 중 실패 | task 트랜잭션 rollback → 부분 적재 잔존 없음 |
 | 과부하 | admission이 `429`로 거부(`Retry-After`) → 클라이언트 재시도 |
 | executor 동시 처리 full | executor가 `POST /tasks`를 **202로 즉시 접수**하고 task를 `QUEUED`로 내부 대기(세마포어). 에러 아님 — coordinator는 폴링하며 기다린다(백프레셔) |
-| executor 연결 실패 | 연결 계열 실패(`TransportError`/5xx)는 같은 executor에 `task_max_retries`회 지수 백오프 재시도 → 소진 시 **다른 살아있는 executor로 failover**(`task_failover`). 시작 전이라 항상 안전 |
-| 실행 중 executor 유실 | 폴링 중 연결 끊김: **멱등(`overwrite_partitions`)이고 후보가 남았을 때만** 다른 executor로 재실행. `append`는 중복 적재 위험이라 재배정 않고 FAILED |
+| executor 연결 실패 | 동일 executor에 재시도한다. 미접수가 확실한 접속 실패·429·503만 `task_failover`에 따라 다른 후보로 넘긴다. 응답 유실 등 접수 여부가 불확실하면 후보를 바꾸지 않는다 |
+| 실행 중 executor 유실 | 폴링 재시도를 소진하면 FAILED로 처리한다. 기존 실행이 계속될 수 있으므로 write_mode와 관계없이 다른 executor에서 자동 재실행하지 않는다 |
 | 취소 | Job cancel → 비종료 task의 executor에 `POST /tasks/{id}/cancel` 전파. 협조적 취소(QUEUED는 즉시, 실행 중은 현재 작업 후 `CANCELLED` 마감) |
 | 타임아웃 | 접속은 `task_connect_timeout_s`(짧게), 전체는 `task_timeout_s`로 분리 적용 → 죽은 executor에 오래 매달리지 않음 |
 | COPY 컬럼 불일치 | copy 모드 **사전검증(preflight)** 이 대용량 스트리밍 전에 SELECT↔대상 컬럼 불일치를 잡아 조기 실패(`copy.preflight=false`로 끔) |
@@ -381,7 +381,9 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 | coordinator 재시작 | `store.backend=file`(또는 postgres)이면 재기동 시 **중단된 job을 FAILED로 정합**(`reconcile_interrupted_jobs`) → `retry`로 재개 |
 | executor 종료(SIGTERM) | **graceful drain**: 신규 task는 503으로 거부, 진행 중 task는 `shutdown_drain_timeout_s` 내 완료를 기다린 뒤 종료 |
 
-"executor 연결 실패"(시작 전)와 "실행 중 executor 유실"(시작 후)은 다르다. 시작 전은 아직 아무것도 적재하지 않았으니 언제든 다른 곳으로 옮겨도 안전하지만, 시작 후는 일부가 이미 적재됐을 수 있어 멱등이 보장되는 `overwrite_partitions`일 때만 재배정한다.
+접속 실패와 응답 유실을 구분한다. 응답을 못 받았어도 executor가 이미 적재 중일 수 있다.
+동일 task 재접수는 같은 프로세스에서 기존 상태를 반환하지만, 재시작·다른 executor까지
+중복 실행을 막지는 못한다. 실행 여부가 불확실한 작업은 자동으로 다른 후보에 넘기지 않는다.
 
 > **멱등성**: `overwrite_partitions`는 task별 담당 파티션을 먼저 DELETE 후 COPY 하므로 같은 sub-query
 > 재실행이 안전하다. executor가 task를 정상 접수해 `FAILED`로 보고한 **백엔드 오류는 재시도 대상이
@@ -690,7 +692,7 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 아래는 아직 구상 단계의 확장 방향이다("헬스 기반 executor 선택"은 이미 구현 완료돼 §12에서 다뤘다).
 
 - **실행 중 즉시 취소**: 백엔드 커서를 `cursor.cancel()`하고 트랜잭션을 rollback해 진행 중이던 Impala 읽기·COPY를 즉시 멈춘다.
-- **append 모드 재실행 안전화**: 현재 폴링 중 유실은 멱등(`overwrite_partitions`)일 때만 재배정한다. task 단위 staging+swap 등으로 `append`도 안전 재실행 가능하게.
+- **장애 후 재실행 안전화**: 현재 폴링 유실 시 자동 재배정하지 않는다. 공유 실행 소유권과 fencing, task 단위 staging+swap 등으로 안전한 재배정을 설계한다.
 - **callback 기반 상태 전파**: polling 대신 executor→coordinator 콜백으로 부하 제거.
 - **집계/GROUP BY 쿼리 지원**: 소스 측 사전 집계 후 적재 또는 적재 후 재집계.
 - **IN 절 자동 합성**: IN이 없을 때 Impala `SHOW PARTITIONS`로 값 조회 후 합성.

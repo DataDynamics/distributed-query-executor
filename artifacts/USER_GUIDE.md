@@ -64,12 +64,14 @@ coordinator 에는 진행 상태와 건수만 올라온다. **옮긴 데이터�
 가장 단순한 형태는 SQL 과 분할 기준 컬럼, 대상 테이블 세 가지다.
 
 ```bash
-curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' --data-binary @- <<'JSON'
+{
   "sql": "SELECT user_id, amount, dt FROM sales WHERE dt IN ('2026-01-01','2026-01-02') AND region='KR'",
   "partition_column": "dt",
   "target_table": "public.sales_mirror",
   "parallelism": 2
-}'
+}
+JSON
 # → 202 {"job_id": "job_ab12cd34"}
 ```
 
@@ -79,7 +81,8 @@ curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
 
 여기서 두 가지를 지켜야 한다. **이 컬럼에 대한 `IN` 절이 SQL 안에 반드시 있어야 한다.** 그리고
 **값의 개수가 나누려는 수보다 적으면 그만큼만 나뉜다.** 값이 2개인데 10조각으로 나누라고 해도
-2조각이 된다.
+2조각이 된다. 중복 IN 값은 한 번만 배정한다. 파티션 조건을 우회하는 OR·부정 조건은
+`UNSAFE_PARTITION_PREDICATE`로 거절한다. 복합 쿼리는 결과 보존 여부도 별도로 검토한다.
 
 자주 쓰는 나머지 필드는 이렇다.
 
@@ -117,7 +120,7 @@ BY 가 섞인 복잡한 쿼리를 보내려면 `false` 로 둔다. 그러면 파
 curl -s localhost:8088/jobs \
   -H 'content-type: application/json' \
   -H 'Idempotency-Key: sales-mirror-2026-01-02' \
-  -d '{...}'
+  -d @job.json
 ```
 
 그러면 서버가 이렇게 처리한다.
@@ -318,11 +321,13 @@ SQL 전문을 매번 만들어 보내는 대신, **서버에 미리 등록해 �
 바뀌어도 호출하는 코드는 그대로 둘 수 있다.**
 
 ```bash
-curl -s localhost:8088/jobs -H 'content-type: application/json' -d '{
+curl -s localhost:8088/jobs -H 'content-type: application/json' --data-binary @- <<'JSON'
+{
   "template_id": "sales_migration",
   "params": {"start_dt": "2026-07-01", "end_dt": "2026-07-07", "regions": ["KR"]},
   "parallelism": 4
-}'
+}
+JSON
 ```
 
 **쓸 수 있는 템플릿 목록은 `GET /templates` 로 확인한다.**
@@ -563,7 +568,8 @@ curl -s -X POST localhost:8088/jobs/$JOB_ID/retry    # 실패한 task 만 다시
 **재실행**은 `PARTIAL`·`FAILED`·`CANCELLED` 로 끝난 작업에서 **실패하거나 취소된 조각만 모아** 새
 작업으로 돌린다.
 
-**이미 성공한 조각은 아예 담기지 않으므로, 데이터가 중복될 걱정 없이 눌러도 된다.**
+성공한 task는 재실행에서 제외한다. 다만 실패 응답 전에 적재가 커밋됐을 수 있으므로,
+`append` 작업과 실행 여부가 불확실한 연결 장애는 대상 데이터와 기존 실행을 확인한 뒤 재처리한다.
 
 ```json
 { "job_id": "job_7a8b9c0d1e2f", "retry_of": "job_3f9c2a1b7d4e", "retried_tasks": 1 }
@@ -583,11 +589,13 @@ curl -s -X POST localhost:8088/jobs/$JOB_ID/retry    # 실패한 task 만 다시
 없다.
 
 ```bash
-curl -s localhost:8088/query-execute -H 'content-type: application/json' -d '{
+curl -s localhost:8088/query-execute -H 'content-type: application/json' --data-binary @- <<'JSON'
+{
   "template_id": "sales_migration",
   "params": [{"name": "region", "value": "KR"}],
   "limit": 100
-}'
+}
+JSON
 ```
 
 **여기서 `params` 는 언제나 배열이다.** 이관 요청에서는 객체 형태도 받으므로 헷갈리기 쉽다. 이
@@ -648,6 +656,7 @@ API 에서는 배열만 받는다.
 | `MISSING_PARTITION_COLUMN` | `partition_column` 필드를 주지 않았다 | 필드를 채운다 |
 | `EMPTY_IN_LIST` | `IN` 절은 있는데 값이 비었다 | 값을 넣는다 |
 | `NEGATED_IN` | `NOT IN` 이라 나눌 기준이 없다 | 값 목록으로 바꾼다 |
+| `UNSAFE_PARTITION_PREDICATE` | 파티션 조건이 WHERE의 필수 양의 조건이 아니다. OR·부정 조건과 필터 위치를 확인한다 |
 | `SUBQUERY_IN_CLAUSE` | `IN (SELECT ...)` 이라 값을 알 수 없다 | 값 목록으로 바꾼다 |
 
 **갈래 2 — 쿼리 자체를 받아들일 수 없다**
@@ -693,8 +702,8 @@ API 에서는 배열만 받는다.
 `UNSUPPORTED_AGGREGATE` 는 **원인이 모두 하나다.**
 
 기본 설정이 **단순한 SELECT 만 받도록** 되어 있는데 JOIN 이나 GROUP BY 가 섞인 쿼리를 보낸 것이다.
-**`strict_validation` 을 `false` 로 두면** 복잡한 쿼리도 받으면서 파티션 조건을 쿼리 어디에 있든
-찾아 나눈다.
+**`strict_validation`을 `false`로 두면** 복잡한 쿼리의 중첩 SELECT에서도 WHERE의 파티션 조건을
+찾아 나눈다. 분할 조건을 우회하는 OR·NOT·값 표현식은 이 경우에도 거절한다.
 
 ### 422 말고 다른 응답
 
@@ -827,13 +836,13 @@ echo "SELECT 1;" | bin/gp-shell                  # 파이프로 넘겨도 된다
 이쪽에서 쓴다.
 
 ```bash
-PYTHONPATH=src python -m tools.gp_query     -q "SELECT 1"
-PYTHONPATH=src python -m tools.impala_query -f daily_orders.sql -V dt=2026-08-01 -o orders.csv
+PYTHONPATH=src .venv/bin/python -m tools.gp_query     -q "SELECT 1"
+PYTHONPATH=src .venv/bin/python -m tools.impala_query -f daily_orders.sql -V dt=2026-08-01 -o orders.csv
 ```
 
 인자 없이 실행하면 사용법과 예시를 보여 준다(`--help` 와 같다). 셸만 예외라 인자 없이 실행하면
-도움말 대신 바로 접속한다. 아래 예제들은 지면을 줄이려고 `PYTHONPATH=src` 를 생략한 곳이 있는데,
-배포 트리의 `.venv` 파이썬으로 부를 때도 이 환경변수는 언제나 필요하다.
+도움말 대신 바로 접속한다. 모듈 실행 예제는 저장소 루트의 `.venv`와 `PYTHONPATH=src`를 사용한다.
+배포 환경에서는 해당 배포 디렉터리에서 실행한다.
 
 ### 비밀번호는 어디서 오는가
 
@@ -846,7 +855,7 @@ PYTHONPATH=src python -m tools.impala_query -f daily_orders.sql -V dt=2026-08-01
 준비가 됐는지는 한 줄로 확인한다.
 
 ```bash
-PYTHONPATH=src python -m tools.gp_query -q "SELECT 1"
+PYTHONPATH=src .venv/bin/python -m tools.gp_query -q "SELECT 1"
 ```
 
 ## 쿼리 실행하기
@@ -854,7 +863,7 @@ PYTHONPATH=src python -m tools.gp_query -q "SELECT 1"
 가장 짧은 형태는 `-q` 로 쿼리를 직접 주는 것이다. 결과가 있으면 표로 보여 준다.
 
 ```bash
-python -m tools.gp_query -q "SELECT order_dt, status, count(*) FROM staging.orders GROUP BY 1, 2"
+PYTHONPATH=src .venv/bin/python -m tools.gp_query -q "SELECT order_dt, status, count(*) FROM staging.orders GROUP BY 1, 2"
 ```
 
 ```
@@ -868,8 +877,8 @@ order_dt   | status   | order_cnt | amount_sum
 `-o` 로 파일 이름을 주면 표 대신 CSV 파일로 쓴다. `--gzip` 을 함께 주면 압축해 저장한다.
 
 ```bash
-python -m tools.impala_query -q "SELECT * FROM sales.orders" -o orders.csv
-python -m tools.impala_query -q "SELECT * FROM sales.orders" -o orders.csv.gz --gzip
+PYTHONPATH=src .venv/bin/python -m tools.impala_query -q "SELECT * FROM sales.orders" -o orders.csv
+PYTHONPATH=src .venv/bin/python -m tools.impala_query -q "SELECT * FROM sales.orders" -o orders.csv.gz --gzip
 ```
 
 **표는 기본 100행까지만 보여 주고 멈춘다.** 그리고 보여줄 만큼만 받고 연결을 끊기 때문에 총 개수를
@@ -879,12 +888,13 @@ python -m tools.impala_query -q "SELECT * FROM sales.orders" -o orders.csv.gz --
 
 Greenplum 쪽은 SELECT 뿐 아니라 DDL 과 DML 도 실행한다. **한 트랜잭션에서 실행하고 성공하면
 커밋하며, 중간에 실패하면 전부 롤백된다.** 지우거나 바꾸는 문장이 실제로 무엇을 건드릴지 먼저 보고
-싶다면 `--dry-run` 을 쓴다. 실행은 하되 **항상 롤백** 하므로 결과 행 수는 볼 수 있고 반영은 되지
-않는다.
+싶다면 배치 실행에 `--dry-run`을 준다. 실행 후 롤백하므로 결과 행 수를 확인할 수 있다.
+대화형 셸(`bin/gp-shell` 또는 `--interactive`)과 `--dry-run`은 함께 사용할 수 없으며,
+접속 전에 오류로 거절한다. `--session-sql`은 `--schema` 유무와 관계없이 접속할 때마다 적용한다.
 
 ```bash
-python -m tools.gp_query -q "TRUNCATE staging.orders"
-python -m tools.gp_query -f load_orders.sql --var dt=2026-08-01 --dry-run
+PYTHONPATH=src .venv/bin/python -m tools.gp_query -q "TRUNCATE staging.orders"
+PYTHONPATH=src .venv/bin/python -m tools.gp_query -f load_orders.sql --var dt=2026-08-01 --dry-run
 # 1,204행
 # --dry-run 이므로 롤백했습니다. 반영되지 않았습니다.
 ```
@@ -897,7 +907,7 @@ python -m tools.gp_query -f load_orders.sql --var dt=2026-08-01 --dry-run
 파일 자리라, 서버가 렌더하는 `templates/` 의 manifest 기반 템플릿과는 성격이 다르다.
 
 ```bash
-python -m tools.impala_query -f daily_orders.sql -V dt=2026-08-01 -o orders.csv
+PYTHONPATH=src .venv/bin/python -m tools.impala_query -f daily_orders.sql -V dt=2026-08-01 -o orders.csv
 ```
 
 `.sql` 파일은 Jinja 템플릿이라 `{{ 변수 }}` 자리에 `-V` 또는 `--var KEY=VALUE` 로 준 값이 들어간다.
@@ -947,7 +957,7 @@ order_id`name`amount`order_dt
 절과 맞춰야 하는데, 흔한 조합은 이렇다.
 
 ```bash
-python -m tools.impala_query -f daily_orders.sql -V dt=2026-08-01 \
+PYTHONPATH=src .venv/bin/python -m tools.impala_query -f daily_orders.sql -V dt=2026-08-01 \
     -o orders.csv.gz --gzip --delimiter $'\t' --null-string '\N' --no-header
 ```
 
@@ -1100,6 +1110,10 @@ fi
 `buckets` 로 계정의 버킷 목록을 볼 수 있지만, 이 목록을 볼 권한 없이 특정 버킷만 쓰는 계정도 흔하다.
 **목록이 비어 있다고 버킷이 없는 것은 아니니** 그럴 때는 `exists` 로 개별 접근을 확인한다.
 
+같은 버킷의 재귀 `cp`·`mv`는 원본과 대상 프리픽스가 같거나 포함 관계이면 실행 전에 거절한다.
+재귀 다운로드는 전체 대상 경로를 먼저 검사하며, 절대 경로·`..`·외부로 연결된 심볼릭 링크가 있으면
+파일을 쓰기 전에 거절한다.
+
 ## 시간이 어디로 갔는지 읽기
 
 작업이 끝나면 구간별 소요 시간 표가 나온다. 성공하든 실패하든 나오므로 실패했을 때 어디까지 갔는지도
@@ -1125,8 +1139,8 @@ fi
 섞이지 않는다. 진행 상황만 끄고 싶으면 `--no-progress` 를 준다(소요 시간 요약은 그대로 나온다).
 
 ```bash
-python -m tools.gp_query -q "SELECT * FROM t" > data.txt     # data.txt 에는 표만 들어간다
-python -m tools.gp_query -q "SELECT * FROM t" 2> /dev/null   # 보고만 버린다
+PYTHONPATH=src .venv/bin/python -m tools.gp_query -q "SELECT * FROM t" > data.txt     # data.txt 에는 표만 들어간다
+PYTHONPATH=src .venv/bin/python -m tools.gp_query -q "SELECT * FROM t" 2> /dev/null   # 보고만 버린다
 ```
 
 ## 막혔을 때
@@ -1192,7 +1206,7 @@ while :; do
 done
 
 # 3) 대상 테이블에서 직접 확인 (API 의 row count 와 대조)
-PYTHONPATH=src python -m tools.gp_query -q \
+PYTHONPATH=src .venv/bin/python -m tools.gp_query -q \
   "SELECT dt, count(*) FROM public.sales_mirror WHERE dt IN ('2026-06-01','2026-06-02') GROUP BY 1 ORDER BY 1"
 ```
 
@@ -1210,6 +1224,6 @@ bin/s3-ops rmdir s3://dw-stage/dqe-stage/$JOB/ --yes
 개인지가 곧 task 수의 상한이므로, 분할이 예상대로 되는지는 이 한 줄로 미리 가늠할 수 있다.
 
 ```bash
-PYTHONPATH=src python -m tools.impala_query -q \
+PYTHONPATH=src .venv/bin/python -m tools.impala_query -q \
   "SELECT dt, count(*) FROM sales WHERE dt BETWEEN '2026-06-01' AND '2026-06-04' GROUP BY dt ORDER BY dt"
 ```

@@ -83,12 +83,13 @@ coordinator 는 기본적으로 `8088` 포트에서 듣는다. 이 문서의 모
 | `400` | 템플릿 기능이 꺼져 있거나 접속 정보가 없어 처리할 수 없을 때 | `detail` |
 | `404` | 찾는 작업·태스크·데이터소스가 없을 때 | `detail` |
 | `409` | 이미 끝난 작업을 취소하려 했거나, 재실행할 대상이 없거나, 같은 멱등 키에 다른 본문이 왔을 때 | `detail` |
-| `422` | 보낸 내용이 규칙에 맞지 않을 때 | `error_code`, `message` |
+| `422` | SQL·템플릿 검증 또는 요청 스키마 위반 | `error_code`, `message` 또는 `detail` 배열 |
 | `429` | 동시에 처리할 수 있는 작업 수를 넘겼을 때 | `detail`, 그리고 `Retry-After` 헤더 |
 | `502` | coordinator 가 executor 나 데이터베이스에 닿지 못했을 때 | `detail` |
 
-`400`·`404`·`409`·`429`·`502` 의 본문은 `{"detail": "사람이 읽을 설명"}` 한 줄이다. 반면 `422` 는
-프로그램이 원인을 갈라 볼 수 있도록 **코드를 함께** 준다.
+`400`·`404`·`409`·`429`·`502`는 `detail` 문자열을 반환한다. 422 중 SQL·템플릿 검증 실패는
+아래의 `error_code`와 `message`를 반환한다. 요청 필드의 타입·범위 위반은 `detail` 배열을 반환하며,
+각 항목에 `loc`(필드 경로), `msg`(설명), `type`(오류 종류)가 있다. `input`과 `ctx`는 선택 항목이다.
 
 | NO | 필드명(한글) | 필드명(영문) | 데이터 타입 | 길이 | 설명 |
 |---|---|---|---|---|---|
@@ -107,6 +108,7 @@ coordinator 는 기본적으로 `8088` 포트에서 듣는다. 이 문서의 모
 | `NO_PARTITION_IN_CLAUSE` | 그 컬럼의 `IN` 목록이 SQL 안에 없다 |
 | `EMPTY_IN_LIST` | `IN` 목록이 비어 있어 나눌 것이 없다 |
 | `NEGATED_IN` | `NOT IN` 은 나눌 수 없다 |
+| `UNSAFE_PARTITION_PREDICATE` | 파티션 조건이 WHERE의 필수 양의 조건이 아니다. OR·부정 조건과 필터 위치를 확인한다 |
 | `SUBQUERY_IN_CLAUSE` | `IN` 안에 서브쿼리가 있어 값을 셀 수 없다 |
 | `UNSUPPORTED_JOIN` 외 | 엄격 검증에서 막히는 복합 구문이다. `strict_validation` 을 끄면 통과한다 |
 | `MISSING_REQUIRED_FIELDS` | `sql`·`partition_column`·`target_table` 중 빈 것이 있다 |

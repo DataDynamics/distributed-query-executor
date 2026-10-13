@@ -302,7 +302,7 @@ task 로 펼칩니다(executor 당 하루씩). 적재는 stage_insert append 이
 
 **실패 파티션만 재실행**(`POST /jobs/{job_id}/retry`) — `PARTIAL`·`FAILED`·`CANCELLED` 로 끝난
 작업에서 실패·취소된 파티션만 모아 **새 작업**으로 다시 실행합니다. 이미 성공한 파티션은
-건너뛰므로 중복 적재가 없습니다. 새 `job_id` 와 함께 **202** 가 돌아오고, 이 `job_id` 로 다시
+건너뜁니다. 실패 task의 커밋 여부와 `write_mode`를 확인한 뒤 재처리해야 합니다. 새 `job_id` 와 함께 **202** 가 돌아오고, 이 `job_id` 로 다시
 3장의 폴링을 반복하면 됩니다. 재실행할 실패 태스크가 없거나 아직 종료되지 않은 작업이면 **409**
 가 옵니다.
 
@@ -608,7 +608,7 @@ var dailyJobId = await client.SubmitAsync(daily);
   컬럼과 staging 테이블 컬럼이 이름·개수·순서로 일치해야 COPY 가 성공하며(`CREATE TEMP TABLE ...
   (LIKE 대상)` 이 가장 안전), `wrapper_query` 는 `staging_table` 에서 읽어 `target_table` 로 넣는
   완성된 문장이어야 합니다(copy 모드와 달리 `{{SUBQUERY}}` 미사용).
-- **재시도는 멱등적으로 안전**합니다. 성공한 파티션은 건너뛰고 실패한 파티션만 새 작업으로
+- **재시도 전 대상 데이터를 확인**합니다. 성공한 파티션은 건너뛰고 실패한 파티션만 새 작업으로
   복제하며, stage_insert 는 임시 테이블이 세션 단위라 task 가 실패하면 그 세션의 staging 도 함께
   사라져 깨끗한 상태에서 다시 시작합니다.
 - **취소·재시도의 409** 는 정상적인 거부 신호(이미 종료된 작업 취소, 재실행할 실패 태스크 없음)

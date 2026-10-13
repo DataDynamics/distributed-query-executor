@@ -1,12 +1,9 @@
 # Distributed Query Executor
 
-Distributed Query Executor 는 큰 데이터를 빠르게 옮기기 위한 분산 쿼리 실행기입니다. 한 대가 모든
-일을 하는 대신, 요청을 받아 작업을 나눠 주는 **coordinator** 와 실제로 데이터를 읽고 쓰는
-여러 대의 **executor** 로 구성됩니다. 핵심 아이디어는 단순합니다. 하나의 Impala `SELECT` 을 그대로
-한 번에 실행하는 대신, 파티션 컬럼(날짜처럼 데이터를 미리 나눠 둔 컬럼)의 `IN` 목록을 기준으로
-쿼리를 Ntask 로 쪼개고, 각 task 를 여러 executor 가 동시에 읽어 Greenplum/WarehousePG 에 적재합니다
-(**Impala → Greenplum/WarehousePG 이관**). 데이터 자체는 coordinator 를 거치지 않고 각 executor 가 Impala 에서
-직접 읽어 Greenplum/WarehousePG 으로 흘려보내며, coordinator 로는 상태와 행 수 같은 가벼운 정보만 오갑니다.
+Distributed Query Executor는 Impala `SELECT`를 파티션별 작업으로 나눠 여러 executor가
+Greenplum/WarehousePG에 병렬 적재하는 분산 쿼리 실행기입니다. Coordinator는 요청 검증,
+작업 배정과 상태 추적을 담당합니다. 데이터는 executor에서 대상으로 흐르고, coordinator에는
+상태와 행 수만 전달됩니다.
 
 이 문서는 **소개 + 빠른 시작 + 핵심 개념 요약**에 집중하는 시작점입니다. 깊은 내용은 아래 문서로
 이어집니다.
@@ -73,9 +70,9 @@ sudo dnf install -y gcc gcc-c++ make python3-devel cyrus-sasl-devel   # 빌드 �
 coordinator 를 띄웁니다.
 
 ```bash
-QUERY_EXECUTOR_CONFIG_DIR=config EXECUTOR_PORT=8087 .venv/bin/python -m executor &
-QUERY_EXECUTOR_CONFIG_DIR=config EXECUTOR_PORT=8086 .venv/bin/python -m executor &
-QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator
+PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=config EXECUTOR_PORT=8087 .venv/bin/python -m executor &
+PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=config EXECUTOR_PORT=8086 .venv/bin/python -m executor &
+PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator
 ```
 
 의존성은 역할에 따라 세 파일로 나뉩니다. 지휘자만 띄우면 첫째, 실제 데이터를 다루는 executor 까지
@@ -138,7 +135,7 @@ bin/load-test run -c http://coord:8088 --body job.json --vus 20 --ramp-up 60s --
 
 셸 안에서는 `\?` 로 메타 명령 목록을, `\dt` 로 테이블 목록을, `\d 이름` 으로 컬럼 정보를 봅니다.
 `--config-dir` 로 다른 설정 디렉터리를, `--no-config` 로 설정을 무시하고 명령행 인자만 쓸 수
-있습니다. 한 번만 실행하고 끝내려면 `PYTHONPATH=src python -m tools.gp_query -q "SELECT 1"` 처럼
+있습니다. 한 번만 실행하고 끝내려면 `PYTHONPATH=src .venv/bin/python -m tools.gp_query -q "SELECT 1"` 처럼
 모듈을 직접 부릅니다. 이 도구들은
 [DataDynamics/impala-to-whpg](https://github.com/DataDynamics/impala-to-whpg) 의 같은 이름 도구를
 이 저장소 설정 체계에 맞춰 옮겨 온 것입니다.
@@ -297,9 +294,9 @@ coordinator·executor 가 같은 곳을 보게 하는 것입니다.
 - **요청 멱등(`Idempotency-Key` 헤더)**: `POST /jobs` 에 키를 주면, 클라이언트가 같은 요청을
   재전송해도 새 job 을 만들지 않고 기존 job 을 재생합니다(`200` + `Idempotency-Replayed: true`).
   같은 키를 다른 본문으로 쓰면 `409`. 저장소 레벨에서 원자적으로 선점하므로 동시 재전송에도 job 은
-  하나만 생깁니다.
+  하나만 생깁니다. WarehousePG 저장소는 분산키 제약으로 best-effort입니다.
 - **데이터 멱등(`write_mode: overwrite_partitions`)**: 적재 전에 대상 테이블에서 해당 파티션 값을
-  먼저 DELETE 한 뒤 넣으므로 중복 적재되지 않습니다. `append` 는 설계상 누적이라 멱등이 아닙니다.
+  같은 트랜잭션에서 DELETE 후 다시 적재합니다. 지원 모드와 삭제 범위가 맞고 기존 실행이 종료됐는지 확인해야 합니다. `append` 는 설계상 누적이라 멱등이 아닙니다.
 
 ## 주요 API
 
@@ -367,7 +364,7 @@ executor 를 따로 띄우지 않고 coordinator 프로세스 안에서 직접 �
 (`greenplum.dsn` 이 없으면 `MockBackend`).
 
 ```bash
-COORDINATOR_EXECUTOR_MODE=local QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator
+PYTHONPATH=src COORDINATOR_EXECUTOR_MODE=local QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator
 ```
 
 `coordinator.executor_mode` 기본값은 `remote`(executor 에 HTTP 디스패치)이고, `local` 로 바꾸면
@@ -384,7 +381,7 @@ coordinator·executor 는 뜰 때 ASCII 배너와 버전·역할·포트, 이어
 수 있습니다(`${version}`/`${role}`/`${port}`/`${python}` 치환).
 
 ```bash
-QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator --version   # 버전만 출력
+PYTHONPATH=src QUERY_EXECUTOR_CONFIG_DIR=config .venv/bin/python -m coordinator --version   # 버전만 출력
 ```
 
 ## 배포

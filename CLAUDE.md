@@ -33,7 +33,7 @@ coordinator 로는 상태와 row count 만 흐른다.
 python3.9 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt        # coordinator + 테스트 의존성
 
-# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). 현재 771개(+pandas 미설치 시 5 skip).
+# 테스트 (실제 DB 불필요 — MockBackend/FakeRunner 사용). pandas 선택 테스트는 미설치 시 skip.
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest tests/test_admission.py -q # 특정 파일만
 
@@ -88,8 +88,8 @@ WarehousePG 는 분산키 제약 때문에 best-effort 다). 관련 함수는 ap
 `_request_fingerprint` 와 `_idempotent_replay_response` 다.
 
 **데이터 멱등**은 `write_mode:overwrite_partitions` 가 담당한다. 적재 전에 담당 파티션 값을
-DELETE 한 뒤 넣으므로(`stage.py`/`backend.py`) 재실행해도 중복되지 않는다. `append` 는 멱등하지
-않다.
+DELETE와 INSERT를 같은 트랜잭션에서 수행한다(`stage.py`/`backend.py`). 소스 범위와 삭제 범위가
+일치하고 같은 파티션의 실행이 겹치지 않을 때 재실행 중복을 막는다. `append`는 멱등하지 않다.
 
 ## 핵심 모듈
 
@@ -101,8 +101,8 @@ DELETE 한 뒤 넣으므로(`stage.py`/`backend.py`) 재실행해도 중복되�
 하위 클래스는 `_execute(job)` 하나만 구현하면 된다.
 
 **`parser.py`** 는 sqlglot 으로 SELECT 를 검증한다. `strict_validation=true` 면 단순 SELECT 만
-받고, `false` 면 JOIN·서브쿼리·GROUP BY 같은 복합 쿼리도 허용하면서 파티션 `IN` 절을 트리 어디에
-있든 찾아낸다.
+받고, `false`면 JOIN·서브쿼리·GROUP BY 같은 복합 쿼리도 허용한다. 분할 기준 `IN`은 해당
+SELECT의 WHERE에서 반드시 적용되는 양의 조건이어야 한다. OR·NOT·값 표현식에 포함되면 거절한다.
 
 **`splitter.py`** 는 IN 값을 N등분하고(contiguous/round_robin) 원문 포맷을 보존한 채 치환한다.
 여기에 **날짜 fan-out**(DESIGN §18.8)이 붙어 있다. `/jobs` 에 `task_params`(구간의 두 끝을 담은
@@ -118,8 +118,8 @@ BETWEEN 이 하루로 붕괴하고 값은 언제나 절대값이 된다. `task_b
 
 부호 변수를 쓰지 않는 템플릿은 Jinja2 AST 검사로 422(`TEMPLATE_MISSING_SIGN_VAR`)를 낸다. 막지
 않으면 각 task 가 의도보다 넓은 구간을 읽어 **조용히 중복 적재**되기 때문이다. INSERT 와 staging
-task 는 날짜와 무관하므로 한 번만 렌더해 job 전체가 공유한다. 이 기능은 stage_insert 전용이고
-append 로 적재하므로(프레임워크가 대상에 DELETE 를 하지 않는다) 멱등이 필요하면 대상을 미리
+task 는 날짜와 무관하므로 한 번만 렌더해 job 전체가 공유한다. 이 기능은 stage_insert와 s3_stage에서 지원하며
+append로 적재하므로(프레임워크가 대상에 DELETE 를 하지 않는다) 멱등이 필요하면 대상을 미리
 비우거나 날짜별 물리 테이블을 쓴다. 예제는 `templates/daily_sales_interval/`(interval + sign)과
 `templates/daily_sales/`(날짜 리터럴)다.
 
@@ -137,8 +137,8 @@ Jinja2 `SandboxedEnvironment` 로 렌더해 SELECT·STAGING DDL·INSERT 를 만�
 `plan_file_budget` 으로 호스트당 파일 수가 세그먼트 수 이하가 되도록 배분하며, executor_url 에서
 gp_hostname 을 유도한다.
 
-**`job_store.py`** 는 단일 coordinator 용 `InMemoryJobStore` 와 멀티 coordinator 용
-`SqlJobStore`(JSONB)를 제공한다.
+**`job_store.py`** 는 단일 coordinator용 `InMemoryJobStore`·`FileJobStore`와
+멀티 coordinator용 `SqlJobStore`(JSONB)를 제공한다.
 
 ### 결과 반환 실행(`POST /query-execute`)
 
@@ -215,31 +215,19 @@ INSERT 치환·DROP 이 같은 이름을 공유하며, 비우면 예전처럼 se
 
 ### 로깅
 
-**`core/logging.py`** 는 일 단위 롤링, `[job_id][task_id]` 컨텍스트 주입, WARNING 전용
-로그(`*-warn.log`) 분리를 담당한다. 식별자는 `contextvars`(`job_id_var`/`task_id_var`)와 record
-factory 로 모든 레코드에 자동으로 붙는다. 여기에 `with_log_context(fn, *args)` 가 있는데, 이
-컨텍스트를 워커 스레드까지 들고 가는 콜러블을 만든다. `loop.run_in_executor` 는
-`asyncio.to_thread` 와 달리 contextvars 를 복사하지 않아서, 감싸지 않으면 백엔드 스레드의
-로그(특히 실행 SQL)가 `[-][-]` 로 남아 어느 job 의 쿼리인지 잃는다.
+**`core/logging.py`** 는 일별 로그 보관, `[job_id][task_id]` 컨텍스트와 WARNING 전용 파일을
+관리한다. `run_in_executor`는 컨텍스트를 복사하지 않으므로 백엔드 호출을
+`with_log_context(fn, *args)`로 감싸 식별자를 유지한다.
 
-**`core/sqllog.py`** 는 실행 SQL 로깅이다(`core.sql` 로거). 데이터소스에 던지는 모든 SQL 을
-`SQL 실행 datasource=<엔진> phase=<단계> [target=…] | <SQL> [| params=…]` 한 줄로 남긴다. HTTP
-로깅과 달리 DEBUG 를 요구하지 않고 **INFO 로 항상** 기록하는데, 운영 기본 레벨에서 "무엇을 읽어
-무엇을 적재했나"가 비어 있으면 사고 추적이 불가능하기 때문이다(끄려면
-`logging.sql.enabled=false`). SQL 은 마스킹 → 공백 접기(한 줄 = 한 레코드 유지) → `max_length`
-절단 순으로 가공하고, 잘리면 `… (총 N자 중 M자 절단)` 을 붙여 전문이 아님을 숨기지 않는다.
-datasource 는 `datasource_of(cursor)` 가 커서에서 추론하므로(커스텀 어댑터는 `_name`, impyla
-커서는 속성이 없어 `impala`) `_source_execute` 시그니처를 바꾸지 않고도 소스별 표기가 갈린다.
-계측 지점은 소스 SELECT 전부(`_source_execute` 한 곳), GP 쪽 실행문 전부, `dbprobe` 미리보기,
-executor 의 `POST /query-run` 이다. 검증은 `tests/test_sql_logging.py` 에 있다.
+**`core/sqllog.py`** 는 SQL을 마스킹·한 줄 압축·길이 제한 후 INFO로 기록한다.
+`logging.sql.enabled=false`로 끌 수 있고, 로거와 핸들러의 레벨 필터를 따른다.
+`datasource_of(cursor)`로 소스를 판별하며 소스 읽기, GP 실행, 미리보기를 계측한다.
+검증은 `tests/test_sql_logging.py`에 있다.
 
-**`core/http_logging.py`** 는 HTTP 요청/응답을 DEBUG 로 남기는 미들웨어다(`core.http` 로거).
-`logger.isEnabledFor(DEBUG)` 가드로 DEBUG 가 아니면 즉시 통과하므로 오버헤드가 사실상 없다.
-BaseHTTPMiddleware 가 아닌 **순수 ASGI 미들웨어**로 `receive`/`send` 를 엿보기만 하기 때문에
-downstream 본문 읽기를 깨지 않으며, 본문 복사본은 `max_body` 까지만 보관하고 원본은 그대로
-전달한다. 본문과 헤더는 `core.masking` 으로 마스킹하고 health·metrics·정적·docs 같은 잡음 경로는
-기본 제외한다. 등록은 두 `create_app` 의 `install_http_logging(app, settings)` 이고, 순수 함수는
-`tests/test_http_logging.py` 에서 검증한다.
+**`core/http_logging.py`** 는 DEBUG에서 요청·응답을 기록하는 순수 ASGI 미들웨어다.
+원본은 그대로 전달하고 본문 복사본만 `max_body`까지 보관한다. 본문·헤더는
+`core.masking`으로 가리며 health·metrics·정적 파일·docs는 기본 제외한다.
+두 앱의 `install_http_logging`으로 등록하며 순수 포매팅 함수는 별도로 테스트한다.
 
 ### 데이터소스 미리보기(`core/dbprobe.py`)
 
@@ -261,71 +249,36 @@ executor 는 소스에 직접 접속하지만 coordinator 는 history 와 greenp
 `query.func.config.dataframe_module` 이 설정되면 trino 드라이버 대신 그 커스텀
 API(`query(sql, config, limit=None) -> DataFrame`)를 호출한다.
 
-**같은 `dataframe_module` 을 두 경로가 부른다는 점이 함정이다.** 미리보기(`run`)는 상한이
-필요해 `limit` 을 넘기지만 이관(`fetch_all`)은 전량이 필요해 넘길 값이 없다. 예전에는 이관
-경로가 `limit` 을 아예 빼고 불러서, 문서가 안내한 `def query(sql, *, config, limit)` 으로
-구현한 사내 API 가 `missing 1 required keyword-only argument: 'limit'` 로 실패했다. 지금은
-`_call_dataframe_api` 가 `_accepts_limit` 으로 시그니처를 보고, 받는 함수에는 이관에서도
-`limit=None`(상한 없음)을 넘기고 받지 않는 함수에는 빼고 부른다. 그래서 두 시그니처가 양쪽
-경로에서 모두 동작한다. 커스텀 API 쪽에서는 **`limit is None` 을 전량으로 처리**해야 하며,
-무조건 자르면 이관이 조용히 일부만 적재한다.
+미리보기 `run`은 `limit`으로 결과를 제한하고, 이관 `fetch_all`은 전량을 읽는다.
+`_call_dataframe_api`는 함수 시그니처를 확인해 `limit`을 받는 함수에만 전달한다.
+커스텀 함수는 `limit=None`을 상한 없음으로 처리해야 한다. 이관 결과를 자르면 일부만 적재된다.
 
 ### 운영 도구
 
-**`core/config_tui.py`** 는 config.properties 를 편집하는 curses 설정 TUI 다(`python -m
-core.config_tui`, `bin/config-tui.sh`). `config.yml` 을 파싱해 항목·기본값·설명·enum 을 자동
-추출하므로 스키마를 하드코딩하지 않으며, 바꾼 값만 주석과 순서를 보존해 diff-write 한다(저장 전
-`.bak` 백업, 비밀값 마스킹).
+**`core/config_tui.py`** 는 `config.yml`에서 항목·기본값·설명을 읽어
+`config.properties`를 편집하는 curses TUI다(`bin/config-tui.sh`). 변경 값만 저장하며
+주석·순서를 보존하고, 저장 전 `.bak`을 만들며 비밀값은 가린다.
 
-여기서 예외가 스키마로는 알 수 없는 두 가지 표다. `ENUM_CHOICES` 는 값 후보를, `INT_BOUNDS` 는
-숫자 항목의 `(최소, 최대, 스텝)` 을 프로퍼티 키로 열거한다. 스텝은 `+`/`-` 키가 한 번에 움직이는
-폭이라 배치 크기처럼 자릿수가 큰 항목은 크게 잡고, 최소·최대는 경고가 아니라 **저장을 막는
-error** 로 쓴다 — 하한 아래는 대개 조용히 멈추는 값이기 때문이다. 대표적으로
-`max_dispatch_concurrency=0` 은 `asyncio.Semaphore(0)` 이 되어 디스패치가 영원히 대기한다.
+`ENUM_CHOICES`는 선택값을, `INT_BOUNDS`는 최소·최대·증감 폭을 정의한다. 범위 위반은
+저장을 막는다. `CONCURRENCY_KEYS`는 동시성 항목을 한 탭에 모으며, `check_concurrency`는
+GP 풀·task·디스패치 한도 사이의 불일치를 확인한다. `max_dispatch_concurrency=0`은
+디스패치를 멈추므로 허용하지 않는다.
 
-동시 처리량 파라미터는 coordinator·executor·greenplum·copy 로 흩어져 있어 조정하려면 탭을 옮겨
-다녀야 했다. 그래서 `CONCURRENCY_KEYS` 의 키만 모은 **동시성 가상 탭**을 맨 앞에 두었다. 같은
-`Field` 를 공유하므로 원래 탭에서 고쳐도 결과는 같고, 화면 아래에는 `concurrency_summary` 가
-곱셈을 풀어 준다(admission 수용량, fleet 동시 task 수, GP 연결 수, copy 버퍼 행 수). 값들 **사이의**
-정합은 `check_concurrency` 가 따로 보는데, 개별 항목이 저마다 유효해도 조합이 어긋나면 처리량이
-조용히 깎이기 때문이다(GP 풀이 동시 task 보다 작으면 연결 대기, 디스패치 상한이 fleet 용량보다
-작으면 디스패치 병목).
+**`core/config_help.py`** 는 `?` 키로 여는 설정별 설명과 조정 기준이다.
+`tests/test_config_help.py`는 안내에 사용한 키가 설정에 존재하는지 확인한다.
 
-**`core/config_help.py`** 는 항목별로 "무엇이고 어떻게 쓰는가"를 담은 안내 사전이다(`?` 키로
-뜨는 화면을 `help_lines` 가 만든다). config.yml 의 줄 끝 주석은 한 줄 요약이라 뜻은 알려 줘도
-얼마로 두어야 하는지까지는 담기 어렵고, 주석을 문단째 늘리면 운영자가 업그레이드 때 손으로
-옮겨야 하는 파일만 무거워진다. 그래서 안내는 코드에 두어 새 버전을 설치하면 자동으로 따라오게
-했다. 대신 키가 사라지면 안내가 조용히 붕 뜨므로 `tests/test_config_help.py` 가 모든 키의
-실재를 확인한다. 모든 항목을 채우지는 않고, 잘못 잡으면 성능이나 정합성이 상하는 항목에
-집중한다.
+**`core/textui.py`** 는 한글을 포함한 표시 폭을 계산한다. 화면 출력에는 `cut()`,
+열 정렬에는 `pad()`를 사용한다. 문자 수 기준으로 자르면 화면 경계를 넘어 curses 오류가
+발생할 수 있다.
 
-**`core/textui.py`** 는 두 TUI 가 공유하는 문자 폭 계산이다. 한글은 한 글자가 두 칸이라
-`line[: w - 1]` 처럼 글자 수로 자르면 화면 폭의 두 배까지 밀려나고, 그렇게 넘긴 문자열은
-**맨 아랫줄에서 `addwstr() returned ERR` 로 TUI 를 통째로 죽인다**(중간 줄은 조용히 잘린다).
-상태 줄과 설명 줄이 대부분 한글이라 폭 80칸에서 바로 걸리므로, 화면에 쓰기 전에는 반드시
-`cut()` 을 거치고 열 맞춤은 `f"{s:<12}"` 대신 `pad()` 를 쓴다.
+**`coordinator/tui.py`** 는 JSON API를 폴링하는 읽기 전용 모니터다(`bin/dashboard-tui.sh`).
+Executor 상세는 coordinator 프록시를 거치며, 설정 목록의 index로만 대상을 선택한다.
+목록 갱신 후 `clamp()`로 커서 범위를 보정한다. 스페이스는 폴링 정지, `+`/`-`는 주기 조정이다.
+두 TUI는 표준 라이브러리 curses를 사용하며 순수 로직과 화면 경계를 별도로 테스트한다.
 
-**`coordinator/tui.py`** 는 대시보드의 읽기 전용 curses 모니터다(`python -m coordinator.tui`,
-`bin/dashboard-tui.sh`). 웹 대시보드와 같은 JSON API(`/cluster`·`/jobs`·`/history`·`/info`)를
-폴링해 그리며 HTML 을 스크래핑하지 않는다. 개별 executor 상세는 coordinator 프록시(app.py 의
-`_proxy_executor_get`)로 가져오므로 coordinator 한 곳만 붙어도 executor 화면까지 볼 수 있는데,
-executor 를 설정 목록의 index 로만 지정하는 allowlist 방식이라 SSRF 가 막힌다(`/datasources`
-프록시와 같은 관례). 폴링 화면이라 줄 수가 시시각각 바뀌므로 갱신할 때마다 `clamp()` 로 커서를
-범위 안에 들여놓는데, 목록이 짧아졌는데 커서가 끝 너머에 남으면 화면이 통째로 비고 위 방향키로는
-한 칸씩만 올라와 좀처럼 빠져나오지 못하기 때문이다. 스페이스로 폴링을 세우고 `+`/`-` 로 주기를
-바꾸며, 상태 줄의 갱신 시각으로 화면이 언제 것인지 알 수 있다.
-
-두 TUI 모두 순수 로직이 curses 와 무관해 테스트할 수 있고, 에어갭을 고려해 표준 라이브러리
-curses 만 쓴다. 화면 그리기는 가짜 curses(화면 밖에 쓰면 단언으로 실패하는 대역)로 모든 탭의
-모든 행을 여러 화면 크기에서 훑어 확인한다 — 열 밀림과 탭 잘림, 폭 넘침이 실제로 이 방식에서
-잡혔다.
-
-업그레이드 때 설정을 반영하는 자동화는 두지 않는다. config/·templates/·customs/ 는 install.sh 의
-rsync 에서 제외되고 최초 1회만 seeding 되므로 재설치만으로는 새 버전의 변경이 들어가지 않는데, 이를
-`diff` 로 확인해 운영자가 직접 옮긴다(절차는 docs/DEPLOY.md). 여기서 놓치기 쉬운 것이
-**`config.yml` 을 교체해야 새 버전이 추가한 설정 구조가 반영된다**는 점이다. config.yml 은 값이
-아니라 `${변수:기본값}` 자리를 담은 구조라, 자리가 없으면 properties 에 값을 적어도 조용히
-무시된다.
+설치 스크립트는 `config/`·`templates/`·`customs/`를 최초 한 번만 복사한다. 업그레이드 시
+운영자가 변경분을 비교해 반영한다. 새 설정은 `config.properties`의 값뿐 아니라
+`config.yml`의 구조에도 있어야 읽힌다.
 
 ### 운영자 CLI(`src/tools/`)
 
@@ -340,55 +293,36 @@ rsync 에서 제외되고 최초 1회만 seeding 되므로 재설치만으로는
   `rm`·`rmdir`·`exists`·`mkdir`·`buckets`).
 - **`bin/load-test`** 는 coordinator API 부하 테스트 도구다(`tools/load/`, `run`·`plan`·`wizard`).
 
-**핵심은 설정을 새로 만들지 않은 것이다.** 원본은 자체 `conf/config.yaml` 을 읽지만, 그대로 옮기면
-같은 접속 정보를 두 곳에 적어야 하고 한쪽만 고쳐서 어긋나는 사고가 난다. 그래서
-`tools/appconfig.py` 가 이 저장소의 `config.properties`/`config.yml` 을 읽어 도구가 기대하는
-섹션(`impala`/`greenplum`/`s3`/`sql`) 모양으로 바꿔 준다. Greenplum 만 형태가 달라서
-(이 저장소는 `greenplum.dsn` 한 줄로 들고 있다) `parse_dsn` 이 DSN 을 host·port·user 로 풀어 준다.
-우선순위는 명령행 인자 > 설정 > 기본값이고, `--config-dir` 로 다른 디렉터리를, `--no-config` 로
-설정 무시를 고를 수 있다.
+**`tools/appconfig.py`** 는 공용 설정을 CLI의 `impala`·`greenplum`·`s3`·`sql` 섹션으로
+변환한다. 값은 명령행 > 설정 > 기본값 순이다. `--config-dir`로 위치를 바꾸고
+`--no-config`로 읽기를 생략한다. Greenplum은 psycopg 3을 사용한다.
 
-드라이버도 서비스 쪽과 맞췄다. 원본의 psycopg2 대신 executor 백엔드가 쓰는 **psycopg 3** 을 쓴다.
-impyla 와 boto3 는 이미 `requirements-executor.txt` 에 있으므로 추가 의존성이 없다.
+`bin/gp-shell`과 `bin/impala-shell`은 대화형 실행용이다. 배치는
+`PYTHONPATH=src .venv/bin/python -m tools.gp_query -q "SELECT 1"`처럼 실행한다.
+GP의 `--dry-run`은 배치 전용이며 대화형 모드와 함께 주면 접속 전에 거절한다.
+`--session-sql`은 `--schema`와 무관하게 접속마다 실행한다.
 
-**`tools/load/`** 는 앞의 셋과 달리 설정 파일이 아니라 coordinator HTTP API 만 쓴다. VU 하나가
-closed loop 로 요청을 보내고 완료될 때까지 기다린 뒤 다음을 보내며, VU 수는 단계(stage) 곡선을 따라
-늘고 준다(`scenario.target_vus`, 늘 때 올림·줄 때 내림). 완료의 뜻은 `request.py` 의 요청 **type** 이
-정한다. `async` 는 접수 응답의 id 로 상태 URL 을 종료 상태까지 폴링하고(`/jobs`), `sync` 는 응답이 곧
-완료다(`/query-execute`, dry_run). type 은 응답을 보고 추측하지 않고 명시하며(기본값만 경로로 정한다,
-`default_type`), 추측하면 id 없는 200 이 성공으로 묻히기 때문이다. 폴링 규칙(`PollSpec`)은 설정으로
-빼 기본값을 `/jobs` 규칙으로 두었다. async 결과는 **제출 TPS 와 완료 TPS 를 나눠** 낸다. `/jobs` 가
-항상 202 로 바로 돌아오는 비동기 API 라 제출 TPS 만 보면 처리량을 부풀려 보기 때문이다. 429 는 오류율에서 빼고 포화 신호로 따로 센다. 서버 자원은
-`GET /cluster` 한 번으로 coordinator 와 모든 executor 를 모으고(`sampler.py`), 부하 전 baseline
-구간을 따로 남겨 비교한다. 실행 중에는 `report.LiveRenderer` 가 진행·TPS·서버별 CPU/메모리 패널을
-ANSI 커서 이동으로 제자리에서 다시 그리고(터미널이 아니면 30초 한 줄 요약으로 폴백), 폭 넘침은
-`_clip` 이 표시 폭 기준으로 잘라 줄바꿈에 따른 커서 어긋남을 막는다. 줄어드는 VU 와 drain 은 진행 중인 job 을 끝까지 지켜본 뒤 빠지며, drain
-시간을 넘긴 job 만 취소하고 ABANDONED 로 집계한다. `wizard.py` 는 한 줄씩 묻는 대화형 마법사로,
-옵션 dict 만 만들고 실행 경로를 따로 두지 않는다. 끝에서 `cli.opts_to_argv` 로 명령행을 만들어
-보여 주고 그 인자를 그대로 `cli.main` 에 넘기므로 보인 명령과 실행이 어긋날 수 없다. 테스트는
-`tests/test_load_tool.py` 가 httpx.MockTransport 가짜 coordinator 와 대본 입력으로 한다. 사용법과
-시나리오 파일 형식(JSON·YAML)은 `src/tools/load/README.md` 에 있다.
+S3의 같은 버킷 내 재귀 복사·이동은 원본과 대상 프리픽스가 겹치면 거절한다.
+다운로드는 전체 계획의 경로를 확인해 대상 디렉터리 밖으로 나가는 파일을 거절한다.
 
-포화 분석은 `analysis.py`(순수 함수)가 시계열을 VU 수준별로 묶어(`per_vu_levels`, 수준이 오른 직후
-과도구간은 warmup 으로 버린다) 완료 TPS 곡선을 만들고, 이웃 수준 간 증가율이 임계 아래로 떨어지는
-무릎점을 찾는다(`find_knee`). `saturation` 명령이 `--levels`·`--step-duration` 으로 계단 부하를
-구성해 이를 재고, 결과는 모든 `run` 에도 자동으로 붙는다. 차트는 `analysis.ascii_chart`(콘솔)와
-`charts.py`(PNG=Pillow 지연 임포트, SVG=의존성 없음)가 그리며, Pillow 가 없으면 PNG 는 조용히
-건너뛰고 SVG 를 권한다.
+**`tools/load/`** 는 coordinator HTTP API로 부하를 준다. VU는 요청 완료 후 다음 요청을
+보내며, `async`는 종료 상태까지 폴링하고 `sync`는 응답으로 완료를 판단한다.
+`PollSpec`으로 폴링 규칙을 지정한다. 제출 TPS와 완료 TPS를 구분하고, 요청 오류와 실행
+실패를 오류율에 포함하며 429는 별도로 집계한다. `/cluster`로 서버 자원을 수집하고
+부하 전 baseline과 비교한다.
 
-`bin/` 래퍼는 대화형 셸만 노출하지만 모듈 자체는 한 번 실행도 지원한다. 배치로 쓰려면
-`PYTHONPATH=src python -m tools.gp_query -q "SELECT 1" -o out.csv` 처럼 직접 부른다.
+VU 감소와 drain 중에는 진행 중인 작업을 기다린다. drain 시간을 넘기면 취소하고
+`ABANDONED`로 집계한다. `wizard.py`는 실행 인자를 만들고 `cli.main`을 호출한다.
+화면은 `LiveRenderer`가 갱신하며 비터미널에서는 30초 간격으로 요약한다.
 
-**`core/version.py` 와 `core/banner.py`** 는 버전 단일 소스와 기동 배너를 맡는다. 버전은
-`version.py` 의 `__version__` 한 줄이 유일한 출처이고 `pyproject.toml` 이 `dynamic` + `attr` 로
-그 값을 읽으므로 버전을 올릴 때는 이 한 줄만 고친다. 배너는 ASCII 아트와 버전·역할·포트에 더해
-`print_config_sources` 로 **실제 로딩한 `config.properties`·`config.yml` 의 절대 경로**를 찍어,
-설정이 제대로 잡혔는지 콘솔에서 바로 확인하게 한다(파일이 없으면 `← 파일 없음(로딩 실패)!` 마커가
-붙는다). 배너는 `.out` 과 `.log` 양쪽에 남는다. stdout 은 런처(`bin/env.sh`)가 `logs/<name>.out`
-으로 리다이렉트하고, `setup_logging` 뒤에 `banner.log_startup()` 이 같은 내용을 `.log` 에도 한
-레코드로 남긴다(첫 줄은 grep 용 `<role> 기동 (version=… port=…)` 요약이다). 설정 디렉터리에
-`banner.txt` 가 있으면 그쪽을 우선한다. 순수 렌더 함수는 `tests/test_banner_version.py` 에서
-검증한다.
+`analysis.py`는 VU 수준별 과도구간을 제외하고 완료 TPS와 무릎점을 계산한다.
+`saturation`은 계단 부하를 만들며, 콘솔·SVG·선택적 PNG(Pillow)로 결과를 표시한다.
+검증은 `tests/test_load_tool.py`, 사용법은 `src/tools/load/README.md`에 있다.
+
+**`core/version.py`** 의 `__version__`이 버전의 단일 출처다. `pyproject.toml`도 이 값을 읽는다.
+**`core/banner.py`** 는 버전·역할·포트와 실제 설정 파일의 절대 경로를 표시한다.
+배너는 런처의 `.out`과 서비스 `.log`에 남으며 `config/banner.txt`가 있으면 우선 사용한다.
+검증은 `tests/test_banner_version.py`에 있다.
 
 ## 설정
 
@@ -412,7 +346,7 @@ ANSI 커서 이동으로 제자리에서 다시 그리고(터미널이 아니면
   2048/off/health·metrics·정적·docs). 별도 스위치가 아니라 **로그 레벨이 DEBUG 일 때만** 기록되며,
   `enabled=false` 로 DEBUG 여도 끌 수 있다.
 - **실행 SQL 로깅** — `logging.sql.{enabled,max_length,params}`(기본 on/4000/on). HTTP 로깅과 달리
-  로그 레벨과 무관하게 INFO 로 항상 남는다.
+  INFO로 기록하며 로거·핸들러의 레벨 필터를 따른다.
 - **멀티 coordinator** — `store.backend=postgres` 와 공유 `history.db_dsn`,
   `executor.self_report=true` 를 함께 켠다.
 - **백엔드 선택** — `build_backend` 는 **`greenplum.dsn` 하나만** 본다. 비어 있으면 경고를 남기고
