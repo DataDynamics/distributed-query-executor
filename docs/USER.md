@@ -459,8 +459,11 @@ JSON
 ```
 
 여기서 `params` 는 언제나 이름과 값을 담은 배열이다. `/jobs` 의 템플릿 모드가 객체 형태도 받는 것과
-다르므로 주의한다. `limit` 은 1에서 10000 사이이며 기본값은 100이다. `datasource` 로 실행할 엔진을
-고를 수 있다.
+다르므로 주의한다. 항목에는 `/jobs` 와 같이 `sign` 을 줄 수 있고, interval 템플릿의 부호 변수
+(`<name>_sign`)도 같은 규칙으로 채워진다. `limit` 은 1에서 10000 사이이며 기본값은 100이다. `datasource` 로 실행할 엔진을
+고를 수 있다. `datasource` 와 `sql_dialect` 는 요청에 없으면 템플릿 manifest 의 값을, 그것도 없으면
+서버 설정(`source.type`·`query.sql_dialect`)을 따른다. 그래서 Trino 용으로 만든 템플릿은 manifest 에
+`datasource: trino` 와 `sql_dialect: trino` 를 적어 두면 요청에서 따로 지정하지 않아도 된다.
 
 응답에는 `template_id`·`datasource`·`sql`·`columns`·`rows`·`row_count`·`truncated`·`limit`·
 `elapsed_ms` 와 함께 `executed_by` 가 담긴다. 소스 실행은 coordinator 가 가장 한가한 executor 를 골라

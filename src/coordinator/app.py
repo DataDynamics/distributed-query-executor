@@ -66,7 +66,6 @@ from .models import (
 )
 from .monitor import HealthMonitor
 from .parser import (
-    DIALECT,
     QueryValidationError,
     build_count_query,
     is_row_returning,
@@ -102,14 +101,18 @@ def _assign_executors(count: int, executors: list[str]) -> list[Optional[str]]:
     return [next(cycle) for _ in range(count)]
 
 
-def _query_params_to_dict(params: list) -> dict:
-    """``/query-execute`` 의 params 배열([{name, value}])을 렌더용 ``{name: value}`` dict 로 접는다.
+def _query_params_to_dict(params: list, sign_refs: frozenset = frozenset()) -> dict:
+    """``/query-execute``·``/query-count`` 의 params 배열을 렌더 컨텍스트 dict 로 접는다.
+
+    값은 ``{name: value}`` 로, ``sign`` 은 ``/jobs`` 와 같이 ``<name>_sign`` 으로 싣는다. 예전에는
+    부호를 버려서 interval 템플릿(``{{ from_date_no_sign | sql_sign }}``)이 이 경로에서 미정의
+    변수로 렌더에 실패했다. ``sign_refs`` 는 :func:`_render_params` 의 부호 유도에 쓴다.
 
     같은 name 이 두 번 오면(모호함) 422 로 거부한다. 타입/필수 검증은 이후 템플릿 엔진의
     ``ParamSpec`` 이 하므로 여기서는 형태(이름 유일성)만 본다.
     """
-    values, _ = _split_params(params)
-    return values
+    values, signs = _split_params(params)
+    return _render_params(values, signs, sign_refs)
 
 
 def _extract_count(body: dict) -> int:
@@ -161,14 +164,29 @@ def _split_params(params) -> tuple[dict, dict]:
     return values, signs
 
 
-def _render_params(values: dict, signs: dict) -> dict:
+def _render_params(values: dict, signs: dict, sign_refs: frozenset = frozenset()) -> dict:
     """값 dict 와 부호 dict 를 합쳐 렌더 컨텍스트를 만든다. 부호는 ``<name>_sign`` 이름으로 노출한다.
 
     템플릿은 ``current_date() {{ from_date_no_sign | sql_sign }} interval
     {{ from_date_no | sql_num }} day`` 처럼 연산자 방향을 데이터로 받는다.
+
+    ``sign_refs`` 는 템플릿이 참조하는 변수 이름 집합이다. 템플릿이 ``<name>_sign`` 을 쓰는데
+    요청이 그 파라미터에 ``sign`` 을 주지 않았다면, ``QueryParam`` 계약("sign 이 없으면 값 자체의
+    부호를 쓴다")대로 값의 부호를 연산자로 옮기고 값은 절대값으로 바꾼다. 그래서 ``value:-7`` 은
+    ``value:7, sign:"-"`` 와 같게 렌더된다. 정수로 읽을 수 없는 값은 건드리지 않으며, 그 경우
+    렌더가 미정의 변수 오류로 원인을 알려 준다.
     """
     ctx = dict(values)
     ctx.update({f"{name}_sign": sign for name, sign in signs.items()})
+    for name, value in values.items():
+        if name in signs or f"{name}_sign" not in sign_refs or isinstance(value, bool):
+            continue
+        try:
+            num = int(value)
+        except (TypeError, ValueError):
+            continue
+        ctx[name] = abs(num)
+        ctx[f"{name}_sign"] = "-" if num < 0 else "+"
     return ctx
 
 
@@ -239,6 +257,20 @@ def _compute_task_offsets(lo: int, hi: int, bound: str) -> list[tuple[int, int]]
 def _offset_value_sign(offset: int) -> tuple[int, str]:
     """오프셋을 ``(절대값, 부호)`` 로 나눈다. Impala 의 ``interval`` 이 절대값만 받기 때문이다."""
     return abs(offset), ("-" if offset < 0 else "+")
+
+
+def _template_sign_refs(engine: TemplateEngine, template_id: str, roles=None) -> frozenset:
+    """템플릿 조각들이 참조하는 변수 이름을 모은다. :func:`_render_params` 의 부호 유도에 쓴다.
+
+    ``roles`` 를 주지 않으면 manifest 에 등록된 모든 조각을 본다(``/jobs`` 는 select 외의 조각도
+    렌더하므로). manifest 와 AST 는 캐시되어 요청마다 드는 비용은 작다.
+    """
+    if roles is None:
+        roles = engine.load_manifest(template_id).files.keys()
+    refs: set = set()
+    for role in roles:
+        refs |= engine.referenced_variables(template_id, role)
+    return frozenset(refs)
 
 
 def _validate_sign_contract(engine: TemplateEngine, template_id: str, names: list) -> None:
@@ -406,7 +438,9 @@ def _apply_template(req: "CreateJobRequest", engine: TemplateEngine) -> None:
     # 으로 따로 노출한다(SQL 연산자 방향이지 값의 부호가 아니므로).
     values, signs = _split_params(req.params)
     result = engine.render(
-        req.template_id, _render_params(values, signs), request_scalars=request_scalars
+        req.template_id,
+        _render_params(values, signs, _template_sign_refs(engine, req.template_id)),
+        request_scalars=request_scalars,
     )
     # 어떤 파라미터로 어떤 SQL 이 만들어졌는지를 렌더 시점에 남긴다. 이후 검증(parser)이
     # 실패해도 원인이 된 SQL 이 로그에 남아 있도록 검증보다 먼저 기록한다.
@@ -1650,16 +1684,26 @@ def create_app(
             raise HTTPException(
                 status_code=404, detail="템플릿 엔진이 비활성화돼 있습니다(template.enabled=false)"
             )
-        params = _query_params_to_dict(req.params)
+        params = _query_params_to_dict(
+            req.params, _template_sign_refs(template_engine, req.template_id, ("select",))
+        )
         sql = template_engine.render_query(req.template_id, params)
         count_sql = build_count_query(sql) if count else None
-        # 요청의 datasource 가 서버의 source.type 보다 우선한다.
-        datasource = (req.datasource or getattr(settings, "source_type", "impala") or "impala").lower()
+        # datasource 와 sql_dialect 는 /jobs 와 같이 요청 > manifest > 서버 설정 순으로 정한다.
+        # render_query 가 방금 읽어 캐시한 manifest 를 다시 꺼내 쓰는 것이라 추가 비용은 거의 없다.
+        mdefaults = template_engine.load_manifest(req.template_id).defaults
+        datasource = str(
+            req.datasource or mdefaults.get("datasource")
+            or getattr(settings, "source_type", "impala") or "impala"
+        ).strip().lower()
+        dialect = str(
+            req.sql_dialect or mdefaults.get("sql_dialect") or settings.query_default_dialect
+        )
         log_template_render(
             req.template_id, params, {"select": sql, "count": count_sql},
             note=f"datasource={datasource}",
         )
-        validate_select_query(sql, dialect=req.sql_dialect or DIALECT)
+        validate_select_query(sql, dialect=dialect)
         return sql, count_sql, datasource
 
     async def _execute_select(datasource: str, sql: str, limit: int, op: str) -> dict:

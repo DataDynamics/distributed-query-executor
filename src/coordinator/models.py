@@ -672,11 +672,12 @@ class QueryExecuteRequest(BaseModel):
     )
     datasource: Optional[str] = Field(
         default=None,
-        description="실행 데이터소스(impala|trino|greenplum|history). 미지정 시 서버 source.type.",
+        description="실행 데이터소스(impala|trino|greenplum|history). 미지정 시 manifest datasource, 그것도 없으면 서버 source.type.",
     )
     limit: int = Field(default=100, ge=1, le=10_000, description="반환 최대 행수(1~10000).")
     sql_dialect: Optional[str] = Field(
-        default=None, description="렌더된 SELECT 검증에 쓸 SQL 방언(dialect). 미지정 시 서버 기본 hive."
+        default=None,
+        description="렌더된 SELECT 검증에 쓸 SQL 방언(dialect). 미지정 시 manifest sql_dialect, 그것도 없으면 서버 query.sql_dialect.",
     )
 
 
@@ -696,10 +697,11 @@ class QueryCountRequest(BaseModel):
     )
     datasource: Optional[str] = Field(
         default=None,
-        description="실행 데이터소스(impala|trino|greenplum|history). 미지정 시 서버 source.type.",
+        description="실행 데이터소스(impala|trino|greenplum|history). 미지정 시 manifest datasource, 그것도 없으면 서버 source.type.",
     )
     sql_dialect: Optional[str] = Field(
-        default=None, description="렌더된 SELECT 검증에 쓸 SQL 방언(dialect). 미지정 시 서버 기본 hive."
+        default=None,
+        description="렌더된 SELECT 검증에 쓸 SQL 방언(dialect). 미지정 시 manifest sql_dialect, 그것도 없으면 서버 query.sql_dialect.",
     )
 
 

@@ -613,8 +613,11 @@ Content-Type: application/json
 }
 ```
 
-`datasource` 를 생략하면 전역 `source.type` 을 따른다. "이관(`/jobs`)은 Impala, query-execute 는
-Trino" 처럼 나누려면 `source.type=impala` 로 두고 요청에 `"datasource": "trino"` 를 명시한다.
+`datasource` 를 생략하면 템플릿 manifest 의 `datasource` 를, 그것도 없으면 전역 `source.type` 을
+따른다(요청 > manifest > `source.type`, `/jobs` 와 같은 순서). 검증 방언 `sql_dialect` 도 요청 > manifest >
+`query.sql_dialect` 순이다. "이관(`/jobs`)은 Impala, query-execute 는 Trino" 처럼 나누려면
+`source.type=impala` 로 두고 Trino 템플릿의 manifest 에 `datasource: trino` 를 적거나 요청에
+`"datasource": "trino"` 를 명시한다.
 trino 실행은 executor 가 직접 접속하지 않고 커스텀 함수에 위임한다(아래 참고).
 
 curl 예:

@@ -271,3 +271,132 @@ def test_query_count_logs_render_even_when_validation_fails(qe_client, monkeypat
         resp = client.post("/query-count", json={"template_id": "bad", "params": [], "datasource": "greenplum"})
     assert resp.status_code == 422
     assert any("    | DELETE FROM orders" in r.getMessage() for r in caplog.records)
+
+
+# ───────────────────────── manifest 의 datasource·sql_dialect 반영 ─────────────────────────
+
+
+def _trino_template(tmp_path, manifest_extra: str):
+    """manifest 스칼라만 바꿔 가며 쓰는 select 전용 템플릿을 만든다.
+
+    select 는 1-인자 ``trunc(date)`` 를 쓰는데, 서버 기본 방언 hive 는 이를 거부하고 trino 는
+    받아들이므로 어느 방언으로 검증했는지 응답 코드로 드러난다.
+    """
+    tdir = tmp_path / "tq"
+    tdir.mkdir()
+    (tdir / "manifest.yml").write_text(
+        "id: tq\nexec_mode: copy\n" + manifest_extra + "files: {select: s.sql.j2}\n", encoding="utf-8",
+    )
+    (tdir / "s.sql.j2").write_text(
+        "SELECT order_id FROM hive.default.orders WHERE order_dt >= trunc(current_date)\n",
+        encoding="utf-8",
+    )
+    return str(tmp_path)
+
+
+def _capture_query_run(monkeypatch):
+    """/query-run 으로 나가는 요청 본문을 모으는 가짜 httpx.AsyncClient 를 심는다."""
+    import coordinator.app as ca
+    sent: list = []
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            sent.append(json)
+            return _Resp(payload={"limit": 1, "columns": ["row_count"], "rows": [[7]],
+                                  "row_count": 1, "truncated": False, "elapsed_ms": 1.0})
+
+    monkeypatch.setattr(ca.httpx, "AsyncClient", _FakeClient)
+    return sent
+
+
+def test_query_count_uses_manifest_datasource_and_dialect(qe_client, monkeypatch, tmp_path):  # noqa: F811
+    """요청에 없으면 manifest 의 datasource·sql_dialect 를 쓴다."""
+    from coordinator.config import settings
+    monkeypatch.setattr(settings, "source_type", "impala", raising=False)
+    monkeypatch.setattr(settings, "template_dir",
+                        _trino_template(tmp_path, "datasource: trino\nsql_dialect: trino\n"), raising=False)
+    sent = _capture_query_run(monkeypatch)
+    resp = qe_client(executors=["http://exec1:8001"]).post(
+        "/query-count", json={"template_id": "tq", "params": []},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["datasource"] == "trino"
+    assert sent[0]["datasource"] == "trino"
+
+
+def test_query_count_request_overrides_manifest(qe_client, monkeypatch, tmp_path):  # noqa: F811
+    """요청의 datasource·sql_dialect 가 manifest 보다 우선한다."""
+    from coordinator.config import settings
+    monkeypatch.setattr(settings, "template_dir",
+                        _trino_template(tmp_path, "datasource: trino\nsql_dialect: trino\n"), raising=False)
+    sent = _capture_query_run(monkeypatch)
+    client = qe_client(executors=["http://exec1:8001"])
+    resp = client.post("/query-count", json={"template_id": "tq", "params": [], "datasource": "impala"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["datasource"] == "impala" and sent[0]["datasource"] == "impala"
+    # 요청이 hive 를 고르면 manifest 의 trino 대신 hive 로 검증해 trunc(date) 가 거절된다.
+    resp = client.post("/query-count", json={"template_id": "tq", "params": [], "sql_dialect": "hive"})
+    assert resp.status_code == 422
+
+
+def test_query_execute_falls_back_to_server_settings(qe_client, monkeypatch, tmp_path):  # noqa: F811
+    """manifest 에도 없으면 서버 source.type·query.sql_dialect 를 따른다."""
+    from coordinator.config import settings
+    monkeypatch.setattr(settings, "source_type", "impala", raising=False)
+    monkeypatch.setattr(settings, "query_default_dialect", "hive", raising=False)
+    monkeypatch.setattr(settings, "template_dir", _trino_template(tmp_path, ""), raising=False)
+    _capture_query_run(monkeypatch)
+    client = qe_client(executors=["http://exec1:8001"])
+    # 기본 방언 hive 로 검증하므로 trunc(date) 가 거절된다.
+    assert client.post("/query-execute", json={"template_id": "tq", "params": []}).status_code == 422
+    # 서버 기본 방언을 trino 로 바꾸면 통과하고, datasource 는 source.type 을 따른다.
+    monkeypatch.setattr(settings, "query_default_dialect", "trino", raising=False)
+    resp = client.post("/query-execute", json={"template_id": "tq", "params": []})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["datasource"] == "impala"
+
+
+# ───────────────────────── 부호(sign) 파라미터 ─────────────────────────
+
+
+@pytest.mark.parametrize("params", [
+    # sign 을 명시한 표기 — 값은 절대값, 방향은 sign.
+    [{"name": "from_date_no", "value": 7, "sign": "-"}, {"name": "to_date_no", "value": 1, "sign": "-"}],
+    # sign 없이 값에 부호를 붙인 표기 — 같은 SQL 로 렌더돼야 한다.
+    [{"name": "from_date_no", "value": -7}, {"name": "to_date_no", "value": -1}],
+])
+def test_query_count_renders_sign_params(params, qe_client, monkeypatch):  # noqa: F811
+    """interval 템플릿의 <name>_sign 이 query-count 경로에서도 채워진다(예전엔 미정의 변수 422)."""
+    monkeypatch.setattr(core_config.settings, "greenplum_dsn", "postgresql://x")
+    import coordinator.app as ca
+    monkeypatch.setattr(ca, "run_postgres_select", lambda dsn, sql, **k: _count_result(3))
+    resp = qe_client().post("/query-count", json={
+        "template_id": "daily_sales_interval", "params": params, "datasource": "greenplum",
+    })
+    assert resp.status_code == 200, resp.text
+    sql = resp.json()["sql"]
+    assert "current_date() - interval 7 day" in sql
+    assert "current_date() - interval 1 day" in sql
+
+
+def test_query_execute_positive_value_without_sign_renders_plus(qe_client, monkeypatch):  # noqa: F811
+    """sign 이 없고 값이 양수면 + 로 렌더된다(query-execute 도 같은 경로)."""
+    monkeypatch.setattr(core_config.settings, "greenplum_dsn", "postgresql://x")
+    import coordinator.app as ca
+    monkeypatch.setattr(ca, "run_postgres_select", lambda dsn, sql, **k: _count_result(3))
+    resp = qe_client().post("/query-execute", json={
+        "template_id": "daily_sales_interval", "datasource": "greenplum",
+        "params": [{"name": "from_date_no", "value": -3}, {"name": "to_date_no", "value": 2}],
+    })
+    assert resp.status_code == 200, resp.text
+    sql = resp.json()["sql"]
+    assert "current_date() - interval 3 day" in sql and "current_date() + interval 2 day" in sql
