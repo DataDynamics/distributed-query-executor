@@ -496,7 +496,9 @@ JSON
 
 `order_count` 는 이 API 를 보여 주려고 넣어 둔 예제 템플릿이다. 주문에 고객을 조인해 지역·주문일
 구간·고객 등급(`grade`, 선택)으로 거르며, 두 테이블에 모두 있는 컬럼에 별칭을 붙여 둔 모습을 참고할 수
-있다.
+있다. 같은 건수를 Trino 에서 세려면 `order_count_trino` 를 쓴다. 이 템플릿은 manifest 에 Trino 를 적어
+두었으므로 요청에 `datasource` 를 넣지 않아도 되고, 테이블의 catalog·schema 는 `source_catalog`·
+`source_schema` 파라미터(기본 `hive`·`default`)로 바꿀 수 있다.
 
 응답은 `template_id`·`datasource`·`sql`(감싸기 전 SELECT)·`count_sql`(실제로 실행한 건수 쿼리)·
 `row_count`·`elapsed_ms`·`executed_by` 다. 여기서 `row_count` 는 쿼리 결과의 총 건수이고,

@@ -153,7 +153,8 @@ SQL 만 `parser.build_count_query()` 로 `SELECT COUNT(*) ... FROM (<원문>) qc
 하나(`row_count`)를 돌려준다. 원문을 sqlglot 으로 재생성하지 않고 텍스트로 감싸므로 미리보기와 같은
 쿼리를 센다. 이 응답의 `row_count` 는 총 건수라 query-execute 의 `row_count`(반환 행 수)와 뜻이 다르다.
 예제는 `templates/order_count/` 로, 조인한 두 테이블의 겹치는 컬럼에 별칭을 붙여 감쌌을 때 출력 컬럼
-이름이 충돌하지 않게 하는 모습을 보여 준다.
+이름이 충돌하지 않게 하는 모습을 보여 준다. 같은 쿼리의 Trino 판은 `templates/order_count_trino/` 로, manifest 의
+`datasource`·`sql_dialect` 만으로 Trino 실행과 검증 방언이 정해지는 예다.
 
 소스 실행은 impala·trino·source 구분 없이 **executor 의 `/query-run` 하나로 통일**돼 있다.
 executor 는 `query.func.module`(dotted path, importlib 로 로딩) 함수를 `run(sql, config, limit)`

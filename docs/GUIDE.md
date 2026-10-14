@@ -706,6 +706,9 @@ SELECT 처럼 받아 실행하면 되고 따로 고칠 것은 없다.
 주문일 `BETWEEN` 구간·선택 고객 등급(`grade`, 비우면 조건 생략)으로 거른다. 두 테이블에 모두 있는
 `region` 은 `c.region AS cust_region` 으로 별칭을 붙이고 `customer_id` 는 한쪽만 골라, 감쌌을 때 출력
 컬럼 이름이 겹치지 않게 했다. 건수에 영향이 없는 `ORDER BY` 는 정렬 비용만 더하므로 두지 않았다.
+같은 조건을 Trino 에서 세는 판은 `templates/order_count_trino/` 다. manifest 에 `datasource: trino` 와
+`sql_dialect: trino` 를 적어 두어 요청에서 지정하지 않아도 Trino 로 실행되고, SELECT 는 3단 테이블
+이름(`source_catalog`·`source_schema` 파라미터, 기본 `hive`·`default`)과 `DATE '...'` 리터럴을 쓴다.
 
 ```sql
 SELECT o.order_id, o.customer_id, o.region, o.order_dt, o.amount,

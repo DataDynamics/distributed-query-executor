@@ -400,3 +400,55 @@ def test_query_execute_positive_value_without_sign_renders_plus(qe_client, monke
     assert resp.status_code == 200, resp.text
     sql = resp.json()["sql"]
     assert "current_date() - interval 3 day" in sql and "current_date() + interval 2 day" in sql
+
+
+# ───────────────────────── 예제 템플릿: order_count_trino ─────────────────────────
+
+
+def test_query_count_order_count_trino_example(qe_client, monkeypatch):  # noqa: F811
+    """예제 order_count_trino — 요청에 datasource 가 없어도 manifest 의 trino 로 /query-run 에 간다."""
+    import sqlglot
+
+    from coordinator.config import settings
+    monkeypatch.setattr(settings, "source_type", "impala", raising=False)
+    sent = _capture_query_run(monkeypatch)
+    resp = qe_client(executors=["http://exec1:8001"]).post("/query-count", json={
+        "template_id": "order_count_trino",
+        "params": [
+            {"name": "regions", "value": ["KR", "US"]},
+            {"name": "start_dt", "value": "2026-01-01"},
+            {"name": "end_dt", "value": "2026-01-31"},
+            {"name": "grade", "value": "VIP"},
+        ],
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["datasource"] == "trino" and sent[0]["datasource"] == "trino"
+    assert sent[0]["sql"] == body["count_sql"]
+    sql = body["sql"]
+    # 3단 테이블 이름은 인용된 식별자로, 날짜는 DATE 리터럴로 렌더된다.
+    assert 'FROM "hive"."default".orders o' in sql
+    assert 'JOIN "hive"."default".customers c' in sql
+    assert "o.order_dt BETWEEN DATE '2026-01-01' AND DATE '2026-01-31'" in sql
+    assert "o.region IN ( 'KR', 'US' )" in sql and "c.grade = 'VIP'" in sql
+    names = [e.alias_or_name for e in sqlglot.parse_one(sql, read="trino").expressions]
+    assert len(names) == len(set(names)), names
+
+
+def test_query_count_order_count_trino_catalog_override(qe_client, monkeypatch):  # noqa: F811
+    """catalog·schema 는 요청에서 바꿀 수 있고, 식별자로 인용돼 SQL 로 새지 않는다."""
+    _capture_query_run(monkeypatch)
+    resp = qe_client(executors=["http://exec1:8001"]).post("/query-count", json={
+        "template_id": "order_count_trino",
+        "params": [
+            {"name": "regions", "value": ["KR"]},
+            {"name": "start_dt", "value": "2026-01-01"},
+            {"name": "end_dt", "value": "2026-01-31"},
+            {"name": "source_catalog", "value": "iceberg"},
+            {"name": "source_schema", "value": 'sales"; DROP TABLE x; --'},
+        ],
+    })
+    assert resp.status_code == 200, resp.text
+    sql = resp.json()["sql"]
+    assert '"iceberg"."sales""; DROP TABLE x; --".orders o' in sql
+    assert "c.grade =" not in sql

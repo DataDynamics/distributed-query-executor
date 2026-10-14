@@ -1,0 +1,27 @@
+{# query-count 예제(Trino) — order_count 와 같은 조건을 Trino 문법으로 적는다.
+
+   Trino 는 varchar 를 date 로 암묵 변환하지 않으므로 날짜 비교에 DATE '...' 를 명시한다
+   (o.order_dt BETWEEN '2026-01-01' AND ... 는 타입 오류). 테이블은 3단 이름으로 적고,
+   catalog·schema 는 요청에서 바꿀 수 있는 값이라 sql_ident 로 인용해 식별자 인젝션을 막는다.
+   coordinator 가 이 SELECT 를 COUNT(*) 서브쿼리로 감싸므로, 두 테이블에 모두 있는
+   customer_id·region 은 별칭(cust_region)을 붙이거나 한쪽만 골라 출력 컬럼 이름이 겹치지
+   않게 한다. 나머지 파라미터도 반드시 필터를 거쳐 안전한 리터럴로 렌더한다.
+     - regions            → sql_in  (콤마 구분 리터럴 목록, 빈 목록은 안전한 NULL)
+     - start_dt / end_dt  → sql_str (작은따옴표 이스케이프한 날짜 문자열에 DATE 접두어)
+     - grade              → sql_str (값이 있을 때만 조건을 붙인다)
+   ORDER BY 는 건수에 영향이 없고 정렬 비용만 더하므로 두지 않는다. #}
+SELECT o.order_id,
+       o.customer_id,
+       o.region,
+       o.order_dt,
+       o.amount,
+       c.grade,
+       c.region AS cust_region
+FROM {{ source_catalog | sql_ident }}.{{ source_schema | sql_ident }}.orders o
+JOIN {{ source_catalog | sql_ident }}.{{ source_schema | sql_ident }}.customers c
+  ON c.customer_id = o.customer_id
+WHERE o.region IN ( {{ regions | sql_in }} )
+  AND o.order_dt BETWEEN DATE {{ start_dt | sql_str }} AND DATE {{ end_dt | sql_str }}
+{%- if grade %}
+  AND c.grade = {{ grade | sql_str }}
+{%- endif %}
