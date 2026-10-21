@@ -204,12 +204,14 @@ def run_postgres_select(
 
 def run_impala_select(
     impala_dsn: dict, sql: str, *, query_options=None, limit: int,
-    datasource: str = "impala",
+    datasource: str = "impala", log: bool = True,
 ) -> QueryResult:
     """impyla 로 Impala 에 ``sql`` 을 실행해 상위 ``limit`` 행을 반환한다.
 
     ``query_options`` 가 있으면 ``configuration`` 으로 넘긴다(executor 의 백엔드와 동일).
-    ``datasource`` 는 실행 SQL 로그의 엔진 표기용이다(기본 ``impala``).
+    ``datasource`` 는 실행 SQL 로그의 엔진 표기용이다(기본 ``impala``). 호출부가 이미 다른
+    단계명으로 SQL 을 기록했다면(``/query-run`` 의 QUERY_EXECUTE) ``log=False`` 로 PREVIEW
+    로그를 생략해 같은 SQL 이 두 번 남지 않게 한다.
     """
     from impala.dbapi import connect as impala_connect  # executor 전용 드라이버라 지연 임포트한다
 
@@ -218,7 +220,8 @@ def run_impala_select(
     try:
         cur = conn.cursor()
         opts = dict(query_options or {})
-        log_sql(datasource, sql, phase="PREVIEW")
+        if log:
+            log_sql(datasource, sql, phase="PREVIEW")
         if opts:
             cur.execute(sql, configuration=opts)
         else:

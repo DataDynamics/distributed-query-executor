@@ -221,9 +221,10 @@ def _fake_client_factory(recorder, *, fail_urls=(), status_map=None):
 
 @pytest.mark.parametrize("ds", ["trino", "impala", "source"])
 def test_query_execute_source_proxies_to_query_run(ds, qe_client, monkeypatch):
-    """모든 소스 datasource(trino/impala/source)는 executor 의 /query-run(커스텀 함수)으로 통일 위임된다.
+    """모든 소스 datasource(trino/impala/source)는 executor 의 /query-run 으로 통일 위임된다.
 
-    coordinator 는 소스 드라이버를 갖지 않고, datasource 종류와 무관하게 /query-run 하나로 보낸다.
+    coordinator 는 소스 드라이버를 갖지 않고, datasource 종류와 무관하게 /query-run 하나로 보낸다
+    (impala 는 executor 가 impyla 로, 그 외는 커스텀 함수로 실행한다 — 분기는 executor 쪽이다).
     /query-run 응답엔 datasource 가 없으므로 coordinator 가 확정값으로 보정한다.
     """
     import coordinator.app as ca

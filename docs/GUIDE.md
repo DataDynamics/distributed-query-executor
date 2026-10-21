@@ -580,9 +580,12 @@ coordinator 를 거쳐 클라이언트로 반환되는 preview 용 실행이다.
 | **결과 반환 실행**(이 절) | `POST /query-execute` → (executor) `POST /query-run` | **템플릿** 렌더 SELECT 를 실행 | 상위 N행 |
 | **건수 조회**(이 절) | `POST /query-count` → (executor) `POST /query-run` | **템플릿** 렌더 SELECT 를 `COUNT(*)` 로 감싸 실행 | 총 건수 하나 |
 
-query-execute 의 소스 실행은 impala/trino 구분 없이 모든 소스를 executor 의 커스텀
-함수(`query.func.module`)에 위임하는 것으로 통일돼 있다. 미리보기(`/datasources/{name}/query`)는
-임의 SQL 을 built-in 드라이버로 실행하는 별개의 운영 점검 도구이며 대시보드 `데이터소스` 탭이 쓴다.
+query-execute 의 소스 실행은 impala/trino 구분 없이 모두 executor 의 `/query-run` 으로 보내고,
+executor 가 `datasource` 로 실행 경로를 고른다. `impala`·`source`·미지정은 이관 task 와 같은
+**impyla 접속(`impala.*` 설정)** 으로 직접 실행하고, 그 외 이름(`trino` 등)만 커스텀 함수
+(`query.func.module`)에 위임한다. 판정 기준은 이관의 소스 읽기와 같은 `core.config.is_custom_source`
+다. 미리보기(`/datasources/{name}/query`)는 임의 SQL 을 built-in 드라이버로 실행하는 별개의 운영
+점검 도구이며 대시보드 `데이터소스` 탭이 쓴다.
 
 ### 실행 절차
 
@@ -590,9 +593,10 @@ coordinator 는 요청의 `params[]` 를 `{name: value}` 로 접고(중복 name 
 로 select 부분만 렌더한 뒤 `validate_select_query()` 로 행반환 SELECT 를 검증한다(렌더/검증 실패
 → 422 + error_code). `datasource` 가 `greenplum`/`history` 면 렌더된 SELECT 를 coordinator 가
 직접(psycopg) 실행해 상위 N행을 돌려주고(`executed_by=null`), 소스(impala/trino/source)면 `/jobs`
-와 동일한 선택 정책으로 executor 를 골라 `POST /query-run {sql, limit}` 로 위임한다(연결 실패 시
-다음 executor 로 failover). executor 는 소스를 직접 모르고 커스텀 함수(`query.func.module`)의
-`run(sql, config, limit)` 을 호출하며, 함수가 실제 SELECT 를 실행해 결과를 돌려준다.
+와 동일한 선택 정책으로 executor 를 골라 `POST /query-run {sql, limit, datasource}` 로 위임한다(연결
+실패 시 다음 executor 로 failover). executor 는 `datasource` 가 `impala`/`source` 면 `impala.*` 설정의
+impyla 로 직접 실행하고(`impala.host` 미설정이면 400, 커스텀 함수로 폴백하지 않는다), 그 외 이름이면
+커스텀 함수(`query.func.module`)의 `run(sql, config, limit)` 을 호출해 함수가 실제 SELECT 를 실행한다.
 
 ### 요청 JSON
 
@@ -617,7 +621,9 @@ Content-Type: application/json
 따른다(요청 > manifest > `source.type`, `/jobs` 와 같은 순서). 검증 방언 `sql_dialect` 도 요청 > manifest >
 `query.sql_dialect` 순이다. "이관(`/jobs`)은 Impala, query-execute 는 Trino" 처럼 나누려면
 `source.type=impala` 로 두고 Trino 템플릿의 manifest 에 `datasource: trino` 를 적거나 요청에
-`"datasource": "trino"` 를 명시한다.
+`"datasource": "trino"` 를 명시한다. 반대로 요청에 `"datasource": "impala"` 를 주면 manifest 나 서버
+설정이 Trino 여도 그 요청만 Impala(impyla)로 실행된다. `hive` 는 데이터소스 이름이 아니라 검증
+방언(`sql_dialect`) 값이므로 `datasource` 에 적으면 커스텀 함수 경로로 간다.
 trino 실행은 executor 가 직접 접속하지 않고 커스텀 함수에 위임한다(아래 참고).
 
 curl 예:
@@ -814,6 +820,7 @@ impala.user=etl
 greenplum.dsn=postgresql://gpadmin:pw@gp-master:5432/warehouse
 
 # query-execute 의 trino 실행 = 커스텀 함수 위임. executor 는 Trino 를 직접 모른다.
+# (datasource=impala 는 위 impala.* 설정의 impyla 로 직접 실행하며 이 설정과 무관하다.)
 #   query.func.module   : 실행 함수 dotted path
 #   query.func.config.* : 함수에 넘길 자유 설정 dict(접두어를 뗀 키로 통째 전달, 값은 문자열)
 query.func.module=customs.query_funcs.trino_runner:run
@@ -832,8 +839,9 @@ query-execute 는 요청 `datasource:"trino"` + `query.func.module` + `query.fun
 
 ### 커스텀 실행 함수
 
-query-execute 의 `datasource:"trino"` 요청은 executor 가 `query.func.module` 로 지정한 외부
-Python 함수에 실행을 위임한다. 프레임워크는 Trino 드라이버를 전혀 모르며 연결·실행·형변환은 전부
+query-execute 의 `datasource:"trino"` 처럼 built-in 이 아닌 이름의 요청은 executor 가
+`query.func.module` 로 지정한 외부 Python 함수에 실행을 위임한다(`impala`·`source` 는 impyla 로 직접
+실행하므로 이 함수를 거치지 않는다). 프레임워크는 Trino 드라이버를 전혀 모르며 연결·실행·형변환은 전부
 이 함수 책임이다. 조직 표준(게이트웨이/래퍼/커넥션 풀 등)에 맞춰 이 함수만 바꾸면 된다.
 
 함수 계약:

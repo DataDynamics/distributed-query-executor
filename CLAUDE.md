@@ -156,8 +156,11 @@ SQL 만 `parser.build_count_query()` 로 `SELECT COUNT(*) ... FROM (<원문>) qc
 이름이 충돌하지 않게 하는 모습을 보여 준다. 같은 쿼리의 Trino 판은 `templates/order_count_trino/` 로, manifest 의
 `datasource`·`sql_dialect` 만으로 Trino 실행과 검증 방언이 정해지는 예다.
 
-소스 실행은 impala·trino·source 구분 없이 **executor 의 `/query-run` 하나로 통일**돼 있다.
-executor 는 `query.func.module`(dotted path, importlib 로 로딩) 함수를 `run(sql, config, limit)`
+소스 실행은 impala·trino·source 구분 없이 **executor 의 `/query-run` 하나로 통일**돼 있고, 경로는
+executor 가 `datasource` 로 고른다(`is_custom_source` — 이관의 소스 읽기와 같은 기준). `impala`·
+`source`·미지정은 task 와 같은 impyla 접속(`build_impala_dsn` + `run_impala_select`)으로 직접
+실행하고 `impala.host` 미설정이면 커스텀 함수로 폴백하지 않고 400 이다. 그 외 이름만 executor 가
+`query.func.module`(dotted path, importlib 로 로딩) 함수를 `run(sql, config, limit)`
 으로 호출하며, `config` 는 `query.func.config.*` 를 프리픽스로 모은 자유 설정 dict 다
 (`core/config.py` 의 `_collect_prefix` 가 raw properties 기반으로 모으므로 YAML 과 무관하다).
 참조 구현과 설정은 docs/GUIDE.md 와 `customs/query_funcs/trino_runner.py` 에 있다. 임의 SQL

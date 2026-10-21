@@ -1576,11 +1576,12 @@ def create_app(
         return cand[start:] + cand[:start]
 
     async def _run_source_query(name: str, sql: str, limit: int, op: str = "query-execute") -> dict:
-        """렌더된 SELECT 를 **executor 의 커스텀 실행 함수(``POST /query-run``)** 에 위임한다.
+        """렌더된 SELECT 를 **executor 의 ``POST /query-run``** 에 위임한다.
 
         query-execute 의 소스 실행(impala/trino 등)은 datasource 종류와 무관하게 이 한 경로로
-        통일된다 — executor 가 ``query.func.module`` 함수에 SQL 을 넘겨 실행한다. coordinator 는
-        소스 드라이버를 직접 갖지 않는다. _pick_executor_order 로 정한 순서대로 시도하고,
+        보내고, 실제 실행 경로는 executor 가 ``datasource`` 로 고른다 — impala·source 는 executor
+        의 impyla 접속으로 직접 실행하고, 그 외 이름은 ``query.func.module`` 함수에 위임한다.
+        coordinator 는 소스 드라이버를 직접 갖지 않는다. _pick_executor_order 로 정한 순서대로 시도하고,
         **연결(transport) 실패** 시 다음 executor 로 failover 한다(SELECT 는 멱등이라 재시도 안전).
         executor 가 도달 후 돌려준 4xx/5xx(SQL 오류·함수 미설정 등)는 확정 응답이므로 failover
         하지 않고 그대로 전달한다. 성공한 executor URL 은 관측용으로 응답 dict 의 ``executed_by``
@@ -1711,7 +1712,8 @@ def create_app(
 
         실행은 두 갈래다. 메타·타깃 DB 인 greenplum 과 history 는 coordinator 가 psycopg 로 직접
         실행하고(executed_by=null), 그 밖의 소스(impala·trino·source)는 종류와 무관하게 executor 의
-        커스텀 함수(/query-run)로 위임한다. 알 수 없는 데이터소스는 404 다.
+        /query-run 으로 위임한다(executor 가 impala 는 impyla 로, 그 외는 커스텀 함수로 실행한다).
+        알 수 없는 데이터소스는 404 다.
         """
         if datasource in ("greenplum", "history"):
             dsn = settings.greenplum_dsn if datasource == "greenplum" else settings.history_db_dsn

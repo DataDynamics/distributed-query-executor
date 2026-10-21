@@ -189,7 +189,7 @@ def test_coordinator_proxy_propagates_error(client, monkeypatch):
     assert "auth error" in r.json()["detail"]
 
 
-# ---------------------- executor /query-run (커스텀 함수 위임) ----------------------
+# ---------------------- executor /query-run (impala built-in / 커스텀 함수 위임) ----------------------
 
 async def test_query_run_calls_custom_func(monkeypatch):
     # 설정에 커스텀 함수가 지정되면 sql/config/limit 이 그대로 전달되고 결과가 반환된다.
@@ -205,7 +205,7 @@ async def test_query_run_calls_custom_func(monkeypatch):
     import executor.app as ea
     monkeypatch.setattr(ea, "_load_query_func", lambda dotted: fake_fn)
     async with _exec_client(create_executor_app()) as c:
-        r = await c.post("/query-run", json={"sql": "SELECT 42", "limit": 50})
+        r = await c.post("/query-run", json={"sql": "SELECT 42", "limit": 50, "datasource": "trino"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["columns"] == ["a"] and body["rows"] == [[1]] and body["limit"] == 50
@@ -237,22 +237,105 @@ async def test_query_run_이_datasource_를_실행_sql_로그에_남긴다(monke
     assert "datasource=trino" in msg and "SELECT 42" in msg
 
 
-async def test_query_run_datasource_생략시_source_로_기록된다(monkeypatch, caplog):
-    """구버전 coordinator 가 datasource 를 안 보내도 요청은 정상 처리된다(하위 호환)."""
+async def test_query_run_datasource_생략시_impala_경로로_간다(monkeypatch, caplog):
+    """구버전 coordinator 가 datasource 를 안 보내면 built-in Impala 경로(impyla)로 실행된다(하위 호환).
+
+    is_custom_source 가 빈 값을 built-in 으로 판정하는 것과 같은 기준이다. 커스텀 함수는 호출되지
+    않고, 실행 SQL 로그에는 impala 로 남는다.
+    """
     import logging
 
     monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
     import executor.app as ea
     monkeypatch.setattr(ea, "_load_query_func", lambda dotted: (
-        lambda sql, *, config, limit: QueryResult(
-            columns=["a"], rows=[[1]], row_count=1, truncated=False, elapsed_ms=1.0)))
+        lambda sql, *, config, limit: (_ for _ in ()).throw(AssertionError("custom func called"))))
+    _patch_impala(monkeypatch)
     async with _exec_client(create_executor_app()) as c:
         with caplog.at_level(logging.INFO, logger="core.sql"):
             r = await c.post("/query-run", json={"sql": "SELECT 1"})
-    assert r.status_code == 200
-    assert "datasource=source" in [
+    assert r.status_code == 200, r.text
+    assert "datasource=impala" in [
         rec.getMessage() for rec in caplog.records if rec.name == "core.sql"
     ][-1]
+
+
+def _patch_impala(monkeypatch, host="impala-1", rows=None):
+    """executor 의 impala.* 설정을 채우고 run_impala_select 를 가짜로 바꿔 호출 인자를 기록한다."""
+    import executor.app as ea
+    monkeypatch.setattr(core_config.settings, "impala_host", host, raising=False)
+    monkeypatch.setattr(core_config.settings, "impala_port", 21050, raising=False)
+    monkeypatch.setattr(core_config.settings, "impala_database", "sales", raising=False)
+    monkeypatch.setattr(core_config.settings, "impala_query_options", {"REQUEST_POOL": "etl"}, raising=False)
+    captured: dict = {}
+
+    def fake_run(dsn, sql, *, query_options=None, limit, datasource="impala", log=True):
+        captured.update(dsn=dsn, sql=sql, query_options=query_options, limit=limit,
+                        datasource=datasource, log=log)
+        return QueryResult(columns=["order_id"], rows=rows or [[1], [2]], row_count=2,
+                           truncated=False, elapsed_ms=3.0)
+
+    monkeypatch.setattr(ea, "run_impala_select", fake_run)
+    return captured
+
+
+async def test_query_run_impala_는_커스텀_함수_대신_impyla_로_실행한다(monkeypatch):
+    """datasource=impala 면 query.func.module(trino 함수)을 건드리지 않고 impala.* 설정으로 실행한다.
+
+    template_id 를 주고 datasource 를 impala 로 지정했을 때 이관 task 와 같은 impyla 접속으로
+    조회 결과를 그대로 돌려받는 경로다. 커스텀 함수가 설정돼 있어도(또는 ODBC 등 다른 드라이버를
+    쓰더라도) 호출되지 않는다.
+    """
+    monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
+    import executor.app as ea
+    monkeypatch.setattr(ea, "_load_query_func", lambda dotted: (
+        lambda sql, *, config, limit: (_ for _ in ()).throw(AssertionError("custom func called"))))
+    captured = _patch_impala(monkeypatch)
+    async with _exec_client(create_executor_app()) as c:
+        r = await c.post("/query-run", json={"sql": "SELECT 42", "limit": 7, "datasource": "impala"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["columns"] == ["order_id"] and body["rows"] == [[1], [2]] and body["limit"] == 7
+    assert captured["dsn"]["host"] == "impala-1" and captured["dsn"]["database"] == "sales"
+    assert captured["sql"] == "SELECT 42" and captured["limit"] == 7
+    assert captured["query_options"] == {"REQUEST_POOL": "etl"}
+    assert captured["datasource"] == "impala" and captured["log"] is False
+
+
+async def test_query_run_impala_는_host_미설정이면_400_이고_커스텀으로_폴백하지_않는다(monkeypatch):
+    monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
+    import executor.app as ea
+    monkeypatch.setattr(ea, "_load_query_func", lambda dotted: (
+        lambda sql, *, config, limit: (_ for _ in ()).throw(AssertionError("custom func called"))))
+    _patch_impala(monkeypatch, host="")
+    async with _exec_client(create_executor_app()) as c:
+        r = await c.post("/query-run", json={"sql": "SELECT 1", "datasource": "impala"})
+    assert r.status_code == 400 and "impala.host" in r.json()["detail"]
+
+
+async def test_query_run_impala_접속_오류는_502(monkeypatch):
+    import executor.app as ea
+    _patch_impala(monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("auth error")
+
+    monkeypatch.setattr(ea, "run_impala_select", boom)
+    async with _exec_client(create_executor_app()) as c:
+        r = await c.post("/query-run", json={"sql": "SELECT 1", "datasource": "source"})
+    assert r.status_code == 502 and "auth error" in r.json()["detail"]
+
+
+async def test_query_run_trino_는_impala_설정이_없어도_커스텀_함수로_간다(monkeypatch):
+    """impala.host 가 비어 있는 Trino 전용 executor 에서도 datasource=trino 는 그대로 동작한다."""
+    monkeypatch.setattr(core_config.settings, "query_func_module", "pkg.mod:run", raising=False)
+    monkeypatch.setattr(core_config.settings, "impala_host", "", raising=False)
+    import executor.app as ea
+    monkeypatch.setattr(ea, "_load_query_func", lambda dotted: (
+        lambda sql, *, config, limit: QueryResult(
+            columns=["a"], rows=[[1]], row_count=1, truncated=False, elapsed_ms=1.0)))
+    async with _exec_client(create_executor_app()) as c:
+        r = await c.post("/query-run", json={"sql": "SELECT 1", "datasource": "trino"})
+    assert r.status_code == 200 and r.json()["columns"] == ["a"]
 
 
 async def test_query_run_accepts_dict_return(monkeypatch):
@@ -263,14 +346,14 @@ async def test_query_run_accepts_dict_return(monkeypatch):
         lambda sql, *, config, limit: {
             "columns": ["x"], "rows": [["v"]], "row_count": 1, "truncated": False, "elapsed_ms": 1.0}))
     async with _exec_client(create_executor_app()) as c:
-        r = await c.post("/query-run", json={"sql": "SELECT 1"})
+        r = await c.post("/query-run", json={"sql": "SELECT 1", "datasource": "trino"})
     assert r.status_code == 200 and r.json()["columns"] == ["x"]
 
 
 async def test_query_run_unconfigured_400(monkeypatch):
     monkeypatch.setattr(core_config.settings, "query_func_module", "", raising=False)
     async with _exec_client(create_executor_app()) as c:
-        r = await c.post("/query-run", json={"sql": "SELECT 1"})
+        r = await c.post("/query-run", json={"sql": "SELECT 1", "datasource": "trino"})
     assert r.status_code == 400
 
 
@@ -283,7 +366,7 @@ async def test_query_run_func_error_502(monkeypatch):
 
     monkeypatch.setattr(ea, "_load_query_func", lambda dotted: boom)
     async with _exec_client(create_executor_app()) as c:
-        r = await c.post("/query-run", json={"sql": "SELECT 1"})
+        r = await c.post("/query-run", json={"sql": "SELECT 1", "datasource": "trino"})
     assert r.status_code == 502 and "gateway down" in r.json()["detail"]
 
 

@@ -686,13 +686,18 @@ def create_app(
         summary="query-execute 위임: 설정된 커스텀 함수로 SELECT 실행",
     )
     async def query_run(req: QueryRunRequest):
-        """coordinator 가 렌더·검증한 SELECT 를 **설정된 커스텀 함수**에 실행 위임한다.
+        """coordinator 가 렌더·검증한 SELECT 를 ``datasource`` 에 맞는 경로로 실행한다.
 
-        executor 는 Trino 등 백엔드를 직접 알지 않는다 — ``query.func.module`` 로 지정한 외부
-        함수에 SQL·설정(``query.func.config.*``)·limit 을 넘겨 호출하고, 반환된 결과
-        (QueryResult 또는 동일 키 dict)를 그대로 응답한다. 블로킹일 수 있으므로 to_thread 로 감싼다.
-        미설정 시 400, 함수 로드/실행 실패 시 502.
+        분기는 이관(/jobs)의 소스 읽기와 같은 기준인 :func:`core.config.is_custom_source` 하나다.
+        ``impala``·``source``·미지정이면 executor 가 task 에 쓰는 것과 같은 **impyla 접속**
+        (``impala.*`` 설정, :func:`build_impala_dsn`)으로 직접 실행하고, 그 외 이름(``trino`` 등)만
+        ``query.func.module`` 로 지정한 커스텀 함수에 SQL·설정(``query.func.config.*``)·limit 을
+        넘겨 위임한다. 두 경로 모두 반환(QueryResult 또는 동일 키 dict)을 그대로 응답하며,
+        블로킹 드라이버 호출이라 to_thread 로 감싼다. impyla 경로는 impala.host 미설정 시 400,
+        접속·SQL 오류 시 502 이고, 커스텀 경로는 함수 미설정 시 400, 로드/실행 실패 시 502 다.
         """
+        if not is_custom_source(req.datasource):
+            return await _query_run_impala(req)
         if not settings.query_func_module:
             raise HTTPException(
                 status_code=400,
@@ -720,6 +725,35 @@ def create_app(
         # 반환은 QueryResult 또는 {columns, rows, row_count, truncated, elapsed_ms} dict 를 허용한다.
         body = result.to_dict() if isinstance(result, QueryResult) else dict(result)
         return {"limit": limit, **body}
+
+    async def _query_run_impala(req: QueryRunRequest) -> dict:
+        """``/query-run`` 의 built-in Impala 경로다. 이관 task 와 같은 impyla 접속으로 SELECT 를 실행한다.
+
+        ``/datasources/impala/query`` 미리보기와 같은 :func:`run_impala_select` 를 쓰되, 실행 SQL
+        로그는 QUERY_EXECUTE 단계로 남겨 query-execute 호출임이 구분되게 한다. 전역
+        ``impala.query_options`` 를 SET 으로 적용한다(task 와 동일). impala.host 가 비어 있으면
+        커스텀 함수로 조용히 넘어가지 않고 400 으로 명확히 거절한다 — 폴백하면 Impala 를 읽는 줄
+        알면서 다른 엔진의 결과를 돌려주게 된다.
+        """
+        dsn = build_impala_dsn(settings)
+        if not dsn:
+            raise HTTPException(
+                status_code=400,
+                detail="impala.host 미설정 — datasource=impala 로 실행할 Impala 접속 정보가 없습니다",
+            )
+        limit = clamp_limit(req.limit)
+        name = (req.datasource or "impala").strip().lower() or "impala"
+        log_sql(name, req.sql, phase="QUERY_EXECUTE")
+        try:
+            result = await asyncio.to_thread(
+                run_impala_select, dsn, req.sql,
+                query_options=settings.impala_query_options, limit=limit, datasource=name,
+                log=False,
+            )
+        except Exception as e:  # 접속·인증·SQL 오류는 원인을 담아 502 로 돌려준다
+            logger.warning("impala query-run 실패: %s", e, exc_info=True)
+            raise HTTPException(status_code=502, detail=f"impala 쿼리 실패: {e}")
+        return {"limit": limit, **result.to_dict()}
 
     # 대시보드가 켜져 있을 때만 UI 와 보조 조회 엔드포인트(/, /history, /config, /info)를 등록한다.
     # started_at 과 start_monotonic 은 /info 의 uptime 계산 기준점이며, monotonic 은 시계 변경에 둔감하다.

@@ -464,6 +464,10 @@ JSON
 고를 수 있다. `datasource` 와 `sql_dialect` 는 요청에 없으면 템플릿 manifest 의 값을, 그것도 없으면
 서버 설정(`source.type`·`query.sql_dialect`)을 따른다. 그래서 Trino 용으로 만든 템플릿은 manifest 에
 `datasource: trino` 와 `sql_dialect: trino` 를 적어 두면 요청에서 따로 지정하지 않아도 된다.
+`datasource` 가 `impala`(또는 생략으로 서버 기본값이 impala)이면 executor 가 이관과 같은 Impala
+접속으로 직접 실행하고, `trino` 처럼 다른 이름이면 운영자가 executor 에 설정한 실행 함수가 맡는다.
+요청에 `"datasource": "impala"` 를 명시하면 템플릿이나 서버 기본값이 Trino 여도 그 요청만 Impala 로
+실행된다. `hive` 는 데이터소스 이름이 아니라 `sql_dialect` 값이다.
 
 응답에는 `template_id`·`datasource`·`sql`·`columns`·`rows`·`row_count`·`truncated`·`limit`·
 `elapsed_ms` 와 함께 `executed_by` 가 담긴다. 소스 실행은 coordinator 가 가장 한가한 executor 를 골라
