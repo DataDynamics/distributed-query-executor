@@ -319,7 +319,11 @@ const bar = p => `<span class="bar"><i style="width:${p||0}%"></i></span> ${p||0
 const PHASE_LABELS = {QUEUE_WAIT:"대기", IMPALA_SUBMIT:"조회", STAGING_DDL:"staging",
   PREFLIGHT:"검증", DELETE:"선삭제", STREAM_COPY:"COPY", EXPORT_WRITE:"export",
   S3_UPLOAD:"S3업로드", S3_EXTERNAL_DDL:"외부테이블", INSERT:"INSERT", COMMIT:"커밋",
-  CLEANUP:"정리"};
+  CLEANUP:"정리", SOURCE_QUERY:"소스 조회"};
+// 공용 필터 바의 검색/초기화는 job 이력 페이저만 되돌리므로 query-run 페이저도 함께 되돌린다.
+const _histSearch = histSearch, _histReset = histReset;
+histSearch = function(){ qrOffset = 0; _histSearch(); };
+histReset = function(){ qrOffset = 0; _histReset(); };
 function phaseSummary(s){
   const keys = Object.keys(s||{});
   if(!keys.length) return '<span class="mut">-</span>';
@@ -406,7 +410,45 @@ async function loadJobs(){
        <div class="card"><div class="k">활성(대기+실행)</div><div class="v">${d.active}</div></div>
        <div class="card"><div class="k">실행 슬롯</div><div class="v">${concBar(d.running, d.max_concurrent_jobs)}</div></div>
        <div class="card"><div class="k">대기 큐</div><div class="v">${concBar(d.pending, d.max_pending_jobs)}</div></div>
-     </div>` + table(cols, d.jobs);
+     </div>` + table(cols, d.jobs) + await queryRunsHtml();
+}
+// ── 결과 반환 실행(query-run) 처리중 ──
+// query-execute 가 위임한 실행은 job 이 아니라 executor 의 task(exec_mode=query_run)로만 있으므로
+// /query-runs 가 모든 executor 의 /tasks 를 모아 준다. SQL 은 클릭 시점에 executor 상세 프록시로
+// 받고(한 번 받으면 캐시), 단계 타임라인은 목록에 실려 온 phases 로 그린다.
+const qrPhaseMap = {};
+async function showQrSql(idx, taskId){
+  if(!sqlMap[taskId]){
+    try{
+      const t = await getJSON(`/executors/${idx}/tasks/${encodeURIComponent(taskId)}/detail`);
+      if(t && t.sub_query) sqlMap[taskId] = t.sub_query;
+    }catch(_e){ /* 아래에서 (쿼리문 없음) 으로 표기 */ }
+  }
+  showSql(taskId);
+}
+function showQrPhases(id){ showPhasesModal(id + ' · 단계별 진행/소요', renderPhases(qrPhaseMap[id])); }
+const QR_ACTIVE = ["QUEUED","READING","WRITING"];
+async function queryRunsHtml(){
+  let d;
+  try{ d = await getJSON("/query-runs?status=active"); }
+  catch(e){ return `<div class="subhd">결과 반환 실행(query-run) 처리중</div><p class="err">불러오기 실패: ${esc(e)}</p>`; }
+  (d.runs||[]).forEach(r=>{ qrPhaseMap[r.task_id] = r.phases||[]; });
+  const cols = [
+    {t:"Executor", f:r=>`<a class="lnk" href="${r.executor_url}" target="_blank" rel="noopener" title="executor 대시보드 열기"><code>${esc(r.executor_url)}</code></a>`},
+    {t:"실행 ID", f:r=>`<a class="lnk" onclick="showQrSql(${r.executor_idx},'${esc(r.task_id)}');return false">${esc(r.task_id)}</a>`},
+    {t:"요청 ID", f:r=>`<code>${fmt(r.job_id)}</code>`},
+    {t:"사용자", k:"username"},
+    {t:"상태", f:r=>pill(r.status)},
+    {t:"현재 단계", f:r=>r.current_phase?`<span class="phdot">${PHASE_LABELS[r.current_phase]||esc(r.current_phase)}</span>`:fmt(null)},
+    {t:"단계", f:r=>`<a class="lnk" onclick="showQrPhases('${esc(r.task_id)}');return false">타임라인</a>`},
+    {t:"읽은 행수", f:r=>fmtNum(r.rows_read)},
+    {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
+    {t:"소요 시간", f:r=>dur(r.started_at, r.finished_at)},
+    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
+  ];
+  const errs = (d.errors||[]).map(e=>`<span class="err">${esc(e.executor_url)}: ${esc(e.error)}</span>`).join('<br>');
+  return `<div class="subhd">결과 반환 실행(query-run) 처리중<span class="mut">${d.total||0}건 · executor ${d.executors||0}대</span></div>`
+    + table(cols, d.runs||[]) + (errs ? `<p>${errs}</p>` : '');
 }
 async function loadHist(){
   const d = await getJSON(`/history?limit=${HIST_LIMIT}&offset=${histOffset}${histFilterQS()}`);
@@ -432,7 +474,44 @@ async function loadHist(){
     {t:"액션", f:retryBtn},
   ];
   const n = d.rows ? d.rows.length : 0;
-  $("#hist-body").innerHTML = table(cols, d.rows) + pagerHtml(n);
+  $("#hist-body").innerHTML = table(cols, d.rows) + pagerHtml(n) + await queryRunHistHtml();
+}
+// ── 결과 반환 실행(query-run) 이력 ──
+// executor 들이 task_history 에 남긴 query_run 행을 coordinator 가 모아 준다(/query-runs/history).
+// job 이력과 같은 필터 바(상태·사용자·작업 ID 전방일치)를 공유하되 페이저는 따로 둔다.
+let qrOffset = 0, qrTotal = 0;
+function qrPagerHtml(n){
+  const from = qrTotal ? qrOffset + 1 : 0, to = qrOffset + n;
+  return `<div class="pager">
+      <button onclick="qrPrev()" ${qrOffset<=0?'disabled':''}>← 이전</button>
+      <span class="mut">${from}–${to} / ${qrTotal}</span>
+      <button onclick="qrNext()" ${to>=qrTotal?'disabled':''}>다음 →</button>
+    </div>`;
+}
+function qrPrev(){ qrOffset = Math.max(0, qrOffset - HIST_LIMIT); loadHist(); }
+function qrNext(){ if(qrOffset + HIST_LIMIT < qrTotal){ qrOffset += HIST_LIMIT; loadHist(); } }
+async function queryRunHistHtml(){
+  let d;
+  try{ d = await getJSON(`/query-runs/history?limit=${HIST_LIMIT}&offset=${qrOffset}${histFilterQS()}`); }
+  catch(e){ return `<div class="subhd">결과 반환 실행(query-run) 이력</div><p class="err">불러오기 실패: ${esc(e)}</p>`; }
+  qrTotal = d.total || 0;
+  (d.rows||[]).forEach(r=>{ if(r.sub_query) sqlMap[r.task_id]=r.sub_query; qrPhaseMap[r.task_id]=r.phases||[]; });
+  const cols = [
+    {t:"실행 ID", f:r=>jobLink(r.task_id)},
+    {t:"요청 ID", f:r=>`<code>${fmt(r.job_id)}</code>`},
+    {t:"사용자", k:"username"},
+    {t:"Executor", f:r=>`<code>${fmt(r.executor_id)}</code>`},
+    {t:"상태", f:r=>pill(r.status)},
+    {t:"단계", f:r=>`<a class="lnk" onclick="showQrPhases('${esc(r.task_id)}');return false">타임라인</a>`},
+    {t:"읽은 행수", f:r=>fmtNum(r.rows_read)},
+    {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
+    {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
+    {t:"소요 시간", cls:"col-dur", f:r=>dur(r.started_at, r.finished_at)},
+    {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
+  ];
+  const n = d.rows ? d.rows.length : 0;
+  return `<div class="subhd">결과 반환 실행(query-run) 이력<span class="mut">${qrTotal}건</span></div>`
+    + table(cols, d.rows||[]) + qrPagerHtml(n);
 }
 
 async function loadExec(){

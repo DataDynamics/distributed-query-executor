@@ -99,3 +99,7 @@ th.col-dur, td.col-dur { width:60px; }
 th.col-err, td.col-err { width:600px; max-width:600px; }
 td.col-err { text-align:left; white-space:normal; word-break:break-word;
              font-family:ui-monospace,Menlo,Consolas,monospace; }
+
+/* 한 패널 안에서 표를 둘 이상 쌓을 때 쓰는 소제목(예: 처리중인 job 아래의 query-run 표) */
+.subhd{margin:16px 0 6px;font-size:13px;font-weight:600;color:var(--fg,inherit)}
+.subhd .mut{font-weight:400;margin-left:6px}

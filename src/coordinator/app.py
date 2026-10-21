@@ -50,7 +50,7 @@ from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .executor_status import ExecutorStatusRepository
 from .ha import CoordinatorHeartbeat, reconcile_orphaned_jobs
-from .history import JobHistoryRepository
+from .history import JobHistoryRepository, QueryRunHistoryRepository
 from .job_store import JobStore, build_job_store, reconcile_interrupted_jobs
 from .models import (
     CreateJobRequest,
@@ -1440,6 +1440,77 @@ def create_app(
         )
 
     history_reader = JobHistoryRepository(settings)
+    query_run_history = QueryRunHistoryRepository(settings)
+
+    @app.get(
+        "/query-runs",
+        tags=["Monitoring"],
+        summary="모든 executor 의 결과 반환 실행(query-run) task 를 모아 반환",
+    )
+    async def list_query_runs(status: Optional[str] = "active"):
+        """설정된 executor 전부의 ``/tasks`` 를 병렬로 물어 ``exec_mode=query_run`` 인 task 만 모은다.
+
+        query-execute 가 위임한 실행은 job 이 아니라 executor 의 task 로만 존재하므로, 대시보드
+        "처리중인 Query" 탭이 coordinator 한 곳에서 보여 주려면 이렇게 모아야 한다. 각 행에
+        ``executor_url`` 과 설정 목록 index(``executor_idx`` — SQL 상세 프록시 키)를 붙인다.
+        executor 하나가 응답하지 않아도 나머지는 돌려주고 실패한 executor 는 ``errors`` 에 적는다.
+        ``status`` 는 executor ``/tasks`` 의 필터로 그대로 전달한다(기본 active, 빈 값이면 전체).
+        """
+        urls = [u for u in settings.executors if u]
+        params = {"status": status} if status else {}
+        timeout = httpx.Timeout(10.0, connect=settings.task_connect_timeout_s)
+
+        async def fetch(idx: int, url: str):
+            target = url.rstrip("/") + "/tasks"
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.get(target, params=params, headers=outgoing_headers())
+                if resp.status_code >= 400:
+                    return idx, url, None, f"HTTP {resp.status_code}"
+                return idx, url, resp.json(), None
+            except httpx.HTTPError as e:
+                return idx, url, None, str(e)
+
+        results = await asyncio.gather(*(fetch(i, u) for i, u in enumerate(urls)))
+        runs: list = []
+        errors: list = []
+        for idx, url, body, err in results:
+            if err is not None:
+                errors.append({"executor_url": url, "error": err})
+                continue
+            for task in (body or {}).get("tasks", []):
+                if task.get("exec_mode") != "query_run":
+                    continue
+                runs.append({**task, "executor_url": url, "executor_idx": idx})
+        runs.sort(key=lambda r: r.get("started_at") or "", reverse=True)
+        return format_at_fields({
+            "runs": runs, "total": len(runs),
+            "active": sum(1 for r in runs if r.get("status") in ("QUEUED", "READING", "WRITING")),
+            "executors": len(urls), "errors": errors,
+        })
+
+    @app.get(
+        "/query-runs/history",
+        tags=["Monitoring"],
+        summary="결과 반환 실행(query-run) 이력(task_history, 필터/페이징)",
+    )
+    def get_query_run_history(
+        limit: int = 20,
+        offset: int = 0,
+        status: Optional[str] = None,
+        username: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ):
+        """executor 들이 task_history 에 남긴 query-run 이력을 task_id 별 최신 한 건씩 돌려준다.
+
+        ``/history`` 와 같은 필터·페이징 규칙이고(limit 1~200), ``status=RUNNING`` 은 처리중
+        task 상태 집합으로 풀린다. 이력 DB 가 없으면 ``enabled=false`` 다.
+        """
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+        return format_at_fields(query_run_history.read(
+            limit=limit, offset=offset, status=status, username=username, job_id=job_id,
+        ))
 
     @app.get("/history", tags=["Jobs"], summary="과거 실행 이력(필터/페이징)")
     def get_history(

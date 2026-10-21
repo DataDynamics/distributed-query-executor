@@ -258,6 +258,8 @@ POST /jobs
 | `POST /jobs/{id}/cancel` | 작업 취소(각 executor에 전파). 이미 종료면 409 |
 | `POST /jobs/{id}/retry` | **실패 파티션만 재실행**: 종료된 job의 FAILED/CANCELLED task만 새 job으로 복제·디스패치(`retry_of` 추적) → 새 `job_id`(202). 대상 없으면 409 |
 | `GET /history` | 과거 실행 이력(`job_history`, job_id별 최신 1건, 페이징) |
+| `GET /query-runs` | 모든 executor 의 `/tasks` 를 모아 **query-run**(`exec_mode=query_run`) task 만 반환(`executor_url`·`executor_idx` 주석, 실패 executor 는 `errors`). 대시보드 "처리중인 Query" 하단 |
+| `GET /query-runs/history` | query-run 이력(`task_history` 의 `exec_mode='query_run'`, task_id별 최신 1건, 페이징, `status=RUNNING` 은 처리중 집합) |
 | `GET /executors` | executor 헬스/메트릭 상태 |
 | `GET /cluster` | coordinator+executor health/metrics + 실행 중 job 수 한 번에 |
 | `GET /health`·`/healthz`·`/metrics` | 헬스 체크/시스템 메트릭 |
@@ -344,7 +346,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 가시성은 메트릭·대시보드·로깅 세 가지로 제공한다.
 
 - **시스템 메트릭**: 두 서비스 모두 `/metrics`(CPU/메모리/디스크 + 동시 처리)를 낸다. coordinator `HealthMonitor`가 executor를 폴링해 `/executors`·`/cluster`로 제공하고, `monitor.db_dsn` 설정 시 `executor_health_metrics`에 기록한다.
-- **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query / 실행 이력 / Executor / 환경설정 / 그외 정보.
+- **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query(job 표 + query-run 처리중 표) / 실행 이력(job 이력 + query-run 이력) / Executor / 환경설정 / 그외 정보.
 - **executor self-view 대시보드(`/`)**: remote 모드의 각 executor가 자기 task/메트릭/이력을 노출한다. local 모드에선 executor 프로세스가 없으므로 coordinator 화면만 보인다.
 - **로깅**: `/data1/distributed-query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트를 자동 주입하고, **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적한다.
 
@@ -673,6 +675,7 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 - **이관 소스와의 분리**: `datasource`를 생략하면 manifest `datasource`를, 그것도 없으면 전역 `source.type`을 쓰지만(`/jobs`와 같은 우선순위), 명시하면 그 소스로 라우팅된다. `source.type=impala`로 두고 query-execute에 `datasource:"trino"`를 명시하면 "이관은 Impala, query-execute는 Trino"처럼 기능별로 소스를 나눌 수 있다.
 - **경계**: 결과가 coordinator 메모리를 거치므로 `limit`(≤10000)으로 응답 크기를 강제하는 **미리보기 규모 전용**이다. 대량 이관은 계속 `/jobs`.
 - **동시 처리·이력 — query-run 도 task 다**: executor 는 `/query-run` 한 건을 `exec_mode="query_run"` 인 Task 로 인메모리 `tasks` 에 등록하고 이관 task 와 **같은 세마포어**(`executor.max_concurrent_tasks`)를 거친다. 그래서 처리중 집계(`/tasks`·`/metrics`·`/info`·self-report 의 `active_tasks`)에 포함돼 coordinator 의 least_loaded/p2c 선택이 query-execute 부하도 보고, 슬롯이 다 차면 QUEUED 로 기다린다(응답 연결은 열어 둔 채 — coordinator 의 `task_timeout_s` 안에서). 상태 전이(QUEUED → READING → DONE/FAILED/CANCELLED)마다 task_history 에 한 행씩 남으며 `sub_query` 에 실행 SQL, `rows_read` 에 반환 행수가 들어간다(`rows_written` 은 0 — 적재가 없다). job_id 는 coordinator 가 실어 보낸 요청 식별자(`req-<id>`)라 coordinator 로그와 같은 키로 묶인다. 단계 타임라인은 `QUEUE_WAIT` 와 `SOURCE_QUERY` 두 개다. 드레이닝 중에는 503 이고, 드레이닝은 진행 중인 query-run 도 기다린다. `/datasources/{name}/query` 는 운영 점검용이라 여전히 세마포어 밖이다.
+- **coordinator 대시보드에서도 본다**: query-run 은 job 이 아니라 coordinator 에 상태가 없으므로 두 경로로 모은다. 처리중은 `GET /query-runs` 가 설정된 executor 전부의 `/tasks?status=active` 를 병렬로 물어 `exec_mode=query_run` 만 합치고(각 행에 `executor_url`·설정 index `executor_idx`, 응답 없는 executor 는 `errors`), 이력은 `GET /query-runs/history` 가 `QueryRunHistoryRepository` 로 task_history 를 `exec_mode='query_run'` 으로 한정해 task_id 별 최신 한 건씩 읽는다(멀티 coordinator 에서도 같은 공유 DB 라 일관). 대시보드는 "처리중인 Query" 탭의 job 표 아래와 "실행 이력" 탭의 job 이력 아래에 각각 표를 쌓고, SQL 은 처리중이면 `/executors/{idx}/tasks/{id}/detail` 프록시로, 이력이면 행의 `sub_query` 로 띄운다. 이력 필터 바(상태·사용자·작업 ID 전방일치)는 두 표가 공유하고 페이저만 따로다. 검증은 `tests/test_query_run_dashboard.py`.
 
 - **건수 조회(`POST /query-count`)**: 같은 렌더·검증·라우팅을 공유하되(`_render_template_select`·`_execute_select`), 검증된 SELECT 를 `parser.build_count_query()` 가 `SELECT COUNT(*) AS row_count FROM (\n<원문>\n) qc_src` 로 감싸 `limit=1` 로 실행하고 첫 행 첫 열을 `int()` 로 읽는다(`_extract_count`, 리스트·dict 행 모두 허용, 해석 불가면 502). 원문을 sqlglot 으로 재생성하지 않고 텍스트로 감싸는 이유는 방언(dialect)별 표기가 바뀌어 미리보기와 다른 쿼리를 세는 일을 막기 위해서다. 건수를 소스 안에서 세므로 행이 coordinator 를 거치지 않고 `limit` 상한과 무관하다. 응답은 `{template_id, datasource, sql, count_sql, row_count, elapsed_ms, executed_by}` 이며 `row_count` 는 총 건수다(query-execute 의 `row_count` 는 반환 행 수).
 

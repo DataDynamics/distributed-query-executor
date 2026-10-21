@@ -194,3 +194,90 @@ class JobHistoryRepository:
                 cur.execute(_INSERT.format(table=self.table), row)
             conn.commit()
         logger.info("job %s 이력 기록(status=%s) -> %s", job.job_id, job.status.value, self.table)
+
+
+class QueryRunHistoryRepository:
+    """executor 들이 task_history 에 남긴 **결과 반환 실행(query-run)** 이력을 coordinator 가 읽는 조회 전용 저장소다.
+
+    query-execute 가 위임한 실행은 job 을 만들지 않아 job_history 에 없고, executor 가
+    ``exec_mode='query_run'`` 인 task 로 task_history 에 기록한다. 대시보드 실행 이력 탭이 그 행을
+    coordinator 한 곳에서 보여 줄 수 있도록, 모든 executor 의 행을 task_id 별 최신 상태 한 건씩
+    추려 페이징해 돌려준다. 기록은 executor 몫이라 여기엔 쓰기 메서드가 없다. 테이블은
+    config/postgresql.sql 로 미리 만들어져 있어야 하며 DSN 이 없으면 비활성이다.
+    """
+
+    # 처리중으로 보는 task 상태들이다. 공용 필터 바의 RUNNING 선택을 이 집합으로 푼다.
+    ACTIVE_STATUSES = ("QUEUED", "READING", "WRITING")
+
+    def __init__(self, settings):
+        self.dsn: str = getattr(settings, "history_db_dsn", "") or ""
+        self.table: str = getattr(settings, "task_history_table", "task_history")
+        self.enabled: bool = bool(self.dsn)
+
+    def read(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        status: str | None = None,
+        username: str | None = None,
+        job_id: str | None = None,
+    ) -> dict:
+        """query-run 이력을 task_id 별 최신 한 행씩 필터링·페이징해 조회한다.
+
+        :class:`JobHistoryRepository.read` 와 같은 구조다. ``DISTINCT ON (task_id)`` 파생 테이블을
+        ``exec_mode = 'query_run'`` 으로 한정해 만들고, 필터는 그 바깥(최신 상태 기준)에 건다.
+        ``status`` 가 ``RUNNING`` 이면 task 상태 중 처리중 집합(QUEUED/READING/WRITING)으로 풀어
+        job 이력과 같은 필터 바를 그대로 쓸 수 있게 한다. ``job_id`` 는 전방일치이며 query-run 의
+        job_id 는 요청 식별자(``req-<id>``)다.
+        """
+        if not self.enabled:
+            return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
+        import psycopg  # 이력을 쓰지 않는 환경에 psycopg 의존을 강제하지 않으려고 지연 임포트한다
+
+        conds: list[str] = []
+        params: list[object] = []
+        if status:
+            s = status.upper()
+            if s == "RUNNING":
+                conds.append("status = ANY(%s)")
+                params.append(list(self.ACTIVE_STATUSES))
+            else:
+                conds.append("status = %s")
+                params.append(s)
+        if username:
+            conds.append("username = %s")
+            params.append(username)
+        if job_id:
+            conds.append("job_id LIKE %s")
+            params.append(f"{job_id}%")
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        latest = (
+            "SELECT DISTINCT ON (task_id) recorded_at, job_id, task_id, username, executor_id, "
+            "  status, rows_read, error, started_at, finished_at, sub_query, phases "
+            f"FROM {self.table} WHERE exec_mode = 'query_run' "
+            "ORDER BY task_id, recorded_at DESC"
+        )
+        with psycopg.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT count(*) FROM ({latest}) t{where}", tuple(params))
+                total = cur.fetchone()[0]
+                cur.execute(
+                    f"SELECT * FROM ({latest}) t{where} "
+                    "ORDER BY recorded_at DESC LIMIT %s OFFSET %s",
+                    tuple(params) + (limit, offset),
+                )
+                rows = cur.fetchall()
+            conn.commit()
+        out = [
+            {
+                "recorded_at": r[0].isoformat() if r[0] is not None else None,
+                "job_id": r[1], "task_id": r[2], "username": r[3], "executor_id": r[4],
+                "status": r[5], "rows_read": r[6], "error": r[7],
+                "started_at": r[8].isoformat() if r[8] is not None else None,
+                "finished_at": r[9].isoformat() if r[9] is not None else None,
+                "sub_query": r[10],
+                "phases": r[11] or [],
+            }
+            for r in rows
+        ]
+        return {"enabled": True, "rows": out, "total": total, "limit": limit, "offset": offset}

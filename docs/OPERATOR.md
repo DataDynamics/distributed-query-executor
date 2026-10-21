@@ -252,6 +252,11 @@ task 하나는 소스 커넥션 하나와 Greenplum 커넥션 하나, 그리고 
 위임하는 결과 반환 실행(`/query-run`)도 이 슬롯을 함께 쓴다. executor 의 처리중 목록과 실행 이력에
 `query_run` 실행 방식으로 나타나고(적재가 없어 적재 행수는 0, 읽은 행수가 반환 행수다), 슬롯이 다 차면
 QUEUED 로 기다리므로 미리보기 응답이 늦어지면 이관 task 와 슬롯을 다투고 있는지 먼저 본다.
+coordinator 대시보드에서도 보인다. "처리중인 Query" 탭의 job 표 아래 "결과 반환 실행(query-run)
+처리중" 표가 모든 executor 의 진행 중 query-run 을 모아 보여 주고(어느 executor 가 실행 중인지, 실행 ID
+를 누르면 SQL), "실행 이력" 탭의 job 이력 아래 "결과 반환 실행(query-run) 이력" 표가 이력 DB 의
+task_history 에서 읽는다. 이력 표의 요청 ID(`req-<id>`)는 coordinator 로그의 요청 식별자와 같아 그
+값으로 양쪽 로그를 함께 찾을 수 있다.
 
 `greenplum.pool_max` 는 executor 가 재사용하는 GP 커넥션 풀의 크기로, Greenplum 의
 `max_connections` 를 직접 보호하는 파라미터다. 기본값 0이면 풀 크기가 `executor.max_concurrent_tasks`
