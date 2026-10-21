@@ -19,6 +19,8 @@ from coordinator.tui import (
     fmt_job_detail,
     fmt_job_rows,
     fmt_pct,
+    fmt_query_run_history_rows,
+    fmt_query_run_rows,
     short_id,
 )
 
@@ -131,6 +133,45 @@ def test_fmt_history_rows():
     assert "이력 없음" in "\n".join(fmt_history_rows({"history": []}))
 
 
+def test_fmt_history_rows_는_실제_history_응답의_rows_키를_읽는다():
+    """coordinator /history 는 rows 에 행을 담아 준다 — 예전 키만 보면 늘 '이력 없음' 이 된다."""
+    rows = fmt_history_rows({"enabled": True, "rows": [
+        {"job_id": "h2", "status": "FAILED", "username": "bob", "total_rows_written": 0,
+         "finished_at": "2026-07-21T00:00:00"}], "total": 1})
+    assert "h2" in rows[1] and "FAILED" in rows[1] and "bob" in rows[1]
+
+
+def test_fmt_query_run_rows():
+    body = {"runs": [
+        {"task_id": "qr-0123456789ab", "status": "READING", "current_phase": "SOURCE_QUERY",
+         "rows_read": 0, "username": "kim", "executor_url": "http://e1:8001", "executor_idx": 0},
+    ], "total": 1, "errors": [{"executor_url": "http://e2:8001", "error": "refused"}]}
+    rows = fmt_query_run_rows(body)
+    assert "run_id" in rows[0] and "executor" in rows[0]
+    assert "qr-0123456789ab" in rows[1] and "READING" in rows[1] and "SOURCE_QUERY" in rows[1]
+    assert "kim" in rows[1] and "http://e1:8001" in rows[1]
+    assert rows[-1].strip().startswith("⚠") and "http://e2:8001" in rows[-1] and "refused" in rows[-1]
+    assert "처리중인 query-run 없음" in "\n".join(fmt_query_run_rows({"runs": []}))
+
+
+def test_fmt_query_run_history_rows():
+    body = {"enabled": True, "rows": [
+        {"task_id": "qr-aaaaaaaaaaaa", "status": "DONE", "username": "kim", "rows_read": 100,
+         "executor_id": "host:8001", "finished_at": "2026-10-21T10:00:05"}], "total": 1}
+    rows = fmt_query_run_history_rows(body)
+    assert "qr-aaaaaaaaaaaa" in rows[1] and "DONE" in rows[1] and "100" in rows[1]
+    assert "host:8001" in rows[1] and "2026-10-21T10:00:05" in rows[1]
+    assert "query-run 이력 없음" in "\n".join(fmt_query_run_history_rows({"rows": []}))
+
+
+def test_fmt_executor_detail_shows_exec_mode_and_rows_read():
+    lines = fmt_executor_detail({"tasks": {}}, {"tasks": [
+        {"task_id": "qr-1", "status": "READING", "exec_mode": "query_run",
+         "rows_written": 0, "rows_read": 7, "job_id": "req-x"}], "total": 1})
+    row = lines[-1]
+    assert "query_run" in row and "qr-1" in row and " 7 " in row + " "
+
+
 # ── API 클라이언트 경로/파라미터 ────────────────────────────────────────────
 
 class _CapClient:
@@ -176,6 +217,8 @@ def test_api_builds_paths_and_params(monkeypatch):
     api.executor_tasks(2)
     api.executor_metrics(2)
     api.history(limit=25)
+    api.query_runs()
+    api.query_run_history(limit=30)
 
     urls = [c[0] for c in _CapClient.calls]
     assert urls == [
@@ -185,11 +228,15 @@ def test_api_builds_paths_and_params(monkeypatch):
         "http://host:8088/executors/2/tasks",
         "http://host:8088/executors/2/metrics",
         "http://host:8088/history",
+        "http://host:8088/query-runs",
+        "http://host:8088/query-runs/history",
     ]
-    # 파라미터: cluster refresh, jobs status/limit, history limit
+    # 파라미터: cluster refresh, jobs status/limit, history limit, query-runs status/limit
     assert _CapClient.calls[0][1] == {"refresh": "true"}
     assert _CapClient.calls[1][1] == {"status": "active", "limit": 10}
     assert _CapClient.calls[5][1] == {"limit": 25}
+    assert _CapClient.calls[6][1] == {"status": "active"}
+    assert _CapClient.calls[7][1] == {"limit": 30}
 
 
 def test_default_base_url_env(monkeypatch):
@@ -209,6 +256,72 @@ class _StubApi:
     def cluster(self):
         return {"executors": [{"index": i, "executor_url": f"http://e{i}"} for i in range(self.rows)],
                 "assignment_counts": {}}
+
+
+class _JobsApi(_StubApi):
+    """Jobs 탭용: job 하나와 query-run 둘을 돌려주는 가짜 API 다."""
+
+    def jobs(self, status=None, limit=0):
+        return {"jobs": [{"job_id": "job-1", "status": "RUNNING", "progress_percent": 10,
+                          "total_rows_written": 0, "target_table": "public.t"}]}
+
+    def query_runs(self, status="active"):
+        return {"runs": [
+            {"task_id": "qr-1", "status": "READING", "executor_url": "http://e1", "executor_idx": 1},
+            {"task_id": "qr-2", "status": "QUEUED", "executor_url": "http://e0", "executor_idx": 0},
+        ], "total": 2, "errors": []}
+
+    def executor_metrics(self, idx):
+        return {"cpu_percent": 1.0, "tasks": {"active": 1, "queued": 1, "max": 8}}
+
+    def executor_tasks(self, idx):
+        return {"tasks": [{"task_id": "qr-1", "status": "READING", "exec_mode": "query_run",
+                           "rows_written": 0, "rows_read": 0, "job_id": "req-1"}], "total": 1}
+
+
+def test_jobs_탭은_query_run_처리중을_아래에_쌓고_Enter_로_executor_상세에_간다():
+    app = tui.DashboardTUI(_JobsApi(), interval=2.0)
+    app.set_tab(1)                       # Jobs 탭
+    text = "\n".join(app.lines)
+    assert "job-1" in text and "query-run 처리중 (2):" in text and "qr-1" in text and "qr-2" in text
+    # select_rows 는 줄 수와 길이가 같고, job 행은 job_id, query-run 행은 ("executor", idx) 다.
+    assert len(app.select_rows) == len(app.lines)
+    assert app.select_rows[1] == "job-1"
+    qr_row = next(i for i, l in enumerate(app.lines) if l.startswith("qr-1"))
+    assert app.select_rows[qr_row] == ("executor", 1)
+    app.row = qr_row
+    app.enter()
+    assert app.detail == ("executor", 1)
+    assert "query_run" in "\n".join(app.lines)
+
+
+def test_jobs_탭은_query_runs_가_실패해도_job_표를_남긴다():
+    class _Broken(_JobsApi):
+        def query_runs(self, status="active"):
+            raise RuntimeError("timeout")
+
+    app = tui.DashboardTUI(_Broken(), interval=2.0)
+    app.set_tab(1)
+    text = "\n".join(app.lines)
+    assert app.error is None and "job-1" in text and "timeout" in text
+    assert len(app.select_rows) == len(app.lines)
+
+
+def test_history_탭은_query_run_이력을_아래에_쌓는다():
+    class _HistApi(_StubApi):
+        def history(self, limit=50):
+            return {"enabled": True, "rows": [{"job_id": "h1", "status": "DONE", "username": "a",
+                                                "total_rows_written": 1, "finished_at": "t"}], "total": 1}
+
+        def query_run_history(self, limit=50):
+            return {"enabled": True, "rows": [{"task_id": "qr-9", "status": "DONE", "username": "a",
+                                                "rows_read": 5, "executor_id": "h:1", "finished_at": "t"}],
+                    "total": 1}
+
+    app = tui.DashboardTUI(_HistApi(), interval=2.0)
+    app.set_tab(3)                       # History 탭
+    text = "\n".join(app.lines)
+    assert "h1" in text and "query-run 이력 (1):" in text and "qr-9" in text
 
 
 def test_목록이_짧아지면_커서와_스크롤을_당겨_온다():

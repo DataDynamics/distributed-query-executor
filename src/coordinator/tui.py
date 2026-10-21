@@ -1,7 +1,9 @@
 """coordinator 대시보드를 터미널에서 보는 **읽기 전용** curses 모니터다.
 
 coordinator 의 웹 대시보드가 쓰는 것과 동일한 JSON API 를 폴링해 클러스터/job/executor/
-이력을 텍스트 UI 로 그린다(HTML 스크래핑 아님). 개별 executor 상세(task 목록/메트릭)는
+이력을 텍스트 UI 로 그린다(HTML 스크래핑 아님). query-execute 가 executor 에 위임한 결과 반환
+실행(query-run)도 웹 대시보드와 같은 `GET /query-runs`·`/query-runs/history` 로 받아 Jobs 탭과
+History 탭 아래쪽에 함께 보여 준다. 개별 executor 상세(task 목록/메트릭)는
 coordinator 프록시(`GET /executors/{idx}/tasks`·`/metrics`)로 가져오므로, **coordinator 한
 곳만** 붙어도 executor 화면까지 볼 수 있다(각 executor 에 직접 접속하지 않는다).
 
@@ -79,6 +81,14 @@ class CoordinatorApi:
 
     def history(self, limit: int = 50) -> Any:
         return self._get("/history", {"limit": limit})
+
+    # 모든 executor 의 결과 반환 실행(query-run) task 를 모아 온다(기본 처리중만).
+    def query_runs(self, status: str | None = "active") -> Any:
+        return self._get("/query-runs", {"status": status} if status else {"status": ""})
+
+    # query-run 이력(task_history 의 exec_mode=query_run)을 가져온다.
+    def query_run_history(self, limit: int = 50) -> Any:
+        return self._get("/query-runs/history", {"limit": limit})
 
     # executor 상세를 coordinator 프록시로 가져온다.
     def executor_metrics(self, idx: int) -> Any:
@@ -211,20 +221,27 @@ def fmt_executor_detail(metrics: dict, tasks_body: dict) -> list[str]:
     tasks = tasks_body.get("tasks", []) or []
     lines.append("")
     lines.append(f"tasks ({tasks_body.get('total', len(tasks))}):")
-    lines.append(f"  {'task_id':<12} {'status':<10} {'rows_w':>10}  job")
+    lines.append(f"  {'task_id':<12} {'status':<10} {'mode':<12} {'rows_w':>10} {'rows_r':>10}  job")
     for t in tasks:
         lines.append(
             f"  {short_id(t.get('task_id'), 12):<12} "
             f"{str(t.get('status', '?')):<10} "
-            f"{str(t.get('rows_written', 0)):>10}  "
+            f"{str(t.get('exec_mode', '')):<12} "
+            f"{str(t.get('rows_written', 0)):>10} "
+            f"{str(t.get('rows_read', 0)):>10}  "
             f"{short_id(t.get('job_id'), 12)}"
         )
     return lines
 
 
 def fmt_history_rows(history_body: dict) -> list[str]:
-    """`/history` JSON 을 표 행으로 만든다."""
-    items = history_body.get("history") or history_body.get("items") or []
+    """`/history` JSON 을 표 행으로 만든다.
+
+    coordinator 의 `/history` 는 행을 ``rows`` 에 담아 돌려준다. 예전 키(``history``/``items``)도
+    그대로 받아 어느 쪽이든 그린다.
+    """
+    items = (history_body.get("rows") or history_body.get("history")
+             or history_body.get("items") or [])
     rows = [f"{'job_id':<12} {'status':<10} {'user':<10} {'rows':>10}  finished"]
     for h in items:
         rows.append(
@@ -236,6 +253,47 @@ def fmt_history_rows(history_body: dict) -> list[str]:
         )
     if len(rows) == 1:
         rows.append("  (이력 없음 — history.db_dsn 미설정이거나 기록 없음)")
+    return rows
+
+
+def fmt_query_run_rows(body: dict) -> list[str]:
+    """`/query-runs` JSON(모든 executor 의 처리중 query-run)을 표 행으로 만든다.
+
+    헤더 한 줄과 실행마다 한 줄이 나오고, 응답하지 않은 executor 가 있으면 끝에 경고 줄을 붙인다.
+    """
+    runs = body.get("runs", []) or []
+    rows = [f"{'run_id':<16} {'status':<10} {'phase':<13} {'rows_r':>8} {'user':<10}  executor"]
+    for r in runs:
+        rows.append(
+            f"{short_id(r.get('task_id'), 16):<16} "
+            f"{str(r.get('status', '?')):<10} "
+            f"{short_id(r.get('current_phase') or '', 13):<13} "
+            f"{str(r.get('rows_read', 0)):>8} "
+            f"{short_id(r.get('username'), 10):<10}  "
+            f"{str(r.get('executor_url', ''))}"
+        )
+    if len(rows) == 1:
+        rows.append("  (처리중인 query-run 없음)")
+    for e in body.get("errors", []) or []:
+        rows.append(f"  ⚠ {e.get('executor_url', '?')}: {e.get('error', '')}")
+    return rows
+
+
+def fmt_query_run_history_rows(body: dict) -> list[str]:
+    """`/query-runs/history` JSON(task_history 의 query-run 행)을 표 행으로 만든다."""
+    items = body.get("rows", []) or []
+    rows = [f"{'run_id':<16} {'status':<10} {'user':<10} {'rows_r':>8} {'executor':<16}  finished"]
+    for h in items:
+        rows.append(
+            f"{short_id(h.get('task_id'), 16):<16} "
+            f"{str(h.get('status', '?')):<10} "
+            f"{short_id(h.get('username'), 10):<10} "
+            f"{str(h.get('rows_read', 0)):>8} "
+            f"{short_id(h.get('executor_id'), 16):<16}  "
+            f"{str(h.get('finished_at', ''))}"
+        )
+    if len(rows) == 1:
+        rows.append("  (query-run 이력 없음)")
     return rows
 
 
@@ -343,6 +401,18 @@ class DashboardTUI:
             self.lines = fmt_job_rows(self.data)
             # 헤더인 0행을 뺀 각 job 을 드릴인 대상으로 매핑한다.
             self.select_rows = [None] + [j.get("job_id") for j in (self.data.get("jobs") or [])]
+            self.select_rows += [None] * (len(self.lines) - len(self.select_rows))
+            # 그 아래에 모든 executor 의 처리중 query-run 을 쌓는다. 이 섹션을 못 받아도 job 표는 남긴다.
+            try:
+                qr = self.api.query_runs()
+            except Exception as e:
+                qr = {"runs": [], "errors": [{"executor_url": "/query-runs", "error": str(e)}]}
+            section = fmt_query_run_rows(qr)
+            self.lines += ["", f"query-run 처리중 ({qr.get('total', len(qr.get('runs') or []))}):"] + section
+            # query-run 행에서 Enter 를 누르면 그것을 실행 중인 executor 상세로 들어간다.
+            self.select_rows += [None, None, None]
+            self.select_rows += [("executor", r.get("executor_idx")) for r in (qr.get("runs") or [])]
+            self.select_rows += [None] * (len(self.lines) - len(self.select_rows))
         elif key == "executors":
             self.data = self.api.cluster()
             self.lines = fmt_executor_rows(self.data)
@@ -350,6 +420,13 @@ class DashboardTUI:
         elif key == "history":
             self.data = self.api.history()
             self.lines = fmt_history_rows(self.data)
+            try:
+                qh = self.api.query_run_history()
+            except Exception as e:
+                qh = {"rows": [], "total": 0, "error": str(e)}
+            self.lines += ["", f"query-run 이력 ({qh.get('total', 0)}):"] + fmt_query_run_history_rows(qh)
+            if qh.get("error"):
+                self.lines.append(f"  ⚠ /query-runs/history: {qh['error']}")
         elif key == "info":
             info = self.api.info()
             try:
@@ -374,9 +451,15 @@ class DashboardTUI:
             return
         key = TABS[self.tab][1]
         if key == "jobs" and 0 <= self.row < len(self.select_rows):
-            jid = self.select_rows[self.row]
-            if jid:
-                self.detail = ("job", jid)
+            sel = self.select_rows[self.row]
+            if isinstance(sel, tuple):
+                # query-run 행: 실행 중인 executor 상세로 간다(index 가 없으면 무시).
+                if sel[1] is not None:
+                    self.detail = sel
+                    self.row = self.top = 0
+                    self.refresh()
+            elif sel:
+                self.detail = ("job", sel)
                 self.row = self.top = 0
                 self.refresh()
         elif key == "executors" and 0 <= self.row < len(self.select_rows):

@@ -295,7 +295,10 @@ GP 풀·task·디스패치 한도 사이의 불일치를 확인한다. `max_disp
 발생할 수 있다.
 
 **`coordinator/tui.py`** 는 JSON API를 폴링하는 읽기 전용 모니터다(`bin/dashboard-tui.sh`).
-Executor 상세는 coordinator 프록시를 거치며, 설정 목록의 index로만 대상을 선택한다.
+Executor 상세는 coordinator 프록시를 거치며, 설정 목록의 index로만 대상을 선택한다. Jobs·History
+탭은 웹 대시보드와 같은 `/query-runs`·`/query-runs/history` 로 query-run 섹션을 아래에 쌓고, Jobs 탭의
+`select_rows` 는 job 행이면 job_id, query-run 행이면 `("executor", idx)` 튜플이라 `enter()` 가 구분한다.
+`/history` 응답의 행 키는 `rows` 다(`fmt_history_rows` 가 예전 키 `history`·`items` 도 받는다).
 목록 갱신 후 `clamp()`로 커서 범위를 보정한다. 스페이스는 폴링 정지, `+`/`-`는 주기 조정이다.
 두 TUI는 표준 라이브러리 curses를 사용하며 순수 로직과 화면 경계를 별도로 테스트한다.
 

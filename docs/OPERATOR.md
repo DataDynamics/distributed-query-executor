@@ -53,7 +53,10 @@ bin/dashboard-tui.sh --url http://host:8088 --interval 5
 모니터는 스스로 갱신하는데, 목록을 읽는 동안 화면이 바뀌어 거슬리면 스페이스로 잠시 세우고 `+` 와
 `-` 로 주기를 바꾼다. 상태 줄의 갱신 시각을 보면 지금 화면이 언제 것인지 알 수 있으므로, 화면이
 그대로일 때 멈춘 것인지 조용한 것인지 구분된다. `Enter` 로 job 이나 executor 상세로 들어가고 `ESC`
-로 나온다.
+로 나온다. Jobs 탭의 job 표 아래에는 모든 executor 의 처리중 query-run(결과 반환 실행)이, History
+탭의 job 이력 아래에는 query-run 이력이 함께 나온다. query-run 행에서 `Enter` 를 누르면 그것을
+실행 중인 executor 의 상세로 들어가고, executor 상세의 task 표에는 실행 방식(`mode`) 열이 있어
+이관 task 와 `query_run` 을 구분할 수 있다.
 
 살펴야 할 것은 세 가지다. 먼저 executor 가 다 살아 있는지 본다. `/cluster` 의 `executors_summary`
 에서 `unhealthy` 가 0이 아니면 그 executor 는 배분에서 빠진 상태다. 한 대가 죽어도 나머지가 일을
