@@ -160,6 +160,93 @@ def test_engine_undefined_variable_fails(tmp_path):
     assert ei.value.code == "TEMPLATE_RENDER_ERROR"
 
 
+# ───────────────────────── 렌더 오류 위치 보고 ─────────────────────────
+
+def _bad_engine(tmp_path, select_src: str, extra_manifest: str = ""):
+    _make_template(
+        tmp_path, "loc",
+        f"""
+        id: loc
+        exec_mode: copy
+        partition_column: dt
+        params:
+          - {{name: amount, type: string, required: false, default: ""}}
+        {extra_manifest}
+        files: {{select: select.sql.j2}}
+        """,
+        {"select.sql.j2": select_src},
+    )
+    return TemplateEngine(_Settings(tmp_path))
+
+
+def test_render_error_reports_file_line_and_source_for_filter_error(tmp_path):
+    """필터(sql_num)가 던진 ValueError 도 템플릿 파일·행·원문과 함께 보고된다."""
+    eng = _bad_engine(tmp_path, """\
+        {# 주석 #}
+        SELECT a, dt FROM t
+        WHERE dt IN ('1')
+          AND amount >= {{ amount | sql_num }}
+        ORDER BY a
+        """)
+    with pytest.raises(TemplateError) as ei:
+        eng.render("loc", {"amount": "abc"})
+    msg = ei.value.message
+    assert ei.value.code == "TEMPLATE_RENDER_ERROR"
+    assert "템플릿 'loc' 의 'select.sql.j2' 4행 렌더 실패" in msg
+    assert "ValueError" in msg
+    # 앞뒤 한 줄과 함께 오류 행에 > 표시가 붙는다.
+    assert "  > 4 |   AND amount >= {{ amount | sql_num }}" in msg
+    assert "    3 | WHERE dt IN ('1')" in msg and "    5 | ORDER BY a" in msg
+
+
+def test_render_error_reports_line_for_undefined_variable(tmp_path):
+    eng = _bad_engine(tmp_path, """\
+        SELECT a, dt FROM t
+        WHERE dt IN ('1')
+          AND region = {{ region | sql_str }}
+        """)
+    with pytest.raises(TemplateError) as ei:
+        eng.render("loc", {})
+    msg = ei.value.message
+    assert "'select.sql.j2' 3행 렌더 실패" in msg
+    assert "UndefinedError: 'region' is undefined" in msg
+    assert "  > 3 |   AND region = {{ region | sql_str }}" in msg
+
+
+def test_render_error_reports_line_for_syntax_error(tmp_path):
+    eng = _bad_engine(tmp_path, """\
+        SELECT a, dt FROM t
+        WHERE dt IN ('1')
+        {% if amount %}
+          AND amount >= {{ amount | sql_num }}
+        """)
+    with pytest.raises(TemplateError) as ei:
+        eng.render("loc", {"amount": "1"})
+    msg = ei.value.message
+    assert "'select.sql.j2'" in msg and "TemplateSyntaxError" in msg
+    # 닫히지 않은 if 는 마지막 행으로 보고된다. 행 번호가 있으면 원문 발췌가 따라온다.
+    assert "행 렌더 실패" in msg and " | " in msg
+
+
+def test_query_execute_render_error_also_reports_location(tmp_path):
+    eng = _bad_engine(tmp_path, "SELECT {{ amount | sql_num }}\n")
+    with pytest.raises(TemplateError) as ei:
+        eng.render_query("loc", {"amount": "x"})
+    assert "'select.sql.j2' 1행 렌더 실패" in ei.value.message
+
+
+def test_manifest_parse_error_names_the_file(tmp_path):
+    d = tmp_path / "broken"
+    d.mkdir()
+    (d / "manifest.yml").write_text("id: broken\nfiles: [unclosed\n", encoding="utf-8")
+    eng = TemplateEngine(_Settings(tmp_path))
+    with pytest.raises(TemplateError) as ei:
+        eng.load_manifest("broken")
+    assert ei.value.code == "TEMPLATE_MANIFEST_ERROR"
+    assert "템플릿 'broken' 의 manifest.yml 파싱 실패" in ei.value.message
+    assert str(d / "manifest.yml") in ei.value.message
+
+
 def test_engine_stage_insert_requires_insert(tmp_path):
     # stage_insert 인데 insert 조각이 없으면 오류.
     _make_template(

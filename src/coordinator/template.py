@@ -32,7 +32,7 @@ from typing import Any, Optional
 
 import sqlglot
 import yaml
-from jinja2 import StrictUndefined, TemplateError as _JinjaTemplateError
+from jinja2 import StrictUndefined, TemplateError as _JinjaTemplateError, TemplateSyntaxError
 from jinja2 import meta as jinja2_meta
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -77,6 +77,48 @@ class TemplateError(Exception):
         self.code = code
         self.message = message
         super().__init__(f"[{code}] {message}")
+
+
+def _locate_template_error(exc: BaseException, path: Path) -> Optional[int]:
+    """렌더 예외가 템플릿 파일의 몇 행에서 났는지 찾는다. 모르면 None 이다.
+
+    Jinja2 는 컴파일한 템플릿의 traceback 을 고쳐 써서 템플릿 파일 경로와 **템플릿 원문의 행
+    번호**를 프레임에 남긴다. 그래서 예외 종류와 무관하게(미정의 변수든 필터가 던진 ValueError 든)
+    traceback 을 따라가며 그 파일의 프레임을 찾으면 행을 알 수 있다. 문법 오류
+    (:class:`TemplateSyntaxError`)는 렌더 전에 나므로 예외 자체의 ``lineno`` 를 쓴다. 같은 파일
+    프레임이 여럿이면(매크로 등) 가장 안쪽 것을 택한다.
+    """
+    if isinstance(exc, TemplateSyntaxError) and exc.lineno:
+        return int(exc.lineno)
+    target = str(path)
+    found: Optional[int] = None
+    tb = exc.__traceback__
+    while tb is not None:
+        fname = tb.tb_frame.f_code.co_filename
+        if fname == target or fname.endswith(f"/{path.parent.name}/{path.name}"):
+            found = tb.tb_lineno
+        tb = tb.tb_next
+    return found
+
+
+def _source_excerpt(path: Path, lineno: Optional[int], context: int = 1) -> str:
+    """오류 행 앞뒤 ``context`` 줄을 행 번호와 함께 뽑아 오류 행에 ``>`` 를 표시한다. 못 읽으면 빈 문자열이다."""
+    if lineno is None:
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return ""
+    if not lines:
+        return ""
+    lo = max(1, lineno - context)
+    hi = min(len(lines), lineno + context)
+    width = len(str(hi))
+    out = []
+    for n in range(lo, hi + 1):
+        mark = ">" if n == lineno else " "
+        out.append(f"  {mark} {n:>{width}} | {lines[n - 1]}")
+    return "\n".join(out)
 
 
 @dataclass
@@ -188,9 +230,15 @@ class TemplateEngine:
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception as exc:
-            raise TemplateError("TEMPLATE_MANIFEST_ERROR", f"manifest.yml 파싱 실패: {exc}") from exc
+            # YAML 오류 메시지엔 행·열이 들어 있으므로 어느 파일인지만 앞에 붙이면 바로 찾아갈 수 있다.
+            raise TemplateError(
+                "TEMPLATE_MANIFEST_ERROR", f"템플릿 '{template_id}' 의 manifest.yml 파싱 실패 ({path}): {exc}"
+            ) from exc
         if not isinstance(raw, dict):
-            raise TemplateError("TEMPLATE_MANIFEST_ERROR", "manifest.yml 최상위는 매핑이어야 합니다.")
+            raise TemplateError(
+                "TEMPLATE_MANIFEST_ERROR",
+                f"템플릿 '{template_id}' 의 manifest.yml 최상위는 매핑이어야 합니다 ({path}).",
+            )
 
         files = raw.get("files") or {}
         if not isinstance(files, dict) or not files:
@@ -378,24 +426,34 @@ class TemplateEngine:
             return set()
 
     def _render_file(self, template_id: str, filename: str, ctx: dict) -> str:
-        """조각 파일 하나를 렌더링한다(경로는 template_id 하위로 결합)."""
+        """조각 파일 하나를 렌더링한다(경로는 template_id 하위로 결합).
+
+        실패하면 어느 템플릿의 어느 파일 몇 행에서 났는지와 그 주변 원문을 메시지에 담는다.
+        미정의 변수(StrictUndefined)·문법 오류·필터가 던진 ValueError 등 종류를 가리지 않고
+        한 형식으로 보고한다. 위치는 :func:`_locate_template_error` 가 Jinja2 가 고쳐 쓴
+        traceback 에서 찾는다.
+        """
         rel = f"{template_id}/{filename}"
+        path = self._dir / template_id / filename
         try:
             template = self._env.get_template(rel)
             # 앞뒤 공백/개행 제거: 주석 블록({# #})이나 조건절로 생기는 여백을 없애 로그·감사에
             # 깔끔한 SQL 을 남긴다(파서/스플리터 동작에는 영향 없음).
             return template.render(**ctx).strip()
-        except _JinjaTemplateError as exc:
-            # 미정의 변수(StrictUndefined)·문법 오류·필터 오류 등 모두 여기로 온다.
-            raise TemplateError(
-                "TEMPLATE_RENDER_ERROR", f"'{rel}' 렌더 실패: {exc}"
-            ) from exc
         except TemplateError:
             raise
-        except Exception as exc:  # 커스텀 함수가 던진 ValueError 같은 예외를 받는다
-            raise TemplateError(
-                "TEMPLATE_RENDER_ERROR", f"'{rel}' 렌더 중 오류: {exc}"
-            ) from exc
+        except Exception as exc:
+            # Jinja2 예외(미정의 변수·문법 오류)와 커스텀 필터가 던진 예외(ValueError 등)를 함께 받는다.
+            lineno = _locate_template_error(exc, path)
+            where = f"템플릿 '{template_id}' 의 '{filename}'"
+            if lineno is not None:
+                where += f" {lineno}행"
+            cause = f"{type(exc).__name__}: {exc}"
+            excerpt = _source_excerpt(path, lineno)
+            message = f"{where} 렌더 실패 — {cause}"
+            if excerpt:
+                message += "\n" + excerpt
+            raise TemplateError("TEMPLATE_RENDER_ERROR", message) from exc
 
     def _assert_single_statement(self, role: str, sql: Optional[str]) -> None:
         """SQL 조각이 단일 문인지 검사해 다중 문 인젝션을 막는다. 파싱에 실패하면 관대하게 통과시킨다."""

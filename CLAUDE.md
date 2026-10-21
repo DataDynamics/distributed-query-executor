@@ -130,7 +130,10 @@ Jinja2 `SandboxedEnvironment` 로 렌더해 SELECT·STAGING DDL·INSERT 를 만�
 `@template_filter`/`@template_global` 레지스트리로 등록하며(내장으로 `sql_str`·`sql_in`·
 `sql_ident`·`sql_num`·`date_range` 를 제공한다) 설정 `template.func_modules` 로 확장한다.
 `template_id` 를 주지 않으면 예전 raw-SQL 방식 그대로 동작한다. 예제는
-`templates/sales_migration/` 이고 자세한 설계는 DESIGN 에 있다.
+`templates/sales_migration/` 이고 자세한 설계는 DESIGN 에 있다. 렌더 실패(`TEMPLATE_RENDER_ERROR`)
+메시지는 `_render_file` 이 템플릿·파일·행과 원문 발췌를 담아 만든다. 행 번호는
+`_locate_template_error` 가 Jinja2 가 고쳐 쓴 traceback 에서 템플릿 파일 프레임을 찾아 얻으므로
+미정의 변수든 필터가 던진 ValueError 든 종류와 무관하게 위치가 잡힌다(문법 오류는 예외의 `lineno`).
 
 **`stage.py`** 는 `local_stage`(file:// 세그먼트 로컬 스테이징)의 Phase 2 SQL 을 조립하는 순수
 함수 모음이다. `file://` 외부테이블 DDL, staging 적재, 멱등 DELETE, 정리 SQL 을 만들고

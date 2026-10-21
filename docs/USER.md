@@ -569,7 +569,20 @@ JSON
 
 템플릿 쪽 오류도 비슷하게 읽으면 된다. `TEMPLATE_NOT_FOUND` 는 그런 템플릿이 없다는 뜻이라
 `GET /templates` 로 이름을 확인하고, `TEMPLATE_PARAM_ERROR` 는 템플릿이 요구하는 파라미터가 빠진
-것이며, `TEMPLATE_RENDER_ERROR` 는 렌더 도중 실패한 것이다.
+것이며, `TEMPLATE_RENDER_ERROR` 는 렌더 도중 실패한 것이다. 렌더 실패의 `message` 에는 어느 템플릿의
+어느 파일 몇 행에서 났는지와 원인 예외, 그리고 그 행 앞뒤의 원문이 `>` 표시와 함께 담긴다. 예를 들어
+파라미터에 숫자가 아닌 값을 넣어 `sql_num` 이 거부하면 다음처럼 돌아온다.
+
+```
+템플릿 'order_search' 의 'select.sql.j2' 9행 렌더 실패 — ValueError: could not convert string to float: 'abc'
+    8 | WHERE region IN ( 'KR' )
+  > 9 |   AND amount >= {{ min_amount | sql_num }}
+   10 | ORDER BY order_dt, order_id
+```
+
+미정의 변수(`UndefinedError`)와 Jinja 문법 오류(`TemplateSyntaxError`)도 같은 형식이다.
+`TEMPLATE_MANIFEST_ERROR` 는 manifest.yml 이 잘못된 것으로, 메시지에 파일 경로와 YAML 이 알려 준
+행·열이 들어 있다.
 
 날짜 fan-out 에는 전용 코드가 몇 개 더 있다. `FANOUT_REQUIRES_TEMPLATE` 는 `task_params` 를 줬는데
 `template_id` 가 없다는 뜻이고, `FANOUT_REQUIRES_STAGE_INSERT` 는 지원하지 않는 `exec_mode` 에서

@@ -38,7 +38,7 @@ tr:hover td { background:#f6f8fa; }
 .bar { background:#eaeef2; border-radius:6px; height:8px; width:120px; display:inline-block;
        vertical-align:middle; overflow:hidden; }
 .bar > i { display:block; height:100%; background:var(--acc); }
-.mut{color:var(--mut);} .err{color:var(--bad);} code{color:var(--acc);}
+.mut{color:var(--mut);} .err{color:var(--bad);white-space:pre-wrap;} code{color:var(--acc);}
 .desc { text-align:left; color:var(--mut); white-space:normal; max-width:560px; }
 .sec { color:var(--warn); font-weight:600; }
 .pager { display:flex; gap:10px; align-items:center; margin-top:10px; }
