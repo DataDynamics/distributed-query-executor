@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS public.task_history (
     started_at   TIMESTAMP,   -- task 가 READING 을 시작한 시각
     finished_at  TIMESTAMP,   -- task 가 종료(DONE/FAILED/CANCELLED)된 시각
     sub_query    TEXT,          -- 이 task 가 실행한 SELECT sub-query 전문
-    exec_mode    TEXT,          -- 적재 방식: copy | statement | stage_insert
+    exec_mode    TEXT,          -- 적재 방식: copy | statement | stage_insert | local_stage | s3_stage | query_run(query-execute 결과 반환, 적재 없음)
     staging_ddl  TEXT,          -- stage_insert 의 staging(TEMP) 생성 DDL
     insert_sql   TEXT,          -- stage_insert 의 INSERT 문(staging→target)
     rows_read     BIGINT,       -- Impala 에서 읽어들인 행수(=조회 건수, STREAM_COPY 종료 시 확정)

@@ -237,6 +237,9 @@ function composeSql(q){
   if(q.exec_mode === 'statement'){
     // statement 모드: sub_query 자체가 INSERT ... SELECT (대상 DB에서 그대로 실행)
     if(q.sub_query) parts.push(`-- SELECT + INSERT (대상 DB에서 실행)\\n${q.sub_query}`);
+  } else if(q.exec_mode === 'query_run'){
+    // query_run: query-execute 가 위임한 SELECT. 적재 없이 상위 N행을 돌려준다.
+    if(q.sub_query) parts.push(`-- SELECT (결과 반환, 적재 없음)\\n${q.sub_query}`);
   } else {
     // copy / stage_insert: SELECT 는 sub_query
     if(q.sub_query) parts.push(`-- SELECT (Impala 읽기)\\n${q.sub_query}`);

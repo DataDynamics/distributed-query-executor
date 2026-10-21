@@ -598,6 +598,12 @@ coordinator 는 요청의 `params[]` 를 `{name: value}` 로 접고(중복 name 
 impyla 로 직접 실행하고(`impala.host` 미설정이면 400, 커스텀 함수로 폴백하지 않는다), 그 외 이름이면
 커스텀 함수(`query.func.module`)의 `run(sql, config, limit)` 을 호출해 함수가 실제 SELECT 를 실행한다.
 
+executor 는 이 실행을 이관 task 와 같은 실행 단위로 다룬다. `/query-run` 한 건이
+`exec_mode: query_run` 인 task 로 등록돼 `executor.max_concurrent_tasks` 슬롯을 함께 쓰고, 처리중
+집계(`/tasks`·`/metrics`·self-report)와 대시보드 처리중 목록에 나타나며, 상태 전이마다 task_history 에
+이력이 남는다(`sub_query` 가 실행 SQL, `rows_read` 가 반환 행수, 적재가 없어 `rows_written` 은 0).
+슬롯이 모두 차 있으면 QUEUED 로 기다리므로 query-execute 응답이 그만큼 늦어질 수 있다.
+
 ### 요청 JSON
 
 ```jsonc

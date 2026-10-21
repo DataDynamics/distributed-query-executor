@@ -29,6 +29,7 @@ from core.timeutil import now_iso
 # 백엔드는 name 만 넘기고 라벨 매핑은 여기 한 곳에서 관리해 표기를 일관되게 유지한다.
 PHASE_LABELS: dict[str, str] = {
     "QUEUE_WAIT": "대기(슬롯)",       # 접수부터 실행 슬롯을 확보할 때까지 기다리는 구간이다
+    "SOURCE_QUERY": "소스 조회(결과 반환)",  # query_run 이 소스에 SELECT 를 실행해 상위 N행을 받는 구간이다
     "IMPALA_SUBMIT": "Impala 조회 제출",  # execute() 를 제출하고 커서의 description 이 준비될 때까지다
     "STAGING_DDL": "staging 생성",     # CREATE TEMP TABLE (stage_insert)
     "PREFLIGHT": "컬럼 검증",          # copy 모드에서 COPY 전에 대상 컬럼을 사전검증한다

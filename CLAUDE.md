@@ -222,7 +222,10 @@ INSERT 치환·DROP 이 같은 이름을 공유하며, 비우면 예전처럼 se
 공유한다.
 
 **`app.py`** 는 task 상태머신(QUEUED → READING → WRITING → DONE/FAILED/CANCELLED)과
-`executor.max_concurrent_tasks` 세마포어를 담당한다.
+`executor.max_concurrent_tasks` 세마포어를 담당한다. `/query-run`(query-execute 위임) 한 건도
+`exec_mode="query_run"` 인 Task 로 `tasks` 에 등록해 같은 세마포어·처리중 집계·self-report·
+task_history 이력을 공유한다(`_new_query_task`·`_query_run_execute`, 단계는 QUEUE_WAIT →
+SOURCE_QUERY, `rows_read` 가 반환 행수). 드레이닝 중 503 이며 드레이닝은 진행 중 query-run 도 기다린다.
 
 ### 로깅
 

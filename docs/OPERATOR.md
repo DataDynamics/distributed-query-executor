@@ -248,7 +248,10 @@ executor 를 아무리 많이 띄워도 Greenplum 의 동시 COPY 세션이나 I
 `executor.max_concurrent_tasks` 는 노드 한 대 기준으로 대략 코어 수와, 안전한 GP 동시 COPY 를
 executor 수로 나눈 값과, 메모리를 task 하나가 쓰는 메모리로 나눈 값 중 가장 작은 것으로 잡는다.
 task 하나는 소스 커넥션 하나와 Greenplum 커넥션 하나, 그리고 `copy.batch_size` 만큼의 버퍼를 쓴다.
-메모리가 빡빡하면 이 값을 가장 먼저 줄인다.
+메모리가 빡빡하면 이 값을 가장 먼저 줄인다. `POST /query-execute`·`/query-count` 가 executor 에
+위임하는 결과 반환 실행(`/query-run`)도 이 슬롯을 함께 쓴다. executor 의 처리중 목록과 실행 이력에
+`query_run` 실행 방식으로 나타나고(적재가 없어 적재 행수는 0, 읽은 행수가 반환 행수다), 슬롯이 다 차면
+QUEUED 로 기다리므로 미리보기 응답이 늦어지면 이관 task 와 슬롯을 다투고 있는지 먼저 본다.
 
 `greenplum.pool_max` 는 executor 가 재사용하는 GP 커넥션 풀의 크기로, Greenplum 의
 `max_connections` 를 직접 보호하는 파라미터다. 기본값 0이면 풀 크기가 `executor.max_concurrent_tasks`

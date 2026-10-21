@@ -62,7 +62,8 @@ class Task:
         username: 요청 사용자(이력 기록용, 선택).
         exec_mode: 실행 방식이다. "copy" 는 소스에서 Greenplum 으로 COPY 하고, "statement" 는
             대상 DB 에서 SQL 을 직접 실행하며, "stage_insert" 는 staging 에 COPY 한 뒤
-            staging 에서 target 으로 INSERT 한다.
+            staging 에서 target 으로 INSERT 한다. "query_run" 은 ``POST /query-run``(query-execute
+            결과 반환 실행) 한 건으로, 적재 없이 상위 N행을 읽어 돌려주며 rows_read 만 기록된다.
         staging_table: stage_insert 모드의 임시 staging 테이블명.
         staging_ddl: stage_insert 모드의 CREATE TEMP TABLE DDL.
         insert_sql: stage_insert 모드에서 staging 을 target 으로 넣는 INSERT 문이다.
@@ -87,7 +88,7 @@ class Task:
     partition_column: str
     partition_values: list[str]
     username: Optional[str] = None
-    exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert" | "local_stage" | "s3_stage"
+    exec_mode: str = "copy"  # "copy" | "statement" | "stage_insert" | "local_stage" | "s3_stage" | "query_run"
     staging_table: Optional[str] = None
     staging_ddl: Optional[str] = None
     insert_sql: Optional[str] = None
@@ -220,13 +221,16 @@ class DatasourceQueryRequest(BaseModel):
 class QueryRunRequest(BaseModel):
     """coordinator 가 executor 에 query-execute 를 위임할 때 쓰는 ``POST /query-run`` 요청 본문이다.
 
-    coordinator 가 템플릿을 렌더·검증한 SELECT 를 그대로 넘긴다. executor 는 설정
-    (``query.func.module`` + ``query.func.config.*``)으로 지정한 커스텀 함수에 이 SQL 을
-    실행 위임한다 — executor 는 Trino 등 백엔드를 직접 알지 않는다.
+    coordinator 가 템플릿을 렌더·검증한 SELECT 를 그대로 넘긴다. executor 는 ``datasource`` 에 따라
+    impyla 로 직접 실행하거나 설정(``query.func.module`` + ``query.func.config.*``)의 커스텀 함수에
+    위임하며, 어느 쪽이든 ``exec_mode="query_run"`` 인 Task 로 등록해 이관 task 와 같은 동시 처리
+    슬롯·집계·이력을 공유한다.
     """
 
     sql: str
     limit: int = 100
+    # 요청 사용자(이력 기록용, 선택). coordinator 가 알고 있으면 실어 보낸다.
+    username: Optional[str] = None
     # 실행 엔진 이름이다. 이관의 소스 읽기와 같은 기준(core.config.is_custom_source)으로
     # 분기해, impala·source·미지정이면 executor 의 impala.* 설정으로 impyla 가 직접 실행하고
     # 그 외 이름(trino 등)만 query.func.module 커스텀 함수에 위임한다. 실행 SQL 로그의 엔진

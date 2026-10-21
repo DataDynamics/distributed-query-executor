@@ -18,6 +18,7 @@ coordinator 가 분할한 sub-query(task)를 ``POST /tasks`` 로 접수해 백�
 from __future__ import annotations
 
 import asyncio
+import uuid
 import contextvars
 import logging
 import re
@@ -33,7 +34,7 @@ from fastapi.responses import HTMLResponse
 from core.config import is_custom_source, settings
 from core.dbprobe import QueryResult, clamp_limit, run_impala_select, run_postgres_select
 from core.http_logging import install_http_logging
-from core.logging import job_log_context
+from core.logging import job_log_context, request_id_var
 from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
 from core.sqllog import log_sql
@@ -683,21 +684,119 @@ def create_app(
     @app.post(
         "/query-run",
         tags=["Query"],
-        summary="query-execute 위임: 설정된 커스텀 함수로 SELECT 실행",
+        summary="query-execute 위임: datasource 에 맞는 경로로 SELECT 실행(동시 처리 슬롯 공유)",
     )
     async def query_run(req: QueryRunRequest):
-        """coordinator 가 렌더·검증한 SELECT 를 ``datasource`` 에 맞는 경로로 실행한다.
+        """coordinator 가 렌더·검증한 SELECT 를 ``datasource`` 에 맞는 경로로 실행하고 결과를 돌려준다.
 
-        분기는 이관(/jobs)의 소스 읽기와 같은 기준인 :func:`core.config.is_custom_source` 하나다.
+        이 호출도 이관 task 와 **같은 실행 단위**로 다룬다. ``exec_mode="query_run"`` 인 Task 를
+        인메모리 ``tasks`` 에 등록하고 같은 세마포어(``executor.max_concurrent_tasks``)를 거치므로
+        처리중 목록·동시 처리 집계(/tasks·/metrics·/info·self-report)에 포함되고, 상태 전이마다
+        task_history 에 이력이 남는다. 슬롯이 다 차 있으면 QUEUED 로 기다리며(응답 연결은 열어
+        둔다), 드레이닝 중이면 503 으로 거절한다. 결과 행은 적재하지 않으므로 ``rows_read`` 에
+        반환 행수만 기록한다.
+
+        실행 경로 분기는 이관의 소스 읽기와 같은 기준인 :func:`core.config.is_custom_source` 하나다.
         ``impala``·``source``·미지정이면 executor 가 task 에 쓰는 것과 같은 **impyla 접속**
         (``impala.*`` 설정, :func:`build_impala_dsn`)으로 직접 실행하고, 그 외 이름(``trino`` 등)만
         ``query.func.module`` 로 지정한 커스텀 함수에 SQL·설정(``query.func.config.*``)·limit 을
-        넘겨 위임한다. 두 경로 모두 반환(QueryResult 또는 동일 키 dict)을 그대로 응답하며,
-        블로킹 드라이버 호출이라 to_thread 로 감싼다. impyla 경로는 impala.host 미설정 시 400,
-        접속·SQL 오류 시 502 이고, 커스텀 경로는 함수 미설정 시 400, 로드/실행 실패 시 502 다.
+        넘겨 위임한다. impyla 경로는 impala.host 미설정 시 400, 접속·SQL 오류 시 502 이고, 커스텀
+        경로는 함수 미설정 시 400, 로드/실행 실패 시 502 다. 실패도 FAILED 이력으로 남는다.
         """
-        if not is_custom_source(req.datasource):
-            return await _query_run_impala(req)
+        if drain["on"]:
+            logger.info("드레이닝 중 query-run 거부 datasource=%s", req.datasource)
+            raise HTTPException(
+                status_code=503,
+                detail="executor 종료 중(draining) — 신규 query-run 을 받지 않습니다.",
+            )
+        task = _new_query_task(req)
+        task.on_stage("QUEUE_WAIT", "start")
+        tasks[task.task_id] = task
+        # 요청 처리 코루틴 자체를 inflight 에 넣어 드레이닝이 이 실행의 완료도 기다리게 한다.
+        me = asyncio.current_task()
+        if me is not None:
+            inflight.add(me)
+        try:
+            with job_log_context(task.job_id, task.task_id):
+                await history.record(task)  # QUEUED 이력을 남긴다
+                if sem is not None:
+                    async with sem:
+                        return await _query_run_execute(req, task)
+                return await _query_run_execute(req, task)
+        finally:
+            if me is not None:
+                inflight.discard(me)
+
+    def _new_query_task(req: QueryRunRequest) -> Task:
+        """``/query-run`` 한 건을 나타내는 Task 를 만든다.
+
+        job_id 는 coordinator 가 실어 보낸 요청 식별자(``X-Request-ID`` → ``req-<id>``)를 써서
+        coordinator 로그·이력과 같은 식별자로 묶이게 하고, 없으면 task_id 와 같은 값을 쓴다.
+        적재가 없으므로 target_table 등 이관 전용 필드는 비워 둔다.
+        """
+        task_id = f"qr-{uuid.uuid4().hex[:12]}"
+        rid = request_id_var.get()
+        job_id = f"req-{rid}" if rid and rid != "-" else task_id
+        return Task(
+            task_id=task_id,
+            job_id=job_id,
+            sub_query=req.sql,
+            target_table="",
+            write_mode="append",
+            partition_column="",
+            partition_values=[],
+            username=req.username,
+            exec_mode="query_run",
+            datasource=req.datasource,
+        )
+
+    async def _query_run_execute(req: QueryRunRequest, task: Task) -> dict:
+        """슬롯을 얻은 뒤의 ``/query-run`` 본체다. 상태 전이와 이력 기록을 맡고 실제 실행은 경로별 함수에 맡긴다.
+
+        READING 으로 올리고 SOURCE_QUERY 단계를 연 뒤 impyla 또는 커스텀 함수로 실행한다. 성공하면
+        반환 행수를 ``rows_read`` 와 단계의 rows 에 적고 DONE, 실패(HTTPException 포함)하면
+        FAILED 와 ``error`` 를 남긴 채 같은 예외를 다시 던져 coordinator 에 상태 코드가 그대로 간다.
+        슬롯을 기다리는 동안 취소되었으면 실행하지 않고 CANCELLED 로 마감한다.
+        """
+        if task.cancel_requested:
+            task.status = TaskStatus.CANCELLED
+            task.finished_at = _now_iso()
+            close_open_phases(task.phases)
+            await history.record(task)
+            raise HTTPException(status_code=409, detail="query-run 이 실행 전에 취소되었습니다.")
+        task.on_stage("QUEUE_WAIT", "end")
+        task.status = TaskStatus.READING
+        task.started_at = _now_iso()
+        await history.record(task)  # READING 이력을 남긴다
+        task.on_stage("SOURCE_QUERY", "start")
+        try:
+            if not is_custom_source(req.datasource):
+                body = await _query_run_impala(req)
+            else:
+                body = await _query_run_custom(req)
+        except HTTPException as e:
+            await _finish_query_task(task, TaskStatus.FAILED, error=str(e.detail))
+            raise
+        except Exception as e:  # 예상 밖 오류도 이력에 남기고 502 로 돌려준다
+            logger.warning("query-run 실패: %s", e, exc_info=True)
+            await _finish_query_task(task, TaskStatus.FAILED, error=str(e))
+            raise HTTPException(status_code=502, detail=f"query-run 실패: {e}")
+        rows = body.get("row_count")
+        task.rows_read = int(rows or 0)
+        await _finish_query_task(task, TaskStatus.DONE, rows=rows)
+        return body
+
+    async def _finish_query_task(task: Task, status: TaskStatus, *, rows=None, error=None) -> None:
+        """query-run task 를 종료 상태로 마감하고(단계 닫기·종료 시각·오류) 이력을 남긴다."""
+        task.on_stage("SOURCE_QUERY", "end", {"rows": rows} if rows is not None else None)
+        close_open_phases(task.phases)
+        task.status = status
+        task.error = error
+        task.finished_at = _now_iso()
+        await history.record(task)
+
+    async def _query_run_custom(req: QueryRunRequest) -> dict:
+        """``/query-run`` 의 커스텀 함수 경로다. ``query.func.module`` 함수에 SQL·설정·limit 을 넘겨 실행한다."""
         if not settings.query_func_module:
             raise HTTPException(
                 status_code=400,
