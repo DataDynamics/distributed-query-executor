@@ -173,6 +173,7 @@ class JobAdmission:
         self._paused_by: Optional[str] = None
 
     def _gate_event(self) -> asyncio.Event:
+        """관문 Event 를 돌려준다. 처음 부를 때 열린 상태로 만든다."""
         if self._gate is None:
             self._gate = asyncio.Event()
             self._gate.set()
@@ -180,6 +181,7 @@ class JobAdmission:
 
     @property
     def paused(self) -> bool:
+        """관문이 닫혀 있는지(drain 중인지)다. 대시보드·지표가 읽으며, 한 번도 쓰지 않았으면 열린 것으로 본다."""
         return self._gate is not None and not self._gate.is_set()
 
     def pause(self, reason: str = "") -> None:
@@ -188,6 +190,7 @@ class JobAdmission:
         self._paused_by = reason or "paused"
 
     def resume(self) -> None:
+        """관문을 다시 연다. 기다리던 job 들이 슬롯 순서대로 실행에 들어간다. 이미 열려 있어도 해가 없다."""
         self._gate_event().set()
         self._paused_by = None
 

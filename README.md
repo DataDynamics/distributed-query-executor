@@ -163,6 +163,10 @@ bin/load-test run -c http://coord:8088 --body job.json --vus 20 --ramp-up 60s --
 - `query.func.module` 은 `/query-execute` 의 소스 실행을 위임할 함수로 미리보기용이라 `limit` 이
   적용됩니다. 이관에서 소스를 읽는 함수는 `query.func.fetch_module` 이며 전량을 반환해야 합니다.
   접속 설정은 두 함수가 `query.func.config.*` 를 공유합니다.
+- `sync.*` 는 coordinator 의 지정 파일(예: `customs/`)을 executor 로 자동 배포하는 설정입니다. 기본은 꺼져
+  있고 대상도 없으므로, 쓰려면 `sync.enabled=true` 와 `sync.paths`·`sync.patterns` 를 coordinator 와 모든
+  executor 에 똑같이 적습니다(아래 "파일 자동 동기화").
+- `history.retention_days`(기본 90)·`monitor.retention_days`(기본 30)가 지나면 이력과 메트릭 행을 지웁니다.
 
 백엔드 선택은 `greenplum.dsn` 하나가 정합니다. 값이 있으면 실제 `ImpalaToGreenplumBackend` 가
 동작하고, 비어 있으면 실입출력 없이 API 만 확인할 수 있는 `MockBackend` 로 자동 대체되며 이때는
@@ -342,8 +346,8 @@ curl -s localhost:8088/jobs/$JOB/status
 ## 모니터링
 
 브라우저로 상태를 보려면 coordinator 의 `/` 에 접속합니다. 빌드 도구 없이 FastAPI 가 서빙하는 단일
-HTML 화면이 3초마다 JSON API 를 폴링해 처리중 Query / 실행 이력 / Executor 상황 / 환경설정(비밀값
-마스킹) / 정보 탭을 보여 주고, task 별 phase 타임라인(QUEUE_WAIT → STREAM_COPY → INSERT → COMMIT 등)
+HTML 화면이 3초마다 JSON API 를 폴링해 처리중 Query / 실행 이력 / Executor 상황 / 템플릿 / 쿼리 실행 /
+데이터소스 / 환경설정(비밀값 마스킹) / 정보 / API·링크 탭을 보여 주고, task 별 phase 타임라인(QUEUE_WAIT → STREAM_COPY → INSERT → COMMIT 등)
 으로 단계별 소요·처리량과 병목(읽기/쓰기 대기)을 진단할 수 있습니다. `dashboard.enabled=false` 로
 `/`·`/config`·`/info` 를 끌 수 있습니다.
 
@@ -359,6 +363,43 @@ JSON API(`/cluster`·`/jobs`·`/history`·`/info`)를 폴링하며, 개별 execu
 curl -s localhost:8088/cluster                        # 통합 상태(즉시 폴링)
 QUERY_EXECUTOR_CONFIG_DIR=config bin/dashboard-tui.sh  # 터미널 모니터
 ```
+
+대시보드의 **API·링크** 탭에는 Swagger UI·ReDoc·OpenAPI 스키마와 Prometheus 지표 주소, 이 서버의 전체
+엔드포인트가 모여 있고, coordinator 화면에는 executor 마다 대시보드·문서·지표 주소도 나옵니다.
+
+튜닝용 지표는 서비스 로그와 따로 `<로그이름>-perf.log` 에 30초마다 한 줄씩 남습니다(`log.perf.*`). 실행
+슬롯·큐·스레드 풀 사용량과 단계별 소요가 담기고, job·task 가 끝날 때마다 병목 판정이 붙은 요약 줄이
+더해집니다. `bin/perf-report` 로 시간대별 요약과 조정 방향을 볼 수 있습니다. 같은 지표는 Prometheus 텍스트
+형식으로 `GET /metrics/prometheus` 에서도 나오고(`prometheus.enabled`, 기본 on), coordinator 의
+`GET /prometheus/targets` 를 `http_sd_configs` 에 지정하면 executor 목록을 자동으로 따라갑니다.
+
+```yaml
+scrape_configs:
+  - job_name: dqe-coordinator
+    metrics_path: /metrics/prometheus
+    static_configs: [{targets: ["coord:8088"]}]
+  - job_name: dqe-executor
+    metrics_path: /metrics/prometheus
+    http_sd_configs: [{url: "http://coord:8088/prometheus/targets"}]
+```
+
+## 파일 자동 동기화
+
+`customs/` 의 커스텀 함수처럼 자주 고치는 파일은 coordinator 에서 고치면 모든 executor 에 저절로 퍼지게 할 수
+있습니다. coordinator 가 `sync.paths` 아래 `sync.patterns` 에 맞는 파일을 감시하다가 내용이 바뀌면, 모든
+executor 에 새 버전을 미리 풀어 검증하게 한 뒤(하나라도 실패하면 모두 취소) 실행 중인 job 이 끝나기를 기다렸다가
+한꺼번에 바꿉니다. executor 쪽 전환은 심링크 하나를 바꾸는 것이라 원자적이고 재기동도 필요 없습니다. 내려가
+있던 executor 는 버전이 맞을 때까지 디스패치에서 빠졌다가 돌아오면 따라잡습니다.
+
+```properties
+sync.enabled=true
+sync.paths=customs
+sync.patterns=*.py,*.yml,*.yaml,*.json,*.sql
+```
+
+상태는 coordinator 의 `GET /sync/status` 로 보고, `POST /sync/now` 로 즉시 한 번 맞출 수 있습니다. coordinator 가
+여러 대면 원본 한 대만 `sync.push=true` 로 둡니다. 동작 원리는 [`docs/DESIGN.md`](docs/DESIGN.md) §20, 운영
+방법은 [`docs/OPERATOR.md`](docs/OPERATOR.md) 를 참고하세요.
 
 ## 로컬 모드
 

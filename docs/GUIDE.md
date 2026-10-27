@@ -1008,6 +1008,20 @@ def run(sql, *, config, limit):
   `loop="asyncio"`(순수 파이썬 루프)로 기동한다(`executor/__main__.py`). 데이터 경로는 스레드에서
   돌아 성능 영향은 무시할 수준이다(coordinator 는 커스텀 함수를 실행하지 않아 해당 없음).
 
+함수를 executor 에 올리기 전에 운영자 셸 `bin/trino-shell` 로 같은 함수를 직접 불러 볼 수 있다. 셸은 드라이버에
+붙지 않고 `query.func.module` 함수를 `run(sql, config=..., limit=...)` 로 부르므로, 셸에서 나온 결과가 곧
+query-execute 가 돌려줄 결과다. `--module mypkg.runner:run` 으로 다른 함수를 시험하고 `--set 키=값` 으로
+`query.func.config.*` 값을 덮어쓸 수 있다.
+
+```bash
+bin/trino-shell --catalog hive --schema sales          # 대화형(USE·\dt·\d 테이블)
+bin/trino-shell -q "SELECT * FROM orders LIMIT 5"       # 배치, -o out.csv 로 파일 저장
+```
+
+함수 파일을 고칠 때마다 executor 마다 복사하기 번거롭다면 coordinator 의 파일 자동 동기화(`sync.paths=customs`)를
+켠다. coordinator 에서 고친 함수가 모든 executor 에 함께 퍼지고, 실행 중인 작업이 끝난 뒤 한꺼번에 바뀌므로
+executor 를 재기동하지 않아도 된다. 설정과 동작은 OPERATOR.md 와 DESIGN §20 에 있다.
+
 ### 오류 응답
 
 렌더/검증 실패는 `422 + error_code`(이관 `/jobs` 와 동일 규약)로 돌려준다.
@@ -1020,5 +1034,6 @@ def run(sql, *, config, limit):
 | `min_amount` 에 비숫자 전달 | 422 | `TEMPLATE_RENDER_ERROR` |
 | 템플릿 엔진 비활성(`template.enabled=false`) | 404 | — |
 | impala/trino 인데 executor 미설정 | 400 | `executor 가 설정되지 않았습니다` |
+| 파일 동기화 중이라 버전이 맞는 executor 가 없음 | 503 | `동기화 버전(...)으로 전환된 executor 가 없어 ...` |
 | 데이터소스 접속/SQL 오류 | 502 | 원인 메시지 |
 | (query-count) 건수 쿼리가 행을 돌려주지 않거나 정수가 아님 | 502 | `건수 쿼리 결과를 해석할 수 없습니다` |

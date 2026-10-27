@@ -85,6 +85,13 @@ class FunctionCursor:
         self._pos = 0
 
     def execute(self, sql: str, params: Any = None) -> None:
+        """SQL 하나를 실행 함수에 넘기고 결과를 커서에 담는다.
+
+        ``USE``·``SET SESSION`` 같은 세션 명령은 실행 함수까지 보내지 않고 연결이 먼저 처리한다. 실행 함수는
+        호출마다 새로 접속하므로 서버 쪽 세션 상태가 다음 쿼리로 이어지지 않기 때문이다. 설정 dict 는 복사해
+        넘겨 실행 함수가 값을 바꿔도 셸의 현재 카탈로그·스키마가 흔들리지 않게 한다. 컬럼이 없는 결과(DDL 등)는
+        ``description=None`` 으로 두어 공용 셸이 표를 그리지 않게 한다.
+        """
         self.description, self._rows, self._pos, self.truncated = None, [], 0, False
         self.rowcount = -1
         if params:

@@ -445,6 +445,10 @@ VU 감소와 drain 중에는 진행 중인 작업을 기다린다. drain 시간�
   `GET /prometheus/targets`(http_sd) 를 등록한다.
 - **멀티 coordinator** — `store.backend=postgres` 와 공유 `history.db_dsn`,
   `executor.self_report=true` 를 함께 켠다.
+- **파일 자동 동기화** — `sync.{enabled,push,paths,patterns,exclude,drain_timeout_s,...}`(기본 꺼짐, 대상 없음).
+  coordinator 와 모든 executor 에 같은 paths·patterns 를 두고, 멀티 coordinator 면 원본 한 대만 `push=true` 다.
+- **보관 기간** — `history.retention_days`(90)·`monitor.retention_days`(30)·`store.retention_days`(0=끔)와
+  `history.retention_interval_s`.
 - **백엔드 선택** — `build_backend` 는 **`greenplum.dsn` 하나만** 본다. 비어 있으면 경고를 남기고
   `MockBackend` 로 떨어지고, 있으면 실제 백엔드를 쓴다. `impala.host` 가 비어도 실제 백엔드로 뜨되
   소스를 읽을 수 없어 `statement` 모드만 동작한다(기동 로그에 `(미설정 → statement 모드만)`). query-execute 의 소스 실행은 이와 별개로 `/query-run` 커스텀 함수에

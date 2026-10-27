@@ -174,6 +174,7 @@ class _Families:
         self._items: Dict[str, dict] = {}
 
     def add(self, name: str, kind: str, help_text: str, labels: Dict[str, str], value) -> None:
+        """표본 하나를 이름의 묶음에 더한다. 설명과 종류는 그 이름으로 처음 들어온 것을 쓴다."""
         fam = self._items.get(name)
         if fam is None:
             fam = self._items[name] = {"kind": kind, "help": help_text, "samples": []}
@@ -183,6 +184,11 @@ class _Families:
         fam["samples"].append((labels, value))
 
     def render(self) -> str:
+        """Prometheus 텍스트 형식으로 직렬화한다.
+
+        이름과 레이블을 정렬해 내보내므로 같은 상태면 늘 같은 본문이 나와 테스트와 비교가 쉽다. 형식상
+        ``# HELP``·``# TYPE`` 은 이름마다 한 번만 와야 하므로 묶음 단위로 쓴다.
+        """
         lines: List[str] = []
         for name in sorted(self._items):
             fam = self._items[name]
@@ -197,6 +203,11 @@ class _Families:
 
 
 def _histogram_lines(name: str, labels: Dict[str, str], hist: dict) -> Iterable[str]:
+    """누적 히스토그램 하나를 ``_bucket``·``_sum``·``_count`` 줄로 펼친다.
+
+    레지스트리의 버킷은 이미 누적 개수이고 경계는 원래 단위(ms 등)라, ``scale`` 을 곱해 초 단위 경계(``le``)와
+    합으로 바꾼다. 마지막 ``+Inf`` 버킷은 전체 개수와 같아야 하므로 ``count`` 를 그대로 쓴다.
+    """
     scale = hist["scale"]
     for bound, count in hist["buckets"]:
         le = format_number(round(bound * scale, 6))

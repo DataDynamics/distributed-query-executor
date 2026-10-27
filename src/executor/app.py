@@ -602,6 +602,11 @@ def create_app(
     # ───────── 파일 동기화 수신(coordinator 가 2단계로 호출한다) ─────────
 
     async def _sync_call(fn, *args):
+        """동기화 저장소 메서드를 스레드에서 부르고 예외를 coordinator 가 읽는 ``{code, message}`` 오류로 바꾼다.
+
+        파일 풀기·import 검증은 블로킹이라 루프에서 돌리지 않는다. 동기화가 꺼져 있으면 409(SYNC_DISABLED), 번들이
+        잘못됐으면 422(BUNDLE_INVALID), 그 밖의 실패는 500 이다.
+        """
         try:
             return await asyncio.to_thread(fn, *args)
         except sync_mod.SyncDisabled as exc:

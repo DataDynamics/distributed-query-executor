@@ -90,6 +90,12 @@ class BundleStore:
     """executor 쪽 동기화 상태와 release 디렉터리를 관리한다. 메서드는 모두 블로킹이라 스레드에서 부른다."""
 
     def __init__(self, settings, base: Optional[str] = None):
+        """설정을 읽고 ``<앱 홈>/.sync`` 아래 경로를 정한다. 디렉터리는 처음 prepare 할 때 만든다.
+
+        ``base`` 는 coordinator 와 같은 규칙(``sync.base_dir`` → 설치 위치)으로 정하고 realpath 로 고정한다.
+        공유 모드 판정이 coordinator 가 보낸 경로와 문자열로 비교하기 때문이다. 직전 commit 시각은
+        ``state.json`` 에서 되살려 재기동 뒤에도 상태 화면에 남게 한다.
+        """
         self.enabled = bool(getattr(settings, "sync_enabled", False))
         self.rules = SyncRules.from_settings(settings)
         self.base = os.path.realpath(base or getattr(settings, "sync_base_dir", "") or app_home())
@@ -134,6 +140,11 @@ class BundleStore:
         return self._version
 
     def status(self) -> dict:
+        """``GET /sync/status`` 응답이다. coordinator 는 이 값으로 버전 일치와 공유 모드를 판정한다.
+
+        ``version`` 은 저장해 둔 값이 아니라 지금 트리를 훑어 계산한다. 운영자가 동기화 경로의 파일을 손으로
+        고쳤다면 버전이 달라져 coordinator 가 이 executor 를 후보에서 빼고 다시 맞추게 하려는 것이다.
+        """
         return {
             "enabled": self.enabled,
             "configured": self.rules.configured,
@@ -162,6 +173,7 @@ class BundleStore:
             return None
 
     def _load_state(self) -> None:
+        """직전 commit 기록을 읽는다. 파일이 없거나 깨졌으면 처음 기동한 것으로 본다."""
         try:
             with open(os.path.join(self.state_dir, "state.json"), encoding="utf-8") as fp:
                 state = json.load(fp)
@@ -170,6 +182,7 @@ class BundleStore:
             pass
 
     def _save_state(self, version: str) -> None:
+        """commit 기록을 임시 파일에 쓰고 rename 해 반쯤 쓰인 state.json 이 남지 않게 한다."""
         path = os.path.join(self.state_dir, "state.json")
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fp:
@@ -177,6 +190,7 @@ class BundleStore:
         os.replace(tmp, path)
 
     def _require(self, version: Optional[str] = None) -> None:
+        """요청을 받기 전 공통 확인이다. 동기화가 꺼졌으면 :class:`SyncDisabled`, 버전 모양이 틀리면 BundleError 다."""
         if version is not None and not _VERSION_RE.match(version):
             # 버전은 release 디렉터리 이름이 되므로 해시 모양이 아니면 받지 않는다(경로 조작 방지).
             raise BundleError(f"잘못된 버전 값이다: {version!r}")
@@ -285,6 +299,11 @@ class BundleStore:
             return {"committed": True, "version": version, "shared": not release}
 
     def abort(self, version: str) -> dict:
+        """준비만 하고 쓰지 않을 버전을 지운다. 현재 버전이 가리키는 release 는 지우지 않는다.
+
+        같은 내용으로 다시 준비해 기존 release 를 재사용한 경우에도 abort 가 올 수 있으므로, 지우기 전에
+        그 디렉터리가 지금 ``current`` 가 아닌지 확인한다.
+        """
         self._require(version)
         with self._lock:
             release = self._staged.pop(version, None)

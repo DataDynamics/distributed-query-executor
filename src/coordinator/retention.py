@@ -56,6 +56,7 @@ class RetentionTarget:
     where_params: tuple = ()
 
     def delete_sql(self) -> str:
+        """보관 기간이 지난 행을 한 배치만큼 지우는 DELETE 문을 만든다(매개변수는 일수와 배치 크기)."""
         # 고른 키를 IN (서브쿼리) 로 넘기면 플래너가 바깥 DELETE 를 해시 세미조인으로 풀어 배치마다 테이블
         # 전체를 훑는다(100만 행에서 배치당 약 170ms, 테이블에 비례해 커진다). ARRAY(...) 로 먼저 값 배열을
         # 만들면 바깥은 = ANY(배열) 이 되어 PK 인덱스로 그 행들만 찾아간다.
@@ -153,6 +154,7 @@ class RetentionCleaner:
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        """정리 루프를 취소하고 끝날 때까지 기다린다. 시작하지 않았으면 아무것도 하지 않는다."""
         if self._task is None:
             return
         self._task.cancel()

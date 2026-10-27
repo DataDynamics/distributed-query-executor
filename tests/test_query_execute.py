@@ -369,3 +369,35 @@ def test_query_execute_unconfigured_greenplum_400(qe_client, monkeypatch):
         "datasource": "greenplum",
     })
     assert resp.status_code == 400
+
+
+class _StaleSyncer:
+    """모든 executor 가 동기화 버전이 어긋난 상태를 흉내 내는 관문이다(lifespan 이 부르는 start/stop 포함)."""
+
+    enforcing = True
+    active_version = "0123456789abcdef"
+
+    def eligible(self, url):
+        return False
+
+    def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+
+def test_query_execute_동기화_버전이_맞는_executor_가_없으면_503(qe_client, monkeypatch):
+    """executor 는 설정돼 있지만 모두 동기화에서 빠졌으면 '설정 없음' 400 이 아니라 일시 상태 503 이다."""
+    import coordinator.app as ca
+    monkeypatch.setattr(core_config.settings, "source_type", "impala", raising=False)
+    calls: list = []
+    monkeypatch.setattr(ca.httpx, "AsyncClient", _fake_client_factory(calls))
+    monkeypatch.setattr(ca, "build_syncer", lambda settings, runner: _StaleSyncer())
+    client = qe_client(executors=["http://exec1:8001"])
+    resp = client.post("/query-execute", json={
+        "template_id": "sales_migration",
+        "params": [{"name": "start_dt", "value": "2026-01-01"}, {"name": "end_dt", "value": "2026-01-01"}],
+    })
+    assert resp.status_code == 503, resp.text
+    assert "동기화 버전" in resp.json()["detail"] and calls == []

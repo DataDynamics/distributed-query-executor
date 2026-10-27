@@ -140,6 +140,7 @@ def scan_tree(base: str, excludes: Excludes) -> Dict[str, dict]:
     out: Dict[str, dict] = {}
 
     def walk(abs_dir: str, rel_dir: str) -> None:
+        # 이름순으로 훑어 목록 순서가 실행할 때마다 같게 한다. 디렉터리 심링크는 l 로만 남기고 들어가지 않는다.
         try:
             with os.scandir(abs_dir) as it:
                 items = sorted(it, key=lambda e: e.name)
@@ -163,6 +164,7 @@ def scan_tree(base: str, excludes: Excludes) -> Dict[str, dict]:
 
 
 def sha256_file(path: str) -> str:
+    """파일 내용의 sha256 을 조각씩 읽어 구한다(큰 파일도 메모리에 다 올리지 않는다)."""
     h = hashlib.sha256()
     with open(path, "rb") as fp:
         for chunk in iter(lambda: fp.read(_CHUNK), b""):
@@ -184,6 +186,7 @@ def host_id() -> str:
 
 
 def _within(path: str, base: str) -> bool:
+    """path 가 base 자신이거나 그 아래인지 본다. ``/data1/a`` 가 ``/data1/ab`` 아래로 잡히지 않게 / 까지 맞춘다."""
     return path == base or path.startswith(base.rstrip("/") + "/")
 
 
@@ -207,6 +210,7 @@ def cut(text: str, width: int) -> str:
 
 
 def human_size(n: float) -> str:
+    """바이트 수를 B·KB·MB·GB 로 줄여 쓴다."""
     for unit in ("B", "KB", "MB", "GB"):
         if abs(n) < 1024 or unit == "GB":
             return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
@@ -215,6 +219,7 @@ def human_size(n: float) -> str:
 
 
 def human_secs(s: float) -> str:
+    """남은 시간 같은 초를 ``42s``·``3m05s``·``1h20m`` 처럼 짧게 쓴다."""
     s = int(max(0, s))
     if s < 60:
         return f"{s}s"
@@ -242,6 +247,7 @@ class TreeSource:
         self._lock = threading.Lock()
 
     def _hash(self, rel: str, st: os.stat_result) -> str:
+        """파일의 sha256 을 캐시에서 꺼내거나 새로 구한다. 계산은 락 밖에서 해 다른 요청을 막지 않는다."""
         key = (st.st_size, st.st_mtime_ns, st.st_ino)
         with self._lock:
             hit = self._hashes.get(rel)
@@ -253,6 +259,11 @@ class TreeSource:
         return digest
 
     def manifest(self) -> dict:
+        """클라이언트에 줄 목록이다. 파일에는 sha256 을 붙이고, 서버의 제외 규칙과 호스트 식별자를 함께 싣는다.
+
+        제외 규칙은 클라이언트가 자기 규칙과 합쳐 쓰고, 호스트 식별자는 클라이언트가 같은 호스트의 원본 위에서
+        도는지 가리는 데 쓴다.
+        """
         entries = scan_tree(self.base, self.excludes)
         listed = []
         for rel, e in entries.items():
@@ -298,6 +309,12 @@ class TreeSource:
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
+    """목록(/manifest)·파일(/file)·헬스(/health) 세 가지 GET 만 처리하는 요청 처리기다.
+
+    HTTP/1.1 keep-alive 로 한 연결에서 파일을 이어 받게 한다. GET 이 아닌 메서드는 모두 :meth:`_deny` 로
+    거절하므로 이 처리기를 거쳐 원본이 바뀌는 길은 없다.
+    """
+
     protocol_version = "HTTP/1.1"
     server_version = "dirsync/1"
     source: TreeSource  # make_server 가 채운다
@@ -315,6 +332,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         sys.stderr.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {self.client_address[0]} {fmt % args}\n")
 
     def _send_json(self, code: int, body: dict) -> None:
+        """JSON 응답 하나를 Content-Length 와 함께 보낸다(keep-alive 연결이 다음 응답과 섞이지 않게)."""
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -323,6 +341,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):  # noqa: N802
+        """경로에 따라 헬스·목록·파일 응답으로 나눈다. 모르는 경로는 404 다."""
         url = urlsplit(self.path)
         if url.path == "/health":
             self._send_json(200, {"ok": True, "version": PROTOCOL_VERSION, "base": self.source.base})
@@ -337,6 +356,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(404, {"error": "알 수 없는 경로"})
 
     def _send_file(self, raw_path: str) -> None:
+        """파일 하나를 보낸다. 헤더의 X-Sha256·X-Mode·X-Mtime-Ns 로 클라이언트가 검증하고 메타데이터를 맞춘다.
+
+        크기와 해시는 연 파일의 fstat 으로 정하므로, 보내는 사이 원본이 바뀌면 클라이언트의 해시 검증에서
+        걸러져 다시 받게 된다.
+        """
         opened, err = self.source.open_file(raw_path)
         if err:
             self._send_json(err[0], {"error": err[1], "path": raw_path})
@@ -380,6 +404,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 
 def make_server(base: str, excludes: Excludes, bind: str = "0.0.0.0", port: int = DEFAULT_PORT):
+    """원본을 내보내는 스레드 HTTP 서버를 만든다(테스트는 이것을 직접 띄운다). 연결마다 스레드 하나다."""
     source = TreeSource(base, excludes)
     handler = type("Handler", (_Handler,), {"source": source})
     server = http.server.ThreadingHTTPServer((bind, port), handler)
@@ -388,6 +413,7 @@ def make_server(base: str, excludes: Excludes, bind: str = "0.0.0.0", port: int 
 
 
 def run_server(args) -> int:
+    """서버 모드다. 내보낼 대상을 요약해 보여 준 뒤 Ctrl+C 까지 요청을 받는다."""
     excludes = Excludes(_split_values(args.exclude_dir), _split_values(args.exclude))
     server = make_server(args.base, excludes, args.bind, args.port)
     source = server.RequestHandlerClass.source
@@ -411,6 +437,8 @@ def run_server(args) -> int:
 # ───────── 클라이언트 ─────────
 
 class ServerError(RuntimeError):
+    """서버에 닿지 못했거나 서버가 실패로 답한 경우다. 파일 받기에서는 다시 시도할 사유가 된다."""
+
     pass
 
 
@@ -422,6 +450,7 @@ class Remote:
         self._conn: Optional[http.client.HTTPConnection] = None
 
     def _request(self, path: str) -> http.client.HTTPResponse:
+        """GET 하나를 보낸다. 서버가 유휴 연결을 닫았을 수 있으므로 실패하면 새로 붙어 한 번만 더 보낸다."""
         for attempt in (1, 2):
             if self._conn is None:
                 self._conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
@@ -440,6 +469,7 @@ class Remote:
             self._conn = None
 
     def manifest(self) -> dict:
+        """서버 목록을 받는다. 프로토콜 버전이 다르면 목록 형식을 믿을 수 없으므로 시작 전에 멈춘다."""
         resp = self._request("/manifest")
         body = resp.read()
         if resp.status != 200:
@@ -501,6 +531,7 @@ class Action:
         return f"[{mark}] {text}"
 
     def detail(self) -> str:
+        """계획·진행 화면에서 경로 뒤에 붙일 설명(크기·권한 변화·링크 대상)이다."""
         if self.kind in ("add", "update"):
             return human_size(self.size)
         if self.kind == "chmod":
@@ -572,6 +603,7 @@ class Progress:
         self._width = shutil.get_terminal_size((100, 20)).columns
 
     def _status(self) -> str:
+        """맨 아래 상태 줄이다. 전송할 바이트가 있으면 바이트로, 없으면 항목 수로 진행률을 낸다."""
         elapsed = max(1e-6, time.monotonic() - self.started)
         frac = self.bytes / self.total_bytes if self.total_bytes else (
             self.items / self.total_items if self.total_items else 1.0)
@@ -588,6 +620,7 @@ class Progress:
         return cut(text, self._width - 1)
 
     def _draw(self, force: bool = False) -> None:
+        """상태 줄을 덮어쓴다. 큰 파일을 받는 동안 너무 자주 그리지 않도록 0.1초에 한 번으로 줄인다."""
         if not self.tty:
             return
         now = time.monotonic()
@@ -609,6 +642,7 @@ class Progress:
         self._draw()
 
     def done(self, action: Action, ok: bool = True, reason: str = "") -> None:
+        """끝난 항목을 한 줄로 남기고 그 아래에 상태 줄을 다시 그린다. 실패면 사유를 붙인다."""
         self.items += 1
         self._current = None
         width = len(str(self.total_items))
@@ -644,6 +678,11 @@ class Applier:
         return full
 
     def _writable_parent(self, rel: str) -> str:
+        """rel 의 상위 디렉터리를 돌려주되, 쓸 수 없으면 소유자 권한을 잠시 열어 둔다.
+
+        서버에서 읽기 전용인 디렉터리(555 등)도 그 아래 파일을 바꿔야 하므로, 원래 권한을 기억했다가
+        :meth:`finish` 에서 되돌린다.
+        """
         parent = os.path.dirname(self._abs(rel))
         if not os.access(parent, os.W_OK):
             mode = stat.S_IMODE(os.stat(parent).st_mode)
@@ -653,6 +692,11 @@ class Applier:
         return parent
 
     def apply(self, action: Action) -> None:
+        """계획 항목 하나를 적용한다. 실패하면 OSError·ServerError 를 올리고 다음 항목은 호출한 쪽이 이어 간다.
+
+        새 디렉터리는 700 으로 만들고 서버 권한은 끝에 맞춘다. 하위 항목을 다 쓰기 전에 읽기 전용이 되면
+        안 되기 때문이다. 심링크는 임시 이름으로 만든 뒤 rename 해 기존 링크를 한 번에 바꾼다.
+        """
         kind, rel = action.kind, action.path
         if kind == "delete_file":
             self._writable_parent(rel)
@@ -687,6 +731,11 @@ class Applier:
                 os.chmod(self._abs(rel), action.remote["mode"])
 
     def _download(self, action: Action) -> None:
+        """파일을 같은 디렉터리의 임시 파일로 받아 해시를 검증하고 rename 으로 바꿔 끼운다.
+
+        해시가 맞지 않거나 서버 오류면 정해진 횟수까지 다시 받는다. 임시 파일은 성공·실패·중단 어느 경우에도
+        지워지므로 반쯤 받은 파일이 남지 않는다.
+        """
         rel = action.path
         dest = self._abs(rel)
         parent = self._writable_parent(rel)
@@ -732,6 +781,7 @@ class Applier:
 
 
 def _print_plan(manifest: dict, base: str, excludes: Excludes, plan: List[Action], args, out) -> None:
+    """서버·로컬·제외 규칙과 할 일 목록(기본 --show 건까지), 종류별 건수와 전송량을 보여 준다."""
     entries = manifest["entries"]
     files = [e for e in entries if e["type"] == "f"]
     out.write(f"서버  {args.server}:{args.port}  {manifest.get('hostname', '')}:{manifest['base']}  "
@@ -792,6 +842,12 @@ class _Lock:
 
 
 def run_client(args, out=None) -> int:
+    """클라이언트 모드다. 목록을 받아 계획을 보여 주고, 확인을 받으면 적용한 뒤 결과를 요약한다.
+
+    시작 전에 막는 경우는 세 가지다. 같은 호스트에서 서버 원본과 겹치는 디렉터리, 서버 목록의 잘못된 경로,
+    그리고 ``-y`` 만으로 진행하려는데 서버 목록이 비었거나 로컬 절반 넘게 지우는 계획이다(``--force`` 가 없으면). 적용 중의 실패는
+    항목별로 모아 끝에 보여 주고 나머지 항목은 계속 진행한다.
+    """
     out = out or sys.stdout
     base = os.path.realpath(args.base)
     if os.path.exists(base) and not os.path.isdir(base):
@@ -912,6 +968,7 @@ def _add_excludes(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """server·client 두 하위 명령의 인자를 정의한다."""
     parser = argparse.ArgumentParser(
         prog=os.environ.get("PROG_NAME") or "dirsync.py",
         description="SSH 없이 HTTP 로 디렉터리를 서버 기준으로 동기화한다(서버는 읽기 전용).",
@@ -941,6 +998,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """명령행 진입점이다. 종료 코드는 0(완료), 1(일부 실패), 2(시작 전 중단·취소·Ctrl+C)다."""
     args = build_parser().parse_args(argv)
     try:
         if args.mode == "server":

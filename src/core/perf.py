@@ -80,6 +80,7 @@ class _Histogram:
         self.sum = 0.0
 
     def add(self, value: float) -> None:
+        """값 하나를 그 값 이상인 가장 작은 상한의 버킷에 센다. 마지막 상한보다 크면 건수와 합에만 들어간다."""
         self.count += 1
         self.sum += value
         i = bisect.bisect_left(self.bounds, value)
@@ -106,6 +107,7 @@ class _Dist:
         self.samples: list = []
 
     def add(self, value: float) -> None:
+        """값 하나를 센다. 건수와 max 는 모든 값으로, 백분위는 상한(_RESERVOIR)까지의 무작위 표본으로 낸다."""
         self.count += 1
         if self.count == 1 or value > self.max:
             self.max = value
@@ -118,6 +120,7 @@ class _Dist:
                 self.samples[j] = value
 
     def summary(self) -> Dict[str, float]:
+        """구간의 건수·p50·p95·max 를 돌려준다. 지표 줄에는 ``<이름>.n``·``<이름>.p50`` 처럼 펼쳐진다."""
         ordered = sorted(self.samples)
         return {
             "n": self.count,
@@ -176,6 +179,7 @@ class PerfRegistry:
             self._gauges[name] = (fn, prefix)
 
     def unregister(self, name: str) -> None:
+        """게이지를 뗀다. 없는 이름이면 아무것도 하지 않는다."""
         with self._lock:
             self._gauges.pop(name, None)
 
@@ -243,6 +247,8 @@ perf = PerfRegistry()
 
 
 class _Timer:
+    """:func:`timer` 가 돌려주는 컨텍스트 관리자다. 블록을 빠져나올 때 경과 ms 를 분포에 더하고 예외는 삼키지 않는다."""
+
     __slots__ = ("name", "registry", "t0")
 
     def __init__(self, name: str, registry: PerfRegistry) -> None:
@@ -324,9 +330,11 @@ class InstrumentedThreadPoolExecutor(ThreadPoolExecutor):
         registry.gauge(f"pool.{name}", self.gauges)
 
     def gauges(self) -> Dict[str, int]:
+        """지금 일하는 스레드 수·풀 크기·큐에서 스레드를 기다리는 작업 수다."""
         return {"busy": self._busy, "max": self._max_workers, "queued": self._work_queue.qsize()}
 
     def submit(self, fn, /, *args, **kwargs):
+        """작업을 감싸 넣는다. 넣은 시각과 스레드가 잡은 시각의 차이가 대기, 그 뒤 끝날 때까지가 실행이다."""
         enqueued = time.monotonic()
         registry, name = self._registry, self.perf_name
 
@@ -400,6 +408,10 @@ class SystemSampler:
             return None
 
     def gauges(self) -> Dict[str, float]:
+        """자원 값을 읽는다. I/O 속도는 직전 호출 이후의 평균이므로 이 함수는 지표 로그 한 곳에서만 부른다.
+
+        읽을 수 없는 항목(컨테이너에서 막힌 fd 수·디스크 I/O 등)은 줄에서 빼고 나머지는 그대로 낸다.
+        """
         ps = self._psutil
         now = time.monotonic()
         dt = max(1e-6, now - self._last)
@@ -520,6 +532,10 @@ class PerfReporter:
         self._last = time.monotonic()
 
     def write_snapshot(self) -> Dict[str, object]:
+        """구간 지표를 꺼내 ``kind=snapshot`` 한 줄로 남기고 그 값을 돌려준다(카운터·분포는 여기서 비워진다).
+
+        ``window_s`` 는 직전 줄 이후 실제로 흐른 시간이라, 루프가 밀려 주기가 늘어진 구간도 비율을 바로 낼 수 있다.
+        """
         now = time.monotonic()
         fields: Dict[str, object] = {
             "kind": "snapshot", "role": self.role, "window_s": round(now - self._last, 1),
@@ -530,6 +546,7 @@ class PerfReporter:
         return fields
 
     async def _report_loop(self) -> None:
+        """주기마다 한 줄을 남긴다. 기록이 실패해도 루프는 이어 가 다음 구간을 잃지 않는다."""
         while True:
             await asyncio.sleep(self.interval_s)
             try:
@@ -538,6 +555,7 @@ class PerfReporter:
                 logger.exception("perf 지표 기록 실패")
 
     async def _lag_loop(self) -> None:
+        """짧게 잠들었다 깨기를 반복하며 예정보다 늦게 깬 만큼을 ``loop.lag_ms`` 분포에 더한다."""
         loop = asyncio.get_running_loop()
         while True:
             t0 = loop.time()
@@ -552,6 +570,7 @@ class PerfReporter:
             self._tasks.append(asyncio.create_task(self._report_loop()))
 
     async def stop(self) -> None:
+        """띄운 루프들을 취소하고 끝날 때까지 기다린다."""
         for t in self._tasks:
             t.cancel()
         for t in self._tasks:

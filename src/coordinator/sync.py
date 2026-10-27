@@ -79,6 +79,13 @@ class BundleSyncer:
     """감시·배포 루프와 디스패치 버전 관문이다. 디스패처의 ``bundle_gate`` 로 붙는다."""
 
     def __init__(self, settings, admission, *, base: Optional[str] = None, transport=None):
+        """설정에서 감시 규칙과 주기를 읽고 executor 마다 상태 칸을 만든다.
+
+        ``admission`` 은 drain 할 때 새 job 의 실행 시작을 막고 실행 중인 job 수를 기다리는 데 쓴다.
+        ``base`` 는 원본 트리의 앱 홈이며 비우면 ``sync.base_dir``, 그것도 비면 설치 위치를 쓴다. 비교가
+        심링크와 상대 경로에 흔들리지 않도록 realpath 로 고정한다. ``transport`` 는 테스트에서 executor 앱을
+        ASGI 로 직접 붙이려고 두는 자리다.
+        """
         self.settings = settings
         self.admission = admission
         self.rules = SyncRules.from_settings(settings)
@@ -114,12 +121,18 @@ class BundleSyncer:
         return self.active_version is not None
 
     def eligible(self, url: str) -> bool:
+        """이 executor 에 task 를 보내도 되는지 판정한다.
+
+        목록에 없는 주소이거나 아직 전환한 버전이 없으면 막지 않는다. 공유 모드 executor 는 coordinator 와
+        같은 파일을 보므로 버전과 무관하게 언제나 후보다.
+        """
         st = self.executors.get(url)
         if st is None or self.active_version is None:
             return True
         return st.shared or st.version == self.active_version
 
     def perf_gauges(self) -> dict:
+        """성능 지표 로그의 ``sync.*`` 게이지다. 메모리 값만 읽으므로 기록 주기마다 불려도 부담이 없다."""
         stale = sum(1 for u in self.executors if not self.eligible(u))
         return {"stale_executors": stale, "executors": len(self.executors),
                 "draining": 1 if self.admission.paused else 0}
@@ -127,6 +140,11 @@ class BundleSyncer:
     # ───────── 상태 ─────────
 
     def status(self) -> dict:
+        """``GET /sync/status`` 응답이다. 원본·대기·전환 버전과 executor 별 상태를 한 번에 보여 준다.
+
+        ``pending_version`` 은 settle 이나 재시도를 기다리는 버전만 담고, 이미 확정된 원본 버전과 같으면
+        None 으로 둬서 "아직 나가지 않은 변경"이 있는지 바로 읽히게 한다.
+        """
         return {
             "enabled": True, "base": self.base, "paths": list(self.rules.paths),
             "patterns": list(self.rules.patterns), "exclude": list(self.rules.exclude),
@@ -141,9 +159,11 @@ class BundleSyncer:
     # ───────── 루프 ─────────
 
     def start(self) -> None:
+        """lifespan 에서 부른다. 감시 루프를 백그라운드 task 로 띄운다."""
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        """감시 루프를 멈춘다. drain 도중에 멈춰도 job 실행이 막힌 채 남지 않도록 관문을 반드시 연다."""
         if self._task is None:
             return
         self._task.cancel()
@@ -155,9 +175,11 @@ class BundleSyncer:
         self.admission.resume()
 
     def wake(self) -> None:
+        """다음 주기를 기다리지 않고 루프를 깨운다."""
         self._wake.set()
 
     async def _loop(self) -> None:
+        """``interval_s`` 마다 :meth:`run_once` 를 돌린다. 한 주기의 실패가 루프를 끝내지 않게 예외는 로그로만 남긴다."""
         while True:
             try:
                 await self.run_once()
@@ -219,6 +241,11 @@ class BundleSyncer:
             self.active_version = self.source_version
 
     async def _refresh(self, client: httpx.AsyncClient, st: ExecutorSync) -> None:
+        """executor 의 ``/sync/status`` 를 읽어 도달 여부·버전·공유 모드를 갱신한다.
+
+        응답이 없으면 ``reachable=False`` 로 두고 버전은 지우지 않는다. 내려간 executor 는 어차피 디스패치
+        후보에서 빠지고, 돌아오면 다음 주기에 새 버전을 다시 읽기 때문이다.
+        """
         st.checked_at = now_iso()
         try:
             resp = await client.get(f"{st.url}/sync/status", timeout=5.0)
@@ -241,9 +268,15 @@ class BundleSyncer:
     # ───────── 2단계 전환 ─────────
 
     def _targets(self) -> List[ExecutorSync]:
+        """지금 번들을 보낼 수 있는 executor 다(닿고, 동기화를 켜고 경로·패턴을 설정한 것)."""
         return [st for st in self.executors.values() if st.reachable and st.enabled]
 
     async def _prepare(self, client: httpx.AsyncClient, st: ExecutorSync, version: str, data: bytes) -> bool:
+        """executor 에 번들을 보내 풀고 검증하게 한다(현재 버전은 그대로다). 성공 여부만 돌려준다.
+
+        원본 호스트와 앱 홈을 함께 보내 executor 가 공유 모드인지 스스로 판정하게 하고, 그 판정을 응답에서
+        받아 기록한다. 실패 이유는 ``last_error`` 에 남겨 상태 화면에서 바로 보이게 한다.
+        """
         try:
             resp = await client.post(
                 f"{st.url}/sync/prepare", content=data,
@@ -261,6 +294,7 @@ class BundleSyncer:
             return False
 
     async def _post(self, client: httpx.AsyncClient, st: ExecutorSync, action: str, version: str) -> bool:
+        """``/sync/commit`` 이나 ``/sync/abort`` 를 부른다. 실패는 예외 대신 False 와 ``last_error`` 로 알린다."""
         try:
             resp = await client.post(f"{st.url}/sync/{action}", json={"version": version})
             if resp.status_code >= 400:
@@ -272,12 +306,22 @@ class BundleSyncer:
             return False
 
     async def _bundle(self, manifest: Manifest) -> bytes:
+        """원본 목록으로 tar.gz 를 만든다. 크기 상한을 먼저 확인해 큰 묶음을 만들고 나서 버리는 일을 피한다."""
         if manifest.total_bytes > self.max_bytes:
             raise bundle_mod.BundleError(
                 f"동기화 대상이 {manifest.total_bytes / 1048576:.1f}MB 로 sync.max_bundle_mb 를 넘는다")
         return await asyncio.to_thread(bundle_mod.build_bundle, manifest)
 
     async def _transition(self, client: httpx.AsyncClient, manifest: Manifest) -> None:
+        """확정된 원본 버전으로 모든 executor 를 함께 옮긴다(prepare → drain → commit).
+
+        한 대라도 prepare 에 실패하면 준비를 마친 executor 에 abort 를 보내고 아무것도 바꾸지 않은 채
+        ``retry_backoff_s`` 뒤에 다시 시도한다. 모두 준비되면 admission 관문을 닫아 새 job 의 실행 시작을 막고
+        실행 중인 job 이 끝나기를 ``drain_timeout_s`` 까지 기다린 뒤 commit 한다. 관문은 ``finally`` 에서 반드시
+        다시 연다. commit 에 실패한 executor 는 버전이 어긋난 채로 남으므로 디스패치 후보에서 빠지고, 다음
+        주기부터 :meth:`_catch_up` 이 따로 맞춘다. 공유 모드 executor 는 파일은 그대로 두고 모듈만 비우면 되므로
+        버전과 무관하게 매번 대상에 넣는다.
+        """
         version = self.source_version
         if manifest.version != version:
             return  # 확정 뒤 또 바뀌었다. 다음 주기에 다시 settle 을 기다린다.
@@ -346,7 +390,14 @@ class BundleSyncer:
         lagging = [st for st in self._targets() if not st.shared and st.version != version and now >= st.next_try]
         if not lagging:
             return
-        data = await self._bundle(manifest)
+        try:
+            data = await self._bundle(manifest)
+        except Exception as exc:
+            self.last_error = f"번들 생성 실패: {exc}"
+            for st in lagging:
+                st.next_try = time.monotonic() + self.retry_backoff_s
+            logger.warning("동기화 따라잡기 번들 생성 실패: %s", exc)
+            return
         for st in lagging:
             ok = await self._prepare(client, st, version, data) and await self._post(client, st, "commit", version)
             if ok:
@@ -358,6 +409,7 @@ class BundleSyncer:
 
 
 def _error_text(resp: httpx.Response) -> str:
+    """executor 오류 응답을 한 줄로 줄인다. ``detail`` 이 ``{code, message}`` 이면 코드를 앞에 붙인다."""
     try:
         detail = resp.json().get("detail")
         if isinstance(detail, dict):

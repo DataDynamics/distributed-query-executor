@@ -223,6 +223,14 @@ executor 의 건강 상태와 메트릭을 얼마나 자주 확인·기록할지
 
 `monitor.db_dsn` 을 비워 두면 헬스 체크는 계속하되 결과를 DB 에 남기지 않습니다.
 
+메트릭 테이블은 `monitor.retention_days`(기본 30일)가 지난 행을 `history.retention_interval_s` 마다 지우고,
+이력 테이블은 `history.retention_days`(기본 90일)를 따릅니다. 행이 쌓일수록 대시보드 이력 조회와 집계가
+느려지므로, 보관 기간을 늘릴 때는 그만큼 조회가 느려진다는 점을 감안합니다.
+
+파일 자동 동기화(`sync.*`)를 켜 두었다면 전환할 때마다 새 job 의 실행 시작이 실행 중인 job 이 끝날 때까지 멈춥니다
+(`sync.drain_timeout_s`, 기본 600초). 긴 job 이 도는 동안 커스텀 코드를 고치면 그동안 들어온 job 이 PENDING 에
+쌓이므로, 처리량을 재는 부하 테스트 중에는 동기화 대상 파일을 고치지 않습니다.
+
 ### 3.5 백엔드 처리량 (executor → Greenplum)
 
 executor 가 Greenplum 으로 데이터를 실제로 밀어 넣을 때의 처리량 관련 값들입니다.

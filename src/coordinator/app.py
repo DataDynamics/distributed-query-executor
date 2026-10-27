@@ -1730,6 +1730,13 @@ def create_app(
         에 실어 돌려준다. ``op`` 는 로그에 남길 호출 API 이름이다(query-execute·query-count).
         """
         order = _pick_executor_order()
+        if not order and syncer is not None and syncer.enforcing and any(settings.executors):
+            # executor 는 있지만 모두 파일 동기화 버전이 어긋나 빠졌다. 따라잡으면 풀리는 일시 상태라 503 이다.
+            raise HTTPException(
+                status_code=503,
+                detail=(f"동기화 버전({syncer.active_version})으로 전환된 executor 가 없어 {name} 을(를) 실행할 수 "
+                        "없습니다(GET /sync/status 로 executor 별 상태를 확인하세요)"),
+            )
         if not order:
             raise HTTPException(
                 status_code=400,

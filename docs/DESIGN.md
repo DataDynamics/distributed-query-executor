@@ -266,6 +266,10 @@ POST /jobs
 | `GET /cluster` | coordinator+executor health/metrics + 실행 중 job 수 한 번에 |
 | `GET /health`·`/healthz`·`/metrics` | 헬스 체크/시스템 메트릭 |
 | `GET /`·`/config`·`/info` | 대시보드 HTML / 설정(마스킹) / 요약(`dashboard.enabled`로 토글) |
+| `GET /docs`·`/redoc`·`/openapi.json` | Swagger UI / ReDoc / OpenAPI 스키마(정적 에셋 내장) |
+| `GET /metrics/prometheus` | Prometheus 텍스트 형식 지표(`prometheus.enabled`, §19.2) |
+| `GET /prometheus/targets` | executor 목록(`http_sd_configs` 형식, §19.2) |
+| `GET /sync/status`·`POST /sync/now` | 파일 동기화 상태 / 즉시 한 번 맞추기(§20) |
 
 이 밖에 템플릿 실행(`/templates`, `POST /query-execute`)은 §18을 참고한다.
 
@@ -278,7 +282,8 @@ POST /tasks
   "target_table":"public.sales_mirror", "write_mode":"overwrite_partitions",
   "partition_column":"dt", "partition_values":["'2026-01-01'", ...],
   "exec_mode":"copy", "username":null,
-  "staging_table":null, "staging_ddl":null, "insert_sql":null }
+  "staging_table":null, "staging_ddl":null, "insert_sql":null,
+  "bundle_version":null }   // 파일 동기화 버전(§20.4). 다르면 409 BUNDLE_VERSION_MISMATCH
 → 202 { "task_id":"t1", "status":"QUEUED" }
 ```
 
@@ -291,6 +296,8 @@ POST /tasks
 | `POST /tasks/{id}/cancel` | task 취소(협조적) |
 | `GET /health`·`/healthz`·`/metrics` | 헬스/메트릭(+ 동시 처리 현황) |
 | `GET /`·`/history`·`/config`·`/info` | self-view 대시보드 / task 이력 / 설정 / 요약 |
+| `GET /docs`·`/redoc`·`/openapi.json`·`/metrics/prometheus` | API 문서 / Prometheus 지표(§19.2) |
+| `GET /sync/status`·`POST /sync/prepare`·`/sync/commit`·`/sync/abort` | 파일 동기화 수신(coordinator 만 부른다, §20) |
 
 또한 결과 반환 실행용 `POST /query-run`(커스텀 함수 위임)이 있다(§18.7).
 
@@ -348,8 +355,9 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 가시성은 메트릭·대시보드·로깅 세 가지로 제공한다.
 
 - **시스템 메트릭**: 두 서비스 모두 `/metrics`(CPU/메모리/디스크 + 동시 처리)를 낸다. coordinator `HealthMonitor`가 executor를 폴링해 `/executors`·`/cluster`로 제공하고, `monitor.db_dsn` 설정 시 `executor_health_metrics`에 기록한다.
-- **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query(job 표 + query-run 처리중 표) / 실행 이력(job 이력 + query-run 이력) / Executor / 환경설정 / 그외 정보.
+- **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query(job 표 + query-run 처리중 표) / 실행 이력(job 이력 + query-run 이력) / Executor / 템플릿 / 쿼리 실행 / 데이터소스 / 환경설정 / 그외 정보 / API·링크(§19.4).
 - **executor self-view 대시보드(`/`)**: remote 모드의 각 executor가 자기 task/메트릭/이력을 노출한다. local 모드에선 executor 프로세스가 없으므로 coordinator 화면만 보인다.
+- **성능 지표 로그·Prometheus**: 튜닝 지표는 `*-perf.log` 에 주기적으로 남기고 같은 값을 `/metrics/prometheus` 로도 내보낸다(§19).
 - **로깅**: `/data1/distributed-query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트를 자동 주입하고, **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적한다.
 
 **기동 배너 로그.** coordinator·executor는 뜰 때 Spring Boot 식 ASCII 배너(버전·역할·포트)와 함께 **실제 로딩한 설정 파일(`config.properties`·`config.yml`)의 절대 경로**를 콘솔에 찍는다(못 찾으면 그 줄 뒤에 `← 파일 없음(로딩 실패)!` 마커). 이 stdout은 런처(`bin/env.sh`)가 `logs/<name>.out`으로 리다이렉트하는 한편, **같은 배너 전체를 애플리케이션 로그(`.log`)에도 한 레코드로** 남긴다 (`banner.log_startup`, 첫 줄은 grep용 `<role> 기동 (version=… port=…)` 요약). `.out`을 못 봐도 어떤 버전이 어떤 설정 파일로 떴는지 `.log`에서 바로 확인할 수 있다. 순수 렌더 함수(`render_banner`/ `render_config_sources`)는 I/O 무관이라 테스트 대상(`tests/test_banner_version.py`)이다.
@@ -701,7 +709,131 @@ executor가 쓰는 CSV 형식과 GP 외부테이블 `FORMAT 'CSV'(...)`의 형�
 
 ---
 
-## 19. 향후 확장
+## 19. 운영 관측과 보관
+
+### 19.1 성능 지표 로그(`core/perf.py`)
+
+튜닝에 필요한 값은 서비스 로그에 섞으면 찾기 어렵고, 외부 수집기를 전제하면 에어갭 현장에서 쓸 수 없다. 그래서
+두 서비스는 `<로그이름>-perf.log` 에 `logging.perf.interval_s`(기본 30초)마다 `key=value` 한 줄을 남긴다. 값은
+프로세스 전역 레지스트리 `perf` 에 쌓는다. 횟수는 `inc`, 소요 시간 같은 분포는 `observe` 로 넣으면 구간마다
+n·p50·p95·max 로 요약되고 기록 뒤에 비워진다. 실행 슬롯·큐 길이처럼 지금 상태를 나타내는 값은 `gauge(name, fn)`
+으로 콜백을 등록해 기록하는 순간에 읽는다. 콜백은 메모리 값만 읽어야 하며 DB·네트워크 호출을 넣지 않는다.
+기록 주기가 장애 상황에서도 밀리지 않게 하려는 것이다.
+
+스레드 풀은 `InstrumentedThreadPoolExecutor` 로 만들면 사용 중 스레드·큐 길이·대기와 실행 시간이 `pool.<이름>.*`
+로 붙고, asyncio 기본 풀도 기동할 때 이것으로 바꿔 끼운다(§10 의 store·meta 풀도 같다). job·task 가 끝나면
+단계별 소요를 담은 `job_done`·`task_done` 요약 줄이 남고, `bottleneck` 은 소스 읽기 대기와 GP 쓰기 대기를 비교해
+어느 쪽이 느렸는지 판정한다. `dqe.perf` 로거는 전파하지 않으므로 서비스 로그에는 섞이지 않는다. 읽는 쪽은
+`bin/perf-report`(`tools/perf_report.py`)로, 시간대별로 묶어 병목 의심 구간과 조정 방향을 출력한다.
+
+### 19.2 Prometheus exporter(`core/prometheus.py`)
+
+Prometheus 를 쓰는 현장을 위해 같은 레지스트리를 `GET /metrics/prometheus` 로 텍스트 형식(0.0.4)으로 내보낸다
+(`prometheus.enabled`). 의존성을 늘리지 않으려고 클라이언트 라이브러리 없이 직접 직렬화한다. `/metrics` 는
+대시보드와 헬스 모니터가 읽는 JSON 이라 경로를 바꾸지 않았다.
+
+Prometheus 는 누적값을 긁어 가서 증가율을 스스로 계산하므로, 구간마다 비우는 지표 로그 값을 그대로 내보낼 수
+없다. 그래서 레지스트리는 구간 값과 별도로 카운터 누적 합(`totals`)과 분포의 누적 히스토그램(`histograms`)을
+함께 쌓고, 지표 로그의 `collect()` 는 이 누적 상태를 비우지 않는다. 이름은 레지스트리 키에서 기계적으로 만든다.
+executor 주소·풀·단계·상태·오류 종류처럼 키 안의 가변 부분은 `_LABEL_RULES` 로 레이블로 빼서 시계열 이름이
+폭증하지 않게 하고, 밀리초 지표는 초 단위(`_seconds`)로 바꾼다. 직전 호출과의 차이로 값을 내는 `system`
+게이지는 지표 로그 몫이므로 exporter 가 부르지 않고 CPU·메모리는 누적값으로 따로 읽는다.
+
+coordinator 의 `GET /prometheus/targets` 는 설정된 executor 목록을 `http_sd_configs` 형식으로 돌려준다.
+executor 를 늘리고 줄일 때 Prometheus 설정을 손으로 고치지 않아도 되게 하려는 것이다.
+
+### 19.3 보관 기간 정리(`coordinator/retention.py`)
+
+이력과 메트릭 테이블은 쌓이기만 하면 조회와 집계가 느려진다. `RetentionCleaner` 는 `history.retention_interval_s`
+마다 job_history·task_history(`history.retention_days`, 기본 90일)와 executor_health_metrics(`monitor.retention_days`,
+30일)를 지우고, 켰다면 종료된 job(`store.retention_days`, 기본 0=끔)도 지운다. job 을 지우면 조회와 멱등 재생이
+안 되므로 기본으로 끈다. 한 번에 5000행씩 지워 긴 잠금을 피하며, 삭제문은 `IN (서브쿼리)` 대신
+`= ANY(ARRAY(...))` 로 써서 PK 인덱스를 타게 한다(`IN` 은 배치마다 테이블 전체를 훑는다). 멀티 coordinator 에서는
+어느 coordinator 가 지워도 결과가 같으므로 따로 조율하지 않는다.
+
+### 19.4 대시보드 API·링크 탭
+
+두 대시보드의 "API·링크" 탭은 `/openapi.json` 을 읽어 엔드포인트 전체를 그린다(`renderApiLinks`). 라우트를
+더해도 화면을 고칠 필요가 없고, 꺼져 있어 등록되지 않은 기능(Prometheus 등)은 바로가기에서 저절로 빠진다.
+coordinator 화면은 그 아래에 executor 마다 대시보드·문서·Prometheus 주소를 붙인다.
+
+---
+
+## 20. 파일 자동 동기화(`sync.*`)
+
+커스텀 함수(`customs/`)처럼 자주 고치는 코드는 executor 마다 손으로 배포하면 버전이 어긋나기 쉽다. 원본
+coordinator 가 지정 경로를 감시해 executor 로 밀어 보내되, 쿼리가 도는 도중에 반은 옛 코드·반은 새 코드로
+도는 순간이 생기지 않도록 모든 executor 를 함께, 원자적으로 바꾸는 것이 목표다.
+
+### 20.1 버전과 번들(`core/bundle.py`)
+
+감시 대상은 앱 홈 기준 `sync.paths` 아래에서 `sync.patterns` 에 맞고 `sync.exclude` 에 걸리지 않는 일반 파일이다.
+버전은 정렬한 `경로\0sha256\0권한` 줄들의 sha256 앞 16자리로, 내용에서만 정해진다. 수정 시각을 넣지 않은 것은
+`touch` 나 체크아웃만으로 전환이 일어나지 않게 하려는 것이다. 주기마다 다시 훑어도 비용이 작도록 (크기,
+수정 시각, inode) 가 같은 파일은 해시를 다시 계산하지 않는다. 번들은 같은 내용이면 같은 바이트가 나오도록
+수정 시각·소유자를 고정한 tar.gz 다. executor 는 풀 때 일반 파일이 아닌 항목, `sync.paths` 밖의 경로, `..`·절대
+경로, 크기 상한(`sync.max_bundle_mb`) 초과를 모두 거절하고, 푼 결과로 버전을 다시 계산해 헤더의 버전과 맞는지
+확인한다.
+
+### 20.2 executor 디렉터리 구조와 원자적 전환(`executor/sync.py`)
+
+```
+<앱 홈>/customs           -> .sync/current/customs
+<앱 홈>/.sync/current     -> releases/<버전>
+<앱 홈>/.sync/releases/<버전>/customs/...
+```
+
+처음 전환할 때 동기화 경로의 실제 디렉터리를 `.sync/displaced/<시각>/` 로 옮기고 심링크로 바꾼다. 그 뒤의 전환은
+`current` 심링크를 임시 이름으로 만들어 `os.replace` 하는 것 하나뿐이다. rename 은 원자적이라 어떤 순간에도 반쯤
+바뀐 트리가 보이지 않고, 경로가 여러 개여도 같은 순간에 바뀐다. `PYTHONPATH` 는 그대로 앱 홈을 가리키므로 런처와
+systemd 유닛은 바꾸지 않는다. 옛 release 는 `sync.keep_releases` 개까지 남겨, 실행 중인 코드가 파일을 경로로
+읽어도 사라지지 않게 한다.
+
+파이썬 모듈은 `importlib.reload` 하지 않는다. reload 는 같은 모듈 객체를 다시 실행해 globals 를 덮어쓰므로 실행
+중인 함수가 도중에 바뀐 globals 를 본다. 대신 commit 에서 동기화 경로에 속한 모듈을 `sys.modules` 에서 빼고
+(`purge_modules`) 커스텀 함수 캐시(`_query_func_cache`·`_dotted_cache`)를 비운다. 다음 호출은 새 모듈 객체를
+import 하고, 이미 실행 중인 task 는 옛 함수와 옛 globals 를 쥔 채 끝까지 간다. import 와 모듈 교체가 겹치지 않도록
+커스텀 함수 로더와 commit 은 `IMPORT_LOCK` 을 함께 잡는다.
+
+coordinator 와 같은 호스트(machine-id)에서 같은 앱 홈을 쓰는 executor 는 동기화 경로가 곧 원본이므로, 심링크로
+바꾸면 원본을 망가뜨린다. 이 경우는 공유 모드로 보고 파일은 건드리지 않은 채 모듈만 비운다.
+
+### 20.3 2단계 전환과 drain(`coordinator/sync.py`)
+
+1. **확정** — 원본 버전이 바뀌면 `sync.settle_s` 동안 그대로인지 기다리고, 파이썬 파일은 `compile()` 로 문법을
+   확인한다. 편집 중인 파일과 문법 오류가 있는 코드는 나가지 않는다.
+2. **prepare** — 대상 executor 모두에 번들을 보낸다. executor 는 `releases/<버전>.partial` 에 풀고 검증한 뒤
+   rename 해 둔다. `sync.verify_import` 이면 동기화 경로 안의 커스텀 함수 설정(또는 `sync.verify_modules`)을
+   별도 프로세스에서 import 해 본다. 현재 프로세스에서 시험하면 실패한 import 의 부작용이 남기 때문이다. 한
+   대라도 실패하면 준비한 executor 에 abort 를 보내고 `sync.retry_backoff_s` 뒤에 다시 시도한다.
+3. **drain** — `JobAdmission.pause()` 로 새 job 의 실행 시작을 막는다. 요청 수용(`try_admit`)은 그대로라 새 job 은
+   429 가 아니라 PENDING 으로 쌓인다. 실행 중인 job 이 0 이 되기를 `sync.drain_timeout_s` 까지 기다린다. 한 job
+   의 task 가 두 버전에 걸치지 않게 하려는 것이며, 시간을 넘기면 그대로 전환하고 WARNING 을 남긴다.
+4. **commit** — 모두에 commit 을 보내고 `active_version` 을 갱신한 뒤 `resume()` 한다. 관문은 `finally` 에서
+   반드시 연다.
+
+슬롯 대기(`slot()`)는 관문이 열리기를 기다린 뒤 세마포어를 잡고, 그사이 관문이 다시 닫혔으면 슬롯을 돌려놓고
+다시 기다린다. 그래서 drain 이 시작된 뒤 실행 슬롯을 얻는 job 은 없다.
+
+### 20.4 버전 관문과 따라잡기
+
+`active_version` 이 정해진 뒤에는 디스패처가 그 버전이 아닌 executor 를 후보에서 뺀다(`bundle_gate` 의
+`_gate_order`, query-execute 의 `_pick_executor_order`). 후보가 하나도 없으면 task 는 이유를 담아 FAILED 가 된다.
+coordinator 가 상태를 읽는 주기 사이에 버전이 어긋날 수 있으므로 task 요청에 `bundle_version` 을 싣고, executor 는
+자기 버전과 다르면 409 `BUNDLE_VERSION_MISMATCH` 로 거절해 다음 후보로 넘어가게 한다. 공유 모드 executor 는
+검사하지 않는다.
+
+전환 때 내려가 있었거나 commit 에 실패한 executor 는 다시 닿으면 그 한 대에만 prepare·commit 을 해 따라잡게
+한다. 이미 후보에서 빠져 있으므로 drain 하지 않는다. coordinator 가 처음 뜰 때는 닿는 executor 가 모두 같은
+버전이면 그 버전을 `active_version` 으로 받아들이고, 원본과 다르면 위 순서로 맞춘다.
+
+멀티 coordinator 에서는 원본 한 대만 `sync.push=true` 로 둔다. 두 대가 서로 다른 내용을 밀면 executor 가 번갈아
+바뀐다. 나머지 coordinator 는 감시도 관문도 걸지 않는다. 인증은 두지 않으므로 executor 의 `/sync/*` 는 내부망에만
+노출한다.
+
+---
+
+## 21. 향후 확장
 
 아래는 아직 구상 단계의 확장 방향이다("헬스 기반 executor 선택"은 이미 구현 완료돼 §12에서 다뤘다).
 

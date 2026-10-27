@@ -772,7 +772,8 @@ executor 쪽 전환은 심링크 하나를 바꾸는 것이라 원자적이다. 
 따라잡게 한다. 이때는 drain 하지 않는다. 따라잡으면 다시 후보가 된다. task 요청에는 전환된 버전이 실리고
 executor 는 자기 버전과 다르면 409(`BUNDLE_VERSION_MISMATCH`)로 거절하므로, coordinator 가 아직 알아채지
 못한 사이 버전이 어긋난 executor 에도 task 가 들어가지 않고 다음 executor 로 넘어간다. 맞는 executor 가
-하나도 없으면 task 는 그 이유를 담은 메시지와 함께 FAILED 가 된다.
+하나도 없으면 task 는 그 이유를 담은 메시지와 함께 FAILED 가 되고, `/query-execute`·`/query-count` 는 503 을
+돌려준다. 따라잡은 뒤 실패한 task 는 `retry` 로 다시 돌린다.
 
 coordinator 를 처음 띄웠을 때 모든 executor 가 같은 버전이면 그 버전을 전환된 버전으로 받아들이고, 원본과
 다르면 위 네 단계로 맞춘다.

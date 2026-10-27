@@ -283,6 +283,7 @@ task 로 펼칩니다(executor 당 하루씩). 적재는 stage_insert append 이
 | **429** | 동시 실행/대기 용량 초과 | `{ "detail": "동시 실행/대기 job 한도 초과(...)" }` + `Retry-After` 헤더 |
 | **404** | 존재하지 않는 `job_id` | `{ "detail": "job not found" }` |
 | **409** | 이미 종료된 작업을 취소/재시도 | `{ "detail": "이미 종료된 작업입니다(...)" }` |
+| **503** | 결과 반환 실행(`/query-execute`·`/query-count`)에서 쓸 수 있는 executor 가 잠시 없음(파일 동기화 중) | `{ "detail": "동기화 버전(...)으로 전환된 executor 가 없어 ..." }` |
 
 422 가 두 종류라는 점에 주의하세요. 우리 애플리케이션이 던지는 **도메인 검증** 오류는
 `error_code`+`message` 형태라 `error_code` 로 원인을 분기할 수 있고, 요청 본문이 스키마에 어긋나

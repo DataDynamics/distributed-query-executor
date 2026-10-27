@@ -20,6 +20,8 @@
 | `bin/start-coordinator.sh` / `stop-…` / `restart-…` / `status-…` | **coordinator 만** 제어(nohup + PID) |
 | `bin/start-executor.sh` / `stop-…` / `restart-…` / `status-…` | **executor 만** 제어(포트 인자 선택, 생략 시 전체) |
 | `bin/gp-shell` / `impala-shell` / `trino-shell` / `s3-ops` | 운영자용 CLI(SQL 셸, S3 조작) |
+| `bin/load-test` / `perf-report` | 부하 테스트 / 성능 지표 로그(`*-perf.log`) 요약 |
+| `bin/dirsync.py` | SSH 없이 HTTP 로 배포 트리를 원본 호스트 기준으로 맞추는 동기화 도구(파일 하나, 표준 라이브러리) |
 | `bin/systemd/` | systemd 유닛(`coordinator.service`·`executor@.service`)과 `install-systemd.sh` |
 | `bin/check-prereqs.sh` | **사전 점검**: OS 패키지(rpm) + 파이썬 휠(.venv) 설치 여부 확인(설치는 안 함) |
 | `bin/env.sh` | 런처 공통 환경 + 헬퍼 함수(경로·포트) |
@@ -271,6 +273,35 @@ psql "$PG" -f /data1/distributed-query-executor/config/postgresql.sql
 > psql "$PG" -f /data1/distributed-query-executor/config/warehousepg.sql
 > ```
 
+## 파일 자동 동기화 켜기(`sync.*`)
+
+커스텀 함수(`customs/`)처럼 자주 고치는 파일을 coordinator 에서 고치면 모든 executor 에 저절로 퍼지게 하려면
+coordinator 와 **모든 executor 호스트**의 `config.properties` 에 같은 값을 두고 재기동한다. 기본은 꺼져 있고
+대상도 없다.
+
+```properties
+sync.enabled=true
+sync.paths=customs                         # 앱 홈 기준 상대 경로(쉼표)
+sync.patterns=*.py,*.yml,*.yaml,*.json,*.sql
+sync.exclude=__pycache__,*.pyc
+#sync.push=false                           # coordinator 가 여러 대면 원본 한 대만 true(기본), 나머지는 false
+```
+
+처음 전환할 때 executor 의 `customs/` 는 `.sync/current/customs` 를 가리키는 심링크로 바뀌고 원래 내용은
+`.sync/displaced/<시각>/` 으로 옮겨진다. 앱 홈에 서비스 계정이 쓸 수 있어야 한다(`.sync/` 를 만든다). 전환은
+모든 executor 가 준비를 마친 뒤 실행 중인 job 이 끝나기를 기다렸다가(`sync.drain_timeout_s`, 기본 600초) 한꺼번에
+하며, executor 재기동은 필요 없다. coordinator 에서 executor 포트로 가는 내부 통신만 쓰므로 방화벽을 더 열 필요는
+없다. 확인은 다음과 같이 한다.
+
+```bash
+curl -s localhost:8088/sync/status | jq '{source_version, active_version, executors}'
+curl -s -X POST localhost:8088/sync/now      # 기다리지 않고 지금 한 번 맞춘다
+```
+
+이후 업그레이드에서 `bin/dirsync.py` 로 executor 트리를 맞출 때는 `--exclude-dir .sync,customs` 처럼 `.sync` 와
+동기화 경로를 뺀다. 빼지 않으면 심링크가 실제 디렉터리로 바뀌었다가 다음 전환 때 다시 옮겨진다. 동작 원리는
+DESIGN §20, 운영 방법은 OPERATOR.md 의 "커스텀 코드를 executor 로 자동 배포하기" 절에 있다.
+
 ## 운영 명령
 
 서비스를 띄운 뒤에는 날마다 상태를 살피고 로그를 보고 가끔 재시작하는 운영이 이어진다. 자주 쓰는 명령을 모았다. 맨 앞의 `B=...` 는 긴 경로를 짧은 이름에 담아 두는 것이다.
@@ -288,6 +319,10 @@ tail -f /data1/distributed-query-executor/logs/query-executor-server-8087.log
 # WARNING 이상만 모은 전용 로그(문제 추적용, *-warn.log)
 tail -f /data1/distributed-query-executor/logs/query-coordinator-server-warn.log
 tail -f /data1/distributed-query-executor/logs/query-executor-server-8087-warn.log
+
+# 성능 지표 로그(*-perf.log, 30초마다 한 줄)와 그 요약
+tail -f /data1/distributed-query-executor/logs/query-coordinator-server-perf.log
+$B/perf-report --since "$(date +%F) 09:00"   # 오늘 9시 이후를 10분 단위로 요약
 
 # 역할별 제어(coordinator / executor 따로). 중지는 coordinator 부터, 기동은 executor 부터.
 sudo -u gpadmin $B/stop-coordinator.sh        # coordinator 만 중지
@@ -317,6 +352,7 @@ curl -s localhost:8088/cluster
 
 # 모니터링 대시보드(브라우저): coordinator http://<host>:8088/
 #   remote 모드면 각 executor 도 자기 화면 제공: http://<host>:8087/
+#   "API·링크" 탭에 Swagger·ReDoc·Prometheus 주소와 전체 엔드포인트가 모여 있다
 # Swagger UI / OpenAPI 스키마
 #   http://<host>:8088/docs , http://<host>:8087/docs
 curl -s localhost:8088/openapi.json | head -c 200

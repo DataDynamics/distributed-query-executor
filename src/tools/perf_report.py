@@ -34,6 +34,8 @@ _SOURCE_RE = re.compile(r"^(?P<name>.+?)-perf(?:_\d{8})?\.log$")
 
 @dataclass
 class Record:
+    """지표 파일의 한 줄이다. 머리의 시각과 ``key=value`` 들을 숫자로 바꿀 수 있는 것은 바꿔 담는다."""
+
     ts: datetime
     fields: Dict[str, object]
 
@@ -51,6 +53,7 @@ class Record:
 
 
 def _convert(text: str) -> object:
+    """값 문자열을 int·float 순으로 바꿔 보고, 둘 다 아니면 문자열 그대로 둔다."""
     try:
         return int(text)
     except ValueError:
@@ -120,6 +123,7 @@ def load(paths: Iterable[Path], since: Optional[datetime] = None,
 
 
 def parse_bucket(text: str) -> timedelta:
+    """``--bucket`` 의 ``30s``·``10m``·``1h`` 를 구간 길이로 바꾼다."""
     m = re.fullmatch(r"(\d+)\s*([smh])", text.strip())
     if not m:
         raise argparse.ArgumentTypeError("구간은 30s·10m·1h 처럼 숫자와 s/m/h 로 준다")
@@ -187,6 +191,11 @@ COLUMNS: Dict[str, List[Column]] = {
 
 
 def _value(rec: Record, key: str) -> Optional[float]:
+    """열 키로 줄의 값 하나를 꺼낸다.
+
+    ``a.*`` 는 그 접두어로 시작하는 값의 합(상태별로 나뉜 카운터를 한 열로 볼 때), ``a|b`` 는 있는 값 중 최댓값
+    (역할이나 버전에 따라 이름이 다른 지표를 한 열로 볼 때)이다. 줄에 없으면 None 이라 집계에서 빠진다.
+    """
     if key.endswith(".*"):
         return rec.sum_prefix(key[:-1])
     if "|" in key:
@@ -196,6 +205,12 @@ def _value(rec: Record, key: str) -> Optional[float]:
 
 
 def aggregate(recs: List[Record], col: Column) -> Optional[float]:
+    """한 구간에 든 줄들의 값을 열의 방법으로 묶는다.
+
+    ``sum`` 은 합, ``rate`` 는 합을 줄들의 ``window_s`` 합으로 나눈 초당 값, ``last`` 는 마지막 줄의 값, 그 밖은
+    최댓값이다. 지표 줄의 카운터는 구간 값이라 여러 줄을 더해야 시간대의 양이 되고, 게이지는 순간 값이라 최댓값이
+    그 시간대에 가장 몰렸던 정도를 보여 준다.
+    """
     vals = [(r, v) for r in recs if (v := _value(r, col.key)) is not None]
     if not vals:
         return None
@@ -212,6 +227,7 @@ def aggregate(recs: List[Record], col: Column) -> Optional[float]:
 
 
 def fmt_num(v: Optional[float]) -> str:
+    """표에 넣을 짧은 숫자로 바꾼다. 큰 값은 k·M 으로 줄이고 값이 없으면 ``-`` 다."""
     if v is None:
         return "-"
     if abs(v) >= 1_000_000:
@@ -235,6 +251,7 @@ def render_table(headers: List[str], rows: List[List[str]]) -> List[str]:
 
 def timeline(snaps: List[Record], role: str, bucket: timedelta,
              columns: Optional[List[Column]] = None) -> List[str]:
+    """주기 지표 줄을 구간 시작 시각별로 묶어 역할의 기본 열(또는 ``--keys``)로 표를 만든다."""
     cols = columns or COLUMNS.get(role, [])
     groups: Dict[datetime, List[Record]] = defaultdict(list)
     for r in snaps:
@@ -338,6 +355,8 @@ RULES: List[Rule] = [
 
 @dataclass
 class Finding:
+    """규칙 하나가 걸린 결과다. 걸린 줄 수·처음과 마지막 시각·가장 나빴던 값과 그 시각을 담는다."""
+
     rule: Rule
     count: int = 0
     first: Optional[datetime] = None
@@ -347,6 +366,7 @@ class Finding:
 
 
 def find_bottlenecks(snaps: List[Record], role: str) -> List[Finding]:
+    """모든 주기 줄에 역할에 맞는 규칙을 대 보고 걸린 규칙을 모은다. 순서는 RULES 에 적은 순서를 따른다."""
     found: Dict[str, Finding] = {}
     for r in snaps:
         for rule in RULES:
@@ -368,6 +388,7 @@ def find_bottlenecks(snaps: List[Record], role: str) -> List[Finding]:
 # ───────── 이벤트(job_done·task_done) ─────────
 
 def slowest(events: List[Record], top: int) -> List[str]:
+    """종료 요약 줄(job_done 또는 task_done)을 소요 시간이 긴 순으로 ``top`` 개 골라 표로 만든다."""
     if not events:
         return []
     kind = events[0].kind
@@ -388,6 +409,7 @@ def slowest(events: List[Record], top: int) -> List[str]:
 
 
 def bottleneck_mix(events: List[Record]) -> str:
+    """종료 요약의 병목 판정(source·target·mixed)이 각각 몇 건인지 한 줄로 만든다."""
     counts = Counter(str(r.fields.get("bottleneck", "-")) for r in events)
     total = sum(counts.values())
     labels = {"source": "source(소스 대기)", "target": "target(GP 쓰기)", "mixed": "mixed", "-": "판정 없음"}
@@ -399,6 +421,10 @@ def bottleneck_mix(events: List[Record]) -> str:
 
 def report(by_source: Dict[str, List[Record]], *, bucket: timedelta, top: int,
            keys: Optional[List[Column]] = None) -> List[str]:
+    """서비스(지표 파일 이름)마다 시간대별 요약·병목 의심·느린 job/task 를 이어 붙인 출력 줄을 만든다.
+
+    역할은 주기 줄의 ``role`` 로 정하고, 주기 줄 없이 종료 요약만 있으면 그 종류로 짐작한다.
+    """
     out: List[str] = []
     for name in sorted(by_source):
         recs = by_source[name]
@@ -446,6 +472,7 @@ def parse_keys(text: str) -> List[Column]:
 
 
 def _parse_time(text: str) -> datetime:
+    """``--since``·``--until`` 의 시각을 읽는다. 날짜만 주면 그날 0시다."""
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return datetime.strptime(text, fmt)
@@ -465,6 +492,7 @@ def default_paths() -> List[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """명령행 인자를 정의한다."""
     parser = argparse.ArgumentParser(
         prog=os.environ.get("PROG_NAME", "bin/perf-report"),
         description="성능 지표 로그(*-perf.log)를 요약해 시간대별 추이와 병목 의심 구간을 보여 준다.",
@@ -489,6 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """지표 파일을 읽어 요약을 출력한다. 읽을 파일이나 조건에 맞는 줄이 없으면 1 을 돌려준다."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

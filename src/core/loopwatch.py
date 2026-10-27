@@ -71,6 +71,12 @@ class LoopStallWatchdog:
         return "".join(lines).rstrip()
 
     def _run(self) -> None:
+        """루프에 빈 콜백을 넣고 기준 시간 안에 처리되는지 반복해서 확인한다.
+
+        콜백이 실행되지 않으면 루프가 무언가에 막혀 있다는 뜻이므로 그 순간의 스택을 남기고, 풀릴 때까지
+        1초 간격으로 기다렸다가 얼마나 멈췄는지를 한 번 더 남긴다. 정지 하나에 경고가 두 줄만 남도록
+        풀리기 전에는 다음 확인을 하지 않는다.
+        """
         loop = self._loop
         while not self._stop.is_set():
             answered = threading.Event()
