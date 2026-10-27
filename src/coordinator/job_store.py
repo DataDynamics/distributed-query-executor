@@ -20,9 +20,13 @@ Job(작업) 객체를 보관·조회·갱신하고 취소 플래그를 관리하
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import json
 import logging
 import threading
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from core.timeutil import now_iso
@@ -32,6 +36,30 @@ from typing import Optional
 from .models import Job, JobStatus, TaskStatus
 
 logger = logging.getLogger(__name__)
+
+# job 저장소 I/O(저장·취소 플래그 조회·건수 집계) 전용 스레드 풀이다. asyncio 기본 풀은 몇 분씩
+# 걸리는 Phase 2 GP INSERT 도 함께 쓰므로, 그 풀이 차면 짧은 store 호출이 INSERT 가 끝날 때까지
+# 기다려 task 폴링이 멈춘다. store 호출은 짧고 잦으므로 따로 둔다.
+_STORE_IO_WORKERS = 8
+_store_io_pool: Optional[ThreadPoolExecutor] = None
+_store_io_pool_lock = threading.Lock()
+
+
+def _store_io_executor() -> ThreadPoolExecutor:
+    global _store_io_pool
+    with _store_io_pool_lock:
+        if _store_io_pool is None:
+            _store_io_pool = ThreadPoolExecutor(
+                max_workers=_STORE_IO_WORKERS, thread_name_prefix="store-io",
+            )
+        return _store_io_pool
+
+
+async def run_store_io(fn, *args):
+    """블로킹 store 호출을 전용 스레드 풀에서 실행한다. 로그 컨텍스트([job_id])를 이어 준다."""
+    ctx = contextvars.copy_context()
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_store_io_executor(), lambda: ctx.run(fn, *args))
 
 
 class InMemoryJobStore:
@@ -88,6 +116,14 @@ class InMemoryJobStore:
         # 객체를 그대로 들고 있으므로 별도 영속 불필요
         self._jobs[job.job_id] = job
 
+    async def asave(self, job: Job) -> None:
+        """이벤트 루프용 저장이다. 메모리 대입뿐이라 스레드로 넘기지 않고 바로 끝낸다."""
+        self.save(job)
+
+    def count_by_status(self) -> dict[str, int]:
+        """상태별 job 수를 돌려준다(``/cluster``·``/info`` 집계용)."""
+        return dict(Counter(j.status.value for j in list(self._jobs.values())))
+
     def get(self, job_id: str) -> Optional[Job]:
         """job_id로 Job을 조회한다(없으면 None)."""
         return self._jobs.get(job_id)
@@ -129,6 +165,8 @@ class FileJobStore(InMemoryJobStore):
         super().__init__()
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # asave 의 파일 쓰기를 직렬화하는 락이다. 이벤트 루프 안에서 처음 쓸 때 만든다.
+        self._alock: Optional[asyncio.Lock] = None
         self._load()
 
     def _load(self) -> None:
@@ -150,15 +188,46 @@ class FileJobStore(InMemoryJobStore):
                 logger.exception("job 레코드 복원 실패(건너뜀)")
         logger.info("job 스냅샷 복원: %d개 (%s)", len(self._jobs), self.path)
 
-    def _flush(self) -> None:
-        """현재 전체 Job 을 스냅샷 파일에 원자적으로 기록한다(저장 실패는 로깅만)."""
+    def _snapshot(self) -> str:
+        """현재 전체 Job 을 스냅샷 JSON 문자열로 만든다."""
+        return json.dumps({"jobs": [j.to_record() for j in list(self._jobs.values())]})
+
+    def _write(self, text: str) -> None:
+        """스냅샷 문자열을 임시 파일에 쓴 뒤 원자적으로 교체한다(저장 실패는 로깅만)."""
         try:
-            payload = {"jobs": [j.to_record() for j in self._jobs.values()]}
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.write_text(text, encoding="utf-8")
             tmp.replace(self.path)  # 같은 파일시스템 안에서 원자적으로 교체한다
         except Exception:
             logger.exception("job 스냅샷 저장 실패: %s", self.path)
+
+    def _flush(self) -> None:
+        """현재 전체 Job 을 스냅샷 파일에 원자적으로 기록한다(저장 실패는 로깅만)."""
+        try:
+            text = self._snapshot()
+        except Exception:
+            logger.exception("job 스냅샷 직렬화 실패: %s", self.path)
+            return
+        self._write(text)
+
+    async def asave(self, job: Job) -> None:
+        """이벤트 루프용 저장이다. 직렬화는 루프에서, 파일 쓰기만 store 전용 스레드 풀에서 한다.
+
+        직렬화를 스레드로 넘기면 루프가 그사이 Job 을 고쳐 반쯤 바뀐 스냅샷이 나올 수 있으므로
+        루프에서 문자열로 굳힌다. 쓰기는 락으로 한 번에 하나씩, 호출 순서대로 한다 — 직렬화와
+        락 획득 사이에 await 가 없고 asyncio.Lock 은 들어온 순서대로 넘겨주므로, 먼저 만든
+        스냅샷이 나중 스냅샷을 덮어쓰는 일이 없다.
+        """
+        super().save(job)
+        try:
+            text = self._snapshot()
+        except Exception:
+            logger.exception("job 스냅샷 직렬화 실패: %s", self.path)
+            return
+        if self._alock is None:
+            self._alock = asyncio.Lock()
+        async with self._alock:
+            await run_store_io(self._write, text)
 
     def add(self, job: Job) -> None:
         super().add(job)
@@ -235,6 +304,9 @@ class SqlJobStore:
         self.dsn = dsn
         self.table = table
         self.coordinator_id = coordinator_id
+        # asave 가 job 별로 쓰기를 직렬화하는 락과 그 락을 기다리는 호출 수다. 대기자가 없으면 지운다.
+        self._job_locks: dict[str, asyncio.Lock] = {}
+        self._job_lock_users: dict[str, int] = {}
 
     def _conn(self):
         """새 DB 연결을 연다.
@@ -256,7 +328,10 @@ class SqlJobStore:
         ``ON CONFLICT (job_id) DO UPDATE`` 로 신규 삽입과 갱신을 한 문장으로 처리한다.
         status·cancel_requested는 별도 컬럼에도 함께 기록해 빠른 조회/취소에 대비한다.
         """
-        data = json.dumps(job.to_record())
+        self._upsert(job.job_id, job.status.value, job.cancel_requested, json.dumps(job.to_record()))
+
+    def _upsert(self, job_id: str, status: str, cancel_requested: bool, data: str) -> None:
+        """직렬화가 끝난 Job 스냅샷 한 건을 UPSERT 한다(블로킹)."""
         sql = (
             f"INSERT INTO {self.table} "
             "(job_id, coordinator_id, status, cancel_requested, updated_at, data) "
@@ -269,10 +344,35 @@ class SqlJobStore:
             with conn.cursor() as cur:
                 cur.execute(
                     sql,
-                    (job.job_id, self.coordinator_id, job.status.value,
-                     job.cancel_requested, data),
+                    (job_id, self.coordinator_id, status, cancel_requested, data),
                 )
             conn.commit()
+
+    async def asave(self, job: Job) -> None:
+        """이벤트 루프용 저장이다. 직렬화는 루프에서, DB 연결과 UPSERT 는 store 전용 스레드 풀에서 한다.
+
+        ``save`` 를 루프에서 그대로 부르면 연결을 여는 동안 루프 전체가 멈춰 헬스 체크와 task
+        폴링이 timeout 난다. 직렬화를 스레드로 넘기면 루프가 그사이 Job 을 고쳐 반쯤 바뀐
+        스냅샷이 나올 수 있으므로 문자열로 굳힌 뒤 넘긴다. 같은 job 의 쓰기는 job 별 락으로
+        호출 순서대로 한다. 직렬화와 락 획득 사이에 await 가 없고 asyncio.Lock 은 들어온
+        순서대로 넘겨주므로, 먼저 만든 스냅샷이 나중 스냅샷을 덮어쓰지 않는다.
+        """
+        job_id = job.job_id
+        args = (job_id, job.status.value, job.cancel_requested, json.dumps(job.to_record()))
+        lock = self._job_locks.get(job_id)
+        if lock is None:
+            lock = self._job_locks[job_id] = asyncio.Lock()
+        self._job_lock_users[job_id] = self._job_lock_users.get(job_id, 0) + 1
+        try:
+            async with lock:
+                await run_store_io(self._upsert, *args)
+        finally:
+            left = self._job_lock_users[job_id] - 1
+            if left:
+                self._job_lock_users[job_id] = left
+            else:
+                del self._job_lock_users[job_id]
+                del self._job_locks[job_id]
 
     def get_by_idempotency_key(self, key: str) -> Optional[Job]:
         """멱등 키로 기존 Job 을 조회한다(JSONB ``data->>'idempotency_key'`` 매칭).
@@ -355,6 +455,14 @@ class SqlJobStore:
             jobs.append(Job.from_record(data))
         return jobs
 
+    def count_by_status(self) -> dict[str, int]:
+        """상태별 job 수를 돌려준다. data(JSONB)를 읽지 않고 status 컬럼만 집계한다."""
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT status, count(*) FROM {self.table} GROUP BY status")
+                rows = cur.fetchall()
+        return {r[0]: int(r[1]) for r in rows}
+
     def list_owned(self) -> list:
         """(job_id, status, coordinator_id) 목록을 돌려준다(HA orphan 정합용).
 
@@ -404,6 +512,23 @@ class SqlJobStore:
 
 # 기존 import 를 그대로 쓸 수 있도록 남겨 둔 하위 호환 별칭이다.
 JobStore = InMemoryJobStore
+
+
+async def save_job(store, job: Job) -> None:
+    """이벤트 루프에서 Job 을 저장한다. ``asave`` 가 없는 저장소(테스트 더블 등)는 ``save`` 를 부른다."""
+    saver = getattr(store, "asave", None)
+    if saver is not None:
+        await saver(job)
+    else:
+        store.save(job)
+
+
+def count_jobs_by_status(store) -> dict[str, int]:
+    """상태별 job 수를 돌려준다(블로킹). ``count_by_status`` 가 없는 저장소는 목록으로 센다."""
+    counter = getattr(store, "count_by_status", None)
+    if counter is not None:
+        return counter()
+    return dict(Counter(j.status.value for j in store.list()))
 
 
 def build_job_store(settings) -> InMemoryJobStore | SqlJobStore:

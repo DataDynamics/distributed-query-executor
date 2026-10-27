@@ -144,7 +144,7 @@ async def test_dispatcher_observes_store_cancel_flag():
     job = _job(status=JobStatus.RUNNING)
     store.add(job)
     store.request_cancel(job.job_id)
-    assert disp._cancel_observed(job) is True
+    assert await disp._cancel_observed(job) is True
 
 
 # ───────────────────── executor self-report ─────────────────────

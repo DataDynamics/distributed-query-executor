@@ -571,6 +571,27 @@ grep MockBackend $L/query-executor-server-*-warn.log
 `impala.host` 만 비어 있는 경우는 다르다. 이때는 실제 백엔드로 뜨되 소스를 읽을 수 없어 `statement`
 모드만 동작하며, 기동 로그에 `impala=(미설정 → statement 모드만)` 으로 남는다.
 
+executor 프로세스와 포트가 멀쩡하고 CPU·동시 task 에도 여유가 있는데 `executor ... 다운 감지` 나
+`task ... 폴링 실패` 가 가끔 나온다면, executor 가 아니라 **coordinator 의 이벤트 루프가 멈춘 것**을
+먼저 의심한다. coordinator 는 단일 워커라 헬스 체크·task 폴링·API 응답을 이벤트 루프 하나로 처리하므로,
+그 루프에서 블로킹 호출이 돌면 그동안 모든 통신이 멈추고 걸어 둔 timeout 이 지나 연결이 끊긴 것처럼
+보인다. 기다리는 동안 CPU 는 놀고 있어 자원 지표에는 나타나지 않는다. 두 서비스는 루프가
+`logging.loop_stall_ms`(기본 500ms) 넘게 응답하지 않으면 그 순간 루프 스레드가 실행 중인 코드 위치를
+남기므로, 같은 시각의 이 경고를 찾으면 무엇이 루프를 막았는지 바로 보인다.
+
+```bash
+grep -A30 '이벤트 루프가' $L/query-coordinator-server-warn.log
+# 이벤트 루프가 500ms 넘게 응답하지 않음 — 루프 스레드 실행 위치:
+#   File ".../coordinator/job_store.py", line ..., in _conn
+# ...
+# 이벤트 루프 정지 해소 — 약 3120ms 동안 응답 없음
+```
+
+job 저장·취소 플래그 조회·`/cluster` 집계처럼 예전에 루프를 막던 store 호출은 전용 스레드 풀로 옮겨
+두었다. 그래도 이 경고가 나온다면 스택이 가리키는 호출을 개발자에게 전달한다. 실행 중인 job 의 취소
+요청은 공유 store 에서 job 단위로 `coordinator.cancel_check_interval_s`(기본 2초)에 한 번 확인하므로,
+다른 coordinator 가 받은 취소는 그만큼 늦게 감지될 수 있다.
+
 ### local_stage 와 s3_stage 의 실패
 
 이 두 모드는 2단계로 돌기 때문에 실패 지점이 더 나뉜다.

@@ -39,6 +39,7 @@ from core.phases import close_open_phases
 from . import stage as stage_sql
 from .config import Settings
 from .history import JobHistoryRepository
+from .job_store import run_store_io, save_job
 from .models import Job, JobStatus, Task, TaskStatus
 
 
@@ -229,6 +230,9 @@ class _DispatcherBase:
         # executor_url 별 GP 세그먼트 호스트명 캐시다. gp_hostname 은 정적이라 URL 마다 한 번만
         # 조회하며 local_stage 의 file:// URI 를 조립할 때 쓴다. HttpDispatcher 가 /metrics 로 채운다.
         self._gp_host_cache: dict = {}
+        # job_id 별로 공유 store 의 취소 플래그를 마지막으로 조회한 시각(monotonic)이다.
+        # _cancel_observed 가 조회 빈도를 줄이는 데 쓰고, job 이 끝나면 run() 이 지운다.
+        self._cancel_checked_at: dict[str, float] = {}
 
     def _get_stage_backend(self):
         """local_stage Phase 2 용 GP 백엔드를 lazy 로 생성한다(순수 GP 작업, Impala 불필요).
@@ -241,13 +245,15 @@ class _DispatcherBase:
             self._stage_backend = build_backend(self.settings)
         return self._stage_backend
 
-    def _save(self, job: Job) -> None:
+    async def _save(self, job: Job) -> None:
         # store 가 주입된 경우에만 영속화한다(인메모리 모드면 no-op).
         # 저장 실패가 작업 진행을 막아선 안 되므로 예외는 로깅만 하고 삼킨다.
+        # SqlJobStore 는 저장마다 DB 연결을 새로 열기 때문에 이벤트 루프에서 그대로 부르면 그동안
+        # 헬스 체크·task 폴링이 모두 멈춘다. save_job 이 DB 쓰기를 스레드로 넘긴다.
         if self.store is None:
             return
         try:
-            self.store.save(job)
+            await save_job(self.store, job)
         except Exception:
             logger.exception("job %s 저장 실패", job.job_id)
 
@@ -267,26 +273,39 @@ class _DispatcherBase:
             target_table=job.target_table,
         )
 
-    def _cancel_observed(self, job: Job) -> bool:
+    async def _cancel_observed(self, job: Job) -> bool:
         """이 job에 취소가 요청됐는지 확인한다(로컬 플래그 + 공유 store 양쪽).
 
         멀티 coordinator 환경에서는 취소 API를 받은 coordinator와 job을 실제로 실행하는
         coordinator가 다를 수 있다. 그래서 로컬 플래그뿐 아니라 공유 store 의 취소 요청도
         조회하고, 발견하면 로컬 플래그에도 반영(메모이즈)해 이후 검사를 빠르게 한다.
 
+        이 함수는 task 폴링마다 불리므로 store 를 매번 조회하면 task 수 × 폴링 횟수만큼 DB 연결이
+        생긴다. 그래서 store 조회는 job 하나당 ``cancel_check_interval_s`` 초에 한 번으로 줄이고,
+        그 사이에는 로컬 플래그만 본다(같은 coordinator 가 받은 취소는 로컬 플래그로 즉시 보인다).
+        조회는 이벤트 루프를 막지 않도록 store 전용 스레드 풀에서 한다. 조회 시각을 await 전에 기록하므로 같은
+        job 의 task 들이 동시에 들어와도 한 번만 조회한다.
+
         store 조회가 실패하더라도 취소 감지 실패가 실행을 중단시켜선 안 되므로, 예외는
         로깅만 하고 "취소 아님(False)"으로 간주해 계속 진행한다.
         """
         if job.cancel_requested:
             return True
-        if self.store is not None:
-            try:
-                if self.store.is_cancel_requested(job.job_id):
-                    job.cancel_requested = True
-                    return True
-            except Exception:
-                logger.exception("취소 플래그 조회 실패 job=%s", job.job_id)
-        return False
+        if self.store is None:
+            return False
+        now = time.monotonic()
+        last = self._cancel_checked_at.get(job.job_id)
+        interval = self.settings.cancel_check_interval_s
+        if last is not None and interval > 0 and now - last < interval:
+            return False
+        self._cancel_checked_at[job.job_id] = now
+        try:
+            if await run_store_io(self.store.is_cancel_requested, job.job_id):
+                job.cancel_requested = True
+                return True
+        except Exception:
+            logger.exception("취소 플래그 조회 실패 job=%s", job.job_id)
+        return job.cancel_requested
 
     async def _execute(self, job: Job) -> None:
         """하위 클래스 구현 지점: job.tasks 를 실제로 디스패치/실행한다(추상 메서드)."""
@@ -368,7 +387,7 @@ class _DispatcherBase:
             for t in job.tasks:
                 t.status = TaskStatus.FAILED
                 t.error = msg
-            self._save(job)
+            await self._save(job)
             return False
 
         # 배분 반영: 각 파일(task)의 담당 executor 와 로컬 경로를 확정한다.
@@ -383,7 +402,7 @@ class _DispatcherBase:
             "job %s: local_stage 파일 예산 배분 — %d파일, 호스트별=%s",
             job.job_id, len(plan), per_host,
         )
-        self._save(job)
+        await self._save(job)
         return True
 
     async def _run_stage_load(self, job: Job) -> None:
@@ -399,7 +418,7 @@ class _DispatcherBase:
         """
         if job.exec_mode != "local_stage":
             return
-        if self._cancel_observed(job):
+        if await self._cancel_observed(job):
             return
         if any(t.status == TaskStatus.FAILED for t in job.tasks):
             logger.warning(
@@ -439,7 +458,7 @@ class _DispatcherBase:
                     if job.tasks:
                         job.tasks[0].status = TaskStatus.FAILED
                         job.tasks[0].error = msg
-                    self._save(job)
+                    await self._save(job)
                     return
 
         # coordinator 가 GP master 에 실행할 SQL 을 조립한다(coordinator/stage.py — 순수 함수).
@@ -484,11 +503,11 @@ class _DispatcherBase:
             if job.tasks:
                 job.tasks[0].status = TaskStatus.FAILED
                 job.tasks[0].error = job.tasks[0].error or f"Phase 2 적재 실패: {exc}"
-            self._save(job)
+            await self._save(job)
             return
         # Phase 3 에서 각 세그먼트 호스트의 로컬 CSV 를 정리한다(디스패처마다 따로 구현한다).
         await self._cleanup_stage(job)
-        self._save(job)
+        await self._save(job)
 
     async def _run_s3_load(self, job: Job) -> None:
         """s3_stage Phase 2 다. 모든 업로드가 끝난 배리어 뒤에 GP PXF 외부테이블로 적재하고 target 으로 INSERT 한다.
@@ -504,7 +523,7 @@ class _DispatcherBase:
         """
         if job.exec_mode != "s3_stage":
             return
-        if self._cancel_observed(job):
+        if await self._cancel_observed(job):
             return
         if any(t.status == TaskStatus.FAILED for t in job.tasks):
             logger.warning(
@@ -568,11 +587,11 @@ class _DispatcherBase:
             if job.tasks:
                 job.tasks[0].status = TaskStatus.FAILED
                 job.tasks[0].error = job.tasks[0].error or f"Phase 2 적재 실패: {exc}"
-            self._save(job)
+            await self._save(job)
             return
         # Phase 3 에서 S3 스테이징 객체를 정리한다(디스패처마다 따로 구현한다).
         await self._cleanup_s3(job)
-        self._save(job)
+        await self._save(job)
 
     async def _cleanup_stage(self, job: Job) -> None:
         """local_stage Phase 3 로 로컬 CSV 를 정리한다. 디스패처마다 따로 구현하며 기본은 아무 일도 하지 않는다.
@@ -612,7 +631,7 @@ class _DispatcherBase:
             try:
                 # 슬롯이 빌 때까지 대기. 그동안 job 은 PENDING 으로 노출된다.
                 job.status = JobStatus.PENDING
-                self._save(job)
+                await self._save(job)
                 # 슬롯이 가득 차 대기하게 되면 그 사실을 남긴다(admission/큐 병목 진단용).
                 if self.admission.inflight > self.admission.max_running > 0:
                     logger.info(
@@ -622,16 +641,16 @@ class _DispatcherBase:
                     )
                 async with self.admission.slot():
                     # 대기하는 사이에 취소됐다면 실행하지 않고 곧바로 종료 처리한다.
-                    if self._cancel_observed(job):
+                    if await self._cancel_observed(job):
                         logger.info("대기 중 취소 감지 → 실행 건너뜀(CANCELLED)")
                         finalize_job(job)
                         job.finished_at = _now_iso()
-                        self._save(job)
+                        await self._save(job)
                         await self.history.record(job)
                         return job.job_id
                     job.status = JobStatus.RUNNING
                     job.started_at = _now_iso()
-                    self._save(job)
+                    await self._save(job)
                     await self.history.record(job)  # 시작 이력을 남긴다
                     # 실행 시작을 INFO 로 남긴다(로그 파일만 봐도 언제 어떤 형태로 떴는지 파악).
                     t0 = time.monotonic()
@@ -653,7 +672,7 @@ class _DispatcherBase:
                         # _execute 가 예외로 끝나도 최종 상태/종료시각/이력은 반드시 남긴다.
                         finalize_job(job)
                         job.finished_at = _now_iso()
-                        self._save(job)
+                        await self._save(job)
                         await self.history.record(job)  # 종료 이력을 남긴다
                         # 종료 요약(status·완료수·적재행수·소요시간)을 한 줄로. FAILED/PARTIAL 은
                         # 사유 파악이 급하므로 WARNING 으로, 정상 종료는 INFO 로 남긴다.
@@ -674,6 +693,7 @@ class _DispatcherBase:
             finally:
                 # PENDING 대기 중 취소든 정상 종료든 예외든, 모든 경로에서 슬롯을 반납한다.
                 self.admission.release()
+                self._cancel_checked_at.pop(job.job_id, None)
             return job.job_id
 
 
@@ -729,9 +749,9 @@ class HttpDispatcher(_DispatcherBase):
         # 디스패치 동시성 세마포어로 한 번에 떠 있는 task 수를 제한한다.
         async with self._sem:
             # 슬롯을 잡기까지 기다리는 사이에 취소됐을 수 있으므로 실행 직전에 다시 확인한다.
-            if self._cancel_observed(job):
+            if await self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
-                self._save(job)
+                await self._save(job)
                 return
             # 공유 예약: 실행 동안 배정 executor 를 예약(다른 coordinator 의 선택에 반영).
             # 배정 executor 기준으로 예약하고, 종료 시 해제한다(근사 — 실제 self-report 가 보정).
@@ -751,7 +771,7 @@ class HttpDispatcher(_DispatcherBase):
                 )
                 task.status = TaskStatus.FAILED
                 task.error = str(exc)
-                self._save(job)
+                await self._save(job)
             finally:
                 if reserved_url:
                     await asyncio.to_thread(self.reservations.release, reserved_url)
@@ -772,9 +792,9 @@ class HttpDispatcher(_DispatcherBase):
             started = False
             ambiguous = False
             for attempt in range(self.settings.task_max_retries + 1):
-                if self._cancel_observed(job):
+                if await self._cancel_observed(job):
                     task.status = TaskStatus.CANCELLED
-                    self._save(job)
+                    await self._save(job)
                     return
                 task.attempt += 1
                 task.executor_url = url  # 지금 시도 중인 executor 를 task 에 반영한다
@@ -794,7 +814,7 @@ class HttpDispatcher(_DispatcherBase):
                         status = exc.response.status_code
                         if 400 <= status < 500 and status != 429:
                             task.status = TaskStatus.FAILED
-                            self._save(job)
+                            await self._save(job)
                             return
                         definite_rejection = status in (429, 503)
                     else:
@@ -802,7 +822,7 @@ class HttpDispatcher(_DispatcherBase):
                             exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
                         )
                     ambiguous = ambiguous or not definite_rejection
-                    self._save(job)
+                    await self._save(job)
                     logger.warning(
                         "task %s 시작 실패(executor=%s, 시도=%s/%s): %s",
                         task.task_id, url, attempt + 1,
@@ -817,7 +837,7 @@ class HttpDispatcher(_DispatcherBase):
                 if ambiguous:
                     task.status = TaskStatus.FAILED
                     task.error = f"executor 접수 여부 불명확 — 원격 상태 확인 필요: {last_err}"
-                    self._save(job)
+                    await self._save(job)
                     return
                 if idx + 1 < len(order):
                     logger.warning(
@@ -828,7 +848,7 @@ class HttpDispatcher(_DispatcherBase):
             # 2) 폴링 단계: 시작 성공. 종료 상태까지 추적한다.
             try:
                 await self._poll(client, job, task)
-                self._save(job)
+                await self._save(job)
                 return
             except _RETRYABLE as exc:
                 last_err = exc
@@ -838,7 +858,7 @@ class HttpDispatcher(_DispatcherBase):
                 )
                 task.status = TaskStatus.FAILED
                 task.error = f"폴링 실패: {exc}"
-                self._save(job)
+                await self._save(job)
                 return
 
         # 후보와 재시도를 모두 소진했으므로 최종 실패로 처리한다.
@@ -848,7 +868,7 @@ class HttpDispatcher(_DispatcherBase):
             "task %s 모든 executor 후보(%d개) 소진 — 최종 실패: %s",
             task.task_id, len(order), task.error,
         )
-        self._save(job)
+        await self._save(job)
 
     async def _start_task(
         self, client: httpx.AsyncClient, job: Job, task: Task, url: str
@@ -897,7 +917,7 @@ class HttpDispatcher(_DispatcherBase):
         transient = 0
         while task.status not in _TERMINAL:
             # 매 폴링마다 취소를 확인해, 취소가 감지되면 더 기다리지 않고 즉시 빠져나온다.
-            if self._cancel_observed(job):
+            if await self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
                 return
             # 폴링 간격만큼 쉬었다가 다음 상태를 조회한다. executor 에 과도한 부하를 주지 않기 위해서다.
@@ -1081,7 +1101,7 @@ class LocalDispatcher(_DispatcherBase):
     async def _run_task(self, job: Job, task: Task) -> None:
         async with self._sem:
             # 슬롯을 기다리는 사이에 취소됐을 수 있으므로 실행 직전에 확인한다.
-            if self._cancel_observed(job):
+            if await self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
                 return
             backend = self._get_backend()
@@ -1180,7 +1200,7 @@ class LocalDispatcher(_DispatcherBase):
                 # 실패한 단계를 지금 시각으로 마감한다. 그래야 대시보드의 소요시간이 계속 늘지 않는다.
                 close_open_phases(task.phases)
             finally:
-                self._save(job)
+                await self._save(job)
 
     async def cancel(self, job: Job) -> None:
         # 로컬 모드: 원격 전파가 없으므로 플래그를 세우고 아직 진행 중인 task를

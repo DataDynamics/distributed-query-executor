@@ -210,6 +210,8 @@ WHERE dt IN ('2026-01-01','2026-01-02', ... ,'2026-06-25')   -- partition_column
 
 I/O 방식: **Coordinator**는 `httpx.AsyncClient` + `asyncio.gather`로 executor를 비동기 호출한다. **Executor 내부**의 impyla/psycopg는 동기 라이브러리라, 그대로 부르면 이벤트 루프가 멈추므로 `run_in_executor(thread_pool, ...)`로 감싸 별도 스레드에서 돌린다.
 
+coordinator 의 job 저장소 호출도 같은 원칙을 따른다. `SqlJobStore` 는 호출마다 DB 연결을 새로 열기 때문에, 상태 저장(`_save`)과 폴링마다의 취소 플래그 조회를 루프에서 동기로 부르면 그동안 헬스 체크와 task 폴링이 모두 멈춰 executor 가 끊긴 것처럼 보였다. 그래서 저장은 `asave` 가 직렬화만 루프에서 하고 DB 쓰기는 스레드로 넘기며(job 별 `asyncio.Lock` 으로 호출 순서 유지), 취소 플래그는 job 단위로 `coordinator.cancel_check_interval_s` 에 한 번만 조회한다. `/cluster`·`/info` 의 job 집계는 전체 job 복원 대신 `count_by_status`(SQL `GROUP BY status`)로 센다. 이 store 호출들은 asyncio 기본 풀이 아니라 store 전용 스레드 풀(`run_store_io`)에서 도는데, 기본 풀은 몇 분씩 걸리는 Phase 2 GP INSERT 도 쓰므로 그 풀이 차면 짧은 store 호출이 INSERT 뒤에서 기다리기 때문이다. 남은 블로킹을 찾기 위해 두 서비스는 `core/loopwatch.py` 의 감시 스레드로 루프가 `logging.loop_stall_ms` 넘게 응답하지 않으면 그 순간 루프 스레드의 스택을 WARNING 으로 남긴다.
+
 > **적정값 산정**: 실제 ceiling은 coordinator 코어가 아니라 **Greenplum 동시 COPY 허용량·Impala 동시
 > 쿼리 슬롯·executor 풀 합**이다. downstream 용량에 맞춰 `executor.max_concurrent_tasks`를 분배하고
 > `max_dispatch_concurrency`는 그 이상으로 두어 coordinator가 병목이 되지 않게 한다(→ [PERFORMANCE.md](PERFORMANCE.md)).

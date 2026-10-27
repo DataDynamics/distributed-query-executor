@@ -38,6 +38,7 @@ from core.logging import job_log_context, request_id_var
 from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
 from core.sqllog import log_sql
+from core.loopwatch import start_loop_watchdog
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
@@ -231,6 +232,9 @@ def create_app(
         # 종료 시 드레이닝(진행 중 task 안전 완료 대기) 후 리포터를 멈춘다.
         if settings.executor_self_report:
             await reporter.start()
+        # 이벤트 루프가 블로킹 호출로 멈추면 coordinator 의 헬스 체크·폴링이 timeout 나므로,
+        # 멈춘 순간의 스택을 남긴다.
+        watchdog = start_loop_watchdog(getattr(settings, "log_loop_stall_ms", 0))
         try:
             yield
         finally:
@@ -249,8 +253,10 @@ def create_app(
                         "드레이닝 타임아웃(%ss): 미완료 task %d개 — 종료 진행",
                         timeout, len(still),
                     )
-            # 3) self-report 루프를 정리한다.
+            # 3) self-report 루프와 정지 감시를 정리한다.
             await reporter.stop()
+            if watchdog is not None:
+                watchdog.stop()
 
     app = FastAPI(
         lifespan=lifespan,

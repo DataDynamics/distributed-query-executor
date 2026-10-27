@@ -61,6 +61,9 @@ logging:
     format: ${log.sql.format:multiline}           # multiline(줄바꿈·들여쓰기 보존) | oneline(한 줄로 접기)
     max_length: ${log.sql.max_length:20000}       # SQL 한 건의 최대 기록 길이(초과분 절단 표기)
     params: ${log.sql.params:true}                # 바인드 파라미터(파티션 값 등) 동반 기록
+  # 이벤트 루프 정지 감시(core.loopwatch). 루프가 이 시간 넘게 응답하지 않으면 그 순간 루프
+  # 스레드가 실행 중인 코드 위치(스택)를 WARNING 으로 남긴다. 헬스 체크·폴링 timeout 의 원인 추적용.
+  loop_stall_ms: ${log.loop_stall_ms:500}         # 정지로 볼 기준(ms, 0=감시 끔)
 
 # ───────── Coordinator ─────────
 coordinator:
@@ -76,6 +79,7 @@ coordinator:
   max_dispatch_concurrency: ${coordinator.max_dispatch_concurrency:32}   # 동시 task 디스패치 상한(코루틴 동시성)
   stage_unique_staging: ${coordinator.stage_unique_staging:true}   # stage_insert: staging 테이블명에 task_id 접미사(task별 고유) + task 종료 시 DROP. 풀 재사용 시 TEMP "already exists" 충돌 방지
   poll_interval_s: ${coordinator.poll_interval_s:1.0}     # task 상태 폴링 간격(초)
+  cancel_check_interval_s: ${coordinator.cancel_check_interval_s:2.0}  # 공유 store 의 취소 요청 확인 간격(초, job 단위, 0=폴링마다)
   task_timeout_s: ${coordinator.task_timeout_s:3600}      # task HTTP 전체(read) 타임아웃(초)
   # executor 장애 대응(동일 노드 재시도, 미접수가 확실할 때만 failover)
   task_connect_timeout_s: ${coordinator.task_connect_timeout_s:5.0}  # 접속 전용 타임아웃(초). 죽은 executor 빠르게 실패

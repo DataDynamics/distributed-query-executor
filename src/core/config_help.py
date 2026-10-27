@@ -191,6 +191,12 @@ FIELD_HELP: dict[str, str] = {
         "바인드 파라미터(파티션 값 등)를 SQL 과 함께 남긴다. 어느 값 범위를 처리했는지 알려면 켜 두는 편이 "
         "좋고, 값 자체가 민감하다면 끈다."
     ),
+    "log.loop_stall_ms": (
+        "이벤트 루프가 이 시간 넘게 응답하지 않으면 그 순간 루프 스레드가 실행 중인 코드 위치(스택)를 "
+        "WARNING 으로 남긴다. coordinator 와 executor 는 단일 워커라 루프가 멈추면 헬스 체크와 폴링이 "
+        "모두 멈추고, CPU 는 놀고 있어 자원 지표로는 보이지 않는다. executor 다운 감지나 폴링 실패가 "
+        "보이면 같은 시각의 이 경고부터 찾는다. 0 이면 끄는데, 감시 비용이 거의 없으므로 켜 둔다."
+    ),
     "log.http.enabled": (
         "HTTP 요청과 응답을 남긴다. 요청 하나가 끝나면 머리줄과 본문을 레코드 하나로 남기며, 어느 요청을 "
         "어느 레벨로 남길지는 log.http.level 과 log.http.read_level 이 정한다. 끄더라도 X-Request-ID "
@@ -299,6 +305,12 @@ FIELD_HELP: dict[str, str] = {
     "coordinator.poll_interval_s": (
         "디스패치한 task 의 상태를 얼마나 자주 물어볼지 정한다. 짧으면 진행률이 매끄럽지만 task 가 "
         "많을수록 executor 를 그만큼 자주 두드리고, 길면 종료 감지가 그만큼 늦어진다."
+    ),
+    "coordinator.cancel_check_interval_s": (
+        "실행 중인 job 의 취소 요청을 공유 store(jobs 테이블)에서 얼마나 자주 확인할지 정한다. task 폴링마다 "
+        "확인하면 task 수만큼 DB 연결이 생기므로 job 단위로 이 간격에 한 번만 본다. 같은 coordinator 가 받은 "
+        "취소는 곧바로 반영되고, 다른 coordinator 가 받은 취소만 최대 이 시간만큼 늦게 감지된다. 0 이면 "
+        "폴링마다 확인하는 예전 동작이라 DB 부하가 커진다."
     ),
 
     # ── 멀티 coordinator(HA) ──────────────────────────────────────────────

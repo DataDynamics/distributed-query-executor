@@ -248,6 +248,9 @@ class Settings:
         self.log_sql_max_length: int = int(_get_nested("logging", "sql", "max_length", 20000))
         # 바인드 파라미터를 함께 남길지 정한다(예: overwrite_partitions 선삭제의 파티션 값).
         self.log_sql_params: bool = _to_bool(_get_nested("logging", "sql", "params", True))
+        # 이벤트 루프가 이 시간(ms) 넘게 응답하지 않으면 루프 스레드의 실행 위치를 WARNING 으로 남긴다.
+        # 0 이면 감시를 끈다(core.loopwatch).
+        self.log_loop_stall_ms: int = int(_get("logging", "loop_stall_ms", 500))
 
         self.config_dir: Path = _CONFIG_DIR
         self.config_yaml_path: Path = _yaml_path
@@ -316,6 +319,11 @@ class Settings:
         )
         self.poll_interval_s: float = float(
             _get("coordinator", "poll_interval_s", 1.0)
+        )
+        # 실행 중인 job 의 취소 요청을 공유 store 에서 확인하는 최소 간격(초)이다. task 폴링마다
+        # DB 를 치지 않도록 job 단위로 묶는다. 0 이면 폴링마다 확인한다(예전 동작).
+        self.cancel_check_interval_s: float = float(
+            _get("coordinator", "cancel_check_interval_s", 2.0)
         )
         self.task_timeout_s: float = float(
             _get("coordinator", "task_timeout_s", 3600)

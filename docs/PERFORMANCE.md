@@ -177,6 +177,7 @@ coordinator 가 task 진행을 확인하고(폴링), 응답이 없을 때 얼마
 | 파라미터 | 기본 | 의미 |
 |---|---|---|
 | `coordinator.poll_interval_s` | 1.0 | task 상태 폴링 간격(초). 작을수록 반응 빠름·부하↑ |
+| `coordinator.cancel_check_interval_s` | 2.0 | 공유 store 의 취소 요청 확인 간격(초, job 단위). `0` 이면 폴링마다 확인해 DB 부하↑ |
 | `coordinator.task_timeout_s` | 3600 | task HTTP 전체(read) 타임아웃. 가장 긴 분할 task 예상시간보다 길게 |
 | `coordinator.task_connect_timeout_s` | 5.0 | **접속** 전용 타임아웃. 죽은 executor 를 빨리 실패시켜 failover 가속 |
 | `coordinator.task_max_retries` | 2 | 연결 실패 시 같은 executor 재시도 횟수(지수 백오프) |

@@ -425,8 +425,15 @@ redoc_url=None)` 로 CDN 기반 기본 docs 를 끄고 이 헬퍼로 다시 등�
 처리량 확장은 executor 인스턴스 수로 한다.
 
 비동기 디스패처에서 블로킹 DB 호출(impyla/psycopg)은 `run_in_executor` 나 `to_thread` 로 감싸
-이벤트 루프를 막지 않는다. 새 기능에는 `tests/` 에 테스트를 추가하되, 실제 DB 없이
-`MockBackend`/`FakeRunner` 로 검증한다.
+이벤트 루프를 막지 않는다. **job store 도 예외가 아니다.** async 코드에서는 `store.save` 대신
+`save_job`(`asave` — 직렬화는 루프, 쓰기는 스레드, job 별 락으로 순서 유지)을, 그 밖의 store·
+status_repo 호출은 `run_store_io`(store 전용 스레드 풀)를 쓴다. asyncio 기본 풀은 Phase 2 GP INSERT 가
+몇 분씩 점유하므로 짧은 store 호출을 거기 넣으면 INSERT 뒤에서 기다린다. 집계에는 `store.list()` 대신
+`count_jobs_by_status` 를 쓴다(전체 job JSONB 복원은 job 이 쌓일수록 수 초가 걸린다). 루프가 멈추면
+헬스 체크·폴링이 timeout 나 executor 가 끊긴 것처럼 보이는데, `core/loopwatch.py` 가
+`logging.loop_stall_ms`(기본 500ms)를 넘긴 순간의 루프 스레드 스택을 WARNING 으로 남긴다.
+
+새 기능에는 `tests/` 에 테스트를 추가하되, 실제 DB 없이 `MockBackend`/`FakeRunner` 로 검증한다.
 
 **메타 테이블은 모두 스키마 한정된다.** jobs·job_history·task_history·executor_status·
 executor_health_metrics·coordinator_status·executor_reservation 의 테이블명은 `db.schema`(기본

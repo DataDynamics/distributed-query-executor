@@ -51,7 +51,10 @@ from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .executor_status import ExecutorStatusRepository
 from .ha import CoordinatorHeartbeat, reconcile_orphaned_jobs
 from .history import JobHistoryRepository, QueryRunHistoryRepository
-from .job_store import JobStore, build_job_store, reconcile_interrupted_jobs
+from core.loopwatch import start_loop_watchdog
+from .job_store import (
+    JobStore, build_job_store, count_jobs_by_status, reconcile_interrupted_jobs, run_store_io, save_job,
+)
 from .models import (
     CreateJobRequest,
     CreateJobResponse,
@@ -598,6 +601,8 @@ def create_app(
         # (2) 헬스 모니터를 켠다. status_repo 가 있으면 executor self-report 모드라 폴링 모니터는
         # 보통 띄우지 않지만, 헬스 기반 executor 선택이 켜져 있으면 선택용 부하 뷰를 위해 폴링한다.
         reconcile_interrupted_jobs(store)
+        # 이벤트 루프가 블로킹 호출로 멈추면 헬스 체크·폴링이 timeout 나므로, 멈춘 순간의 스택을 남긴다.
+        watchdog = start_loop_watchdog(getattr(settings, "log_loop_stall_ms", 0))
         # 모니터는 (a) self-report 가 아니어서 /executors 용 폴링이 필요하거나,
         # (b) 헬스 기반 선택이 켜졌고 그 부하 소스가 monitor 일 때만 띄운다.
         # HA self-report(_use_shared) 면 공유 테이블을 읽으므로 폴링이 불필요하다.
@@ -617,6 +622,8 @@ def create_app(
                     pass
             if need_monitor:
                 await monitor.stop()
+            if watchdog is not None:
+                watchdog.stop()
 
     async def _ha_loop() -> None:
         # 주기적으로 자기 생존을 heartbeat 하고, 죽은 coordinator 소유의 비종료 job 을
@@ -1070,7 +1077,8 @@ def create_app(
         "CANCELLED 로 표시한다. 이미 종료된 작업은 409.",
     )
     async def cancel_job(job_id: str):
-        job = store.get(job_id)
+        # store 호출은 DB 를 칠 수 있으므로(SqlJobStore) 이벤트 루프를 막지 않게 store 전용 스레드 풀에서 한다.
+        job = await run_store_io(store.get, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
         # 이미 종료(완료/실패/취소)된 작업은 되돌릴 수 없으므로 409로 거절한다.
@@ -1084,13 +1092,13 @@ def create_app(
         # 멀티 coordinator 환경 대비: 공유 store 에 취소 플래그를 남겨,
         # 이 작업을 실제로 실행 중인(=소유한) 다른 coordinator의 runner도 폴링 중에
         # 취소를 감지하도록 한다. 로컬 플래그도 함께 세운다.
-        store.request_cancel(job_id)
+        await run_store_io(store.request_cancel, job_id)
         job.cancel_requested = True
         # 이 coordinator가 소유한 경우엔 즉시 취소가 일어나고 진행 중 task의 executor로
         # 취소가 전파된다(원격 소유면 위 공유 플래그를 통해 비동기로 반영됨).
         await runner.cancel(job)
         job.status = JobStatus.CANCELLED
-        store.save(job)
+        await save_job(store, job)
         return format_at_fields(job.progress_view())
 
     @app.post(
@@ -1280,7 +1288,8 @@ def create_app(
         # refresh=true 일 때 즉시 폴링(최신값), false 면 캐시 스냅샷(저비용)을 쓴다.
         if status_repo is not None:
             # 멀티 coordinator 면 executor self-report 공유 테이블에서 조회한다.
-            executors = status_repo.read_all()
+            # 멀티 coordinator 면 executor self-report 공유 테이블에서 조회한다. DB 조회라 store 전용 스레드 풀에서 한다.
+            executors = await run_store_io(status_repo.read_all)
         else:
             executors = await monitor.poll_now() if refresh else monitor.snapshot()
         # 각 executor 에 드릴인 프록시 키(index)를 붙인다(대시보드/TUI 가 상세로 진입할 때 사용).
@@ -1291,10 +1300,10 @@ def create_app(
         )
 
         # 전체 job 을 상태별로 집계한다. running 은 순수하게 실행 중인 것만 세고, active 는 실행과
-        # 분할 중(SPLITTING), 대기(PENDING)까지 포함한 "처리 중" 합계다.
-        by_status: dict[str, int] = {}
-        for job in store.list():
-            by_status[job.status.value] = by_status.get(job.status.value, 0) + 1
+        # 분할 중(SPLITTING), 대기(PENDING)까지 포함한 "처리 중" 합계다. 예전에는 store.list() 로
+        # 모든 job 을 JSONB 째 읽어 복원했는데, job 이 쌓일수록 이벤트 루프를 수 초씩 막아 헬스 체크가
+        # timeout 났다. 상태별 건수만 세고(SqlJobStore 는 GROUP BY) store 전용 스레드 풀에서 실행한다.
+        by_status = await run_store_io(count_jobs_by_status, store)
         running = by_status.get(JobStatus.RUNNING.value, 0)
         active = running + by_status.get(JobStatus.SPLITTING.value, 0) + by_status.get(
             JobStatus.PENDING.value, 0
@@ -1316,7 +1325,7 @@ def create_app(
             "jobs": {
                 "running": running,
                 "active": active,  # RUNNING + SPLITTING + PENDING
-                "total": len(store.list()),
+                "total": sum(by_status.values()),
                 "by_status": by_status,
             },
             # 이 coordinator 가 기동한 뒤 executor 별로 배정한 누적 task 수다. 배정 분포를
@@ -1818,10 +1827,8 @@ def create_app(
         @app.get("/info", tags=["Monitoring"], summary="기타 정보")
         def get_info():
             # 대시보드 상단에 표시할 런타임/구성 요약 정보를 모아 반환한다.
-            all_jobs = store.list()
-            by_status: dict[str, int] = {}
-            for j in all_jobs:
-                by_status[j.status.value] = by_status.get(j.status.value, 0) + 1
+            # 상태별 건수만 필요하므로 모든 job 을 복원하지 않고 센다(/cluster 와 같은 이유).
+            by_status = count_jobs_by_status(store)
             return format_at_fields({
                 "version": __version__,
                 "coordinator_id": settings.coordinator_id,
@@ -1833,7 +1840,7 @@ def create_app(
                 "executor_reservation": settings.executor_reservation,
                 "started_at": started_at.isoformat(),
                 "uptime_seconds": round(time.monotonic() - start_monotonic, 1),
-                "jobs_total": len(all_jobs),
+                "jobs_total": sum(by_status.values()),
                 "executors_configured": len(settings.executors),
                 "max_concurrent_jobs": settings.max_concurrent_jobs,
                 "max_pending_jobs": settings.max_pending_jobs,

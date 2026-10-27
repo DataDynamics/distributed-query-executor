@@ -146,6 +146,8 @@ def masked_config(settings) -> list[dict]:
          "실행 SQL 로그 최대 길이(초과분 절단 표기)"),
         ("logging", "sql.params", settings.log_sql_params,
          "실행 SQL 의 바인드 파라미터 동반 기록"),
+        ("logging", "loop_stall_ms", settings.log_loop_stall_ms,
+         "이벤트 루프 정지 감시 기준(ms, 넘으면 실행 위치를 WARNING 으로, 0=끔)"),
         ("logging", "http.enabled", settings.log_http_enabled,
          "HTTP 요청·응답 로깅(core.http, 요청 하나를 레코드 하나로)"),
         ("logging", "http.level", settings.log_http_level,
