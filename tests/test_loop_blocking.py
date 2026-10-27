@@ -248,3 +248,116 @@ async def test_store_조회는_기본_스레드_풀이_차도_기다리지_않�
     finally:
         release.set()
         await asyncio.gather(*hogs)
+
+
+class _Hogged:
+    """asyncio 기본 풀을 긴 작업으로 채워 둔다(Phase 2 GP INSERT·task 적재가 풀을 점유한 상황)."""
+
+    def __init__(self, workers: int = 2):
+        import concurrent.futures as cf
+
+        self.loop = asyncio.get_running_loop()
+        self.loop.set_default_executor(cf.ThreadPoolExecutor(max_workers=workers))
+        self.release = threading.Event()
+        self.hogs = [self.loop.run_in_executor(None, self.release.wait, 5) for _ in range(workers)]
+
+    async def close(self):
+        self.release.set()
+        await asyncio.gather(*self.hogs)
+
+
+async def test_이력_기록은_기본_풀이_차도_기다리지_않는다():
+    """시작·종료 이력은 실행 경로에서 await 되므로, 기본 풀에서 돌면 슬롯 반납이 적재 뒤로 밀린다."""
+    from coordinator.history import JobHistoryRepository
+    from executor.history import TaskHistoryRepository
+
+    import types
+
+    s = types.SimpleNamespace(history_db_dsn="postgresql://fake")
+    written = []
+    job_repo = JobHistoryRepository(s)
+    job_repo._write = lambda job: written.append(("job", threading.current_thread().name))
+    task_repo = TaskHistoryRepository(s)
+    task_repo._write = lambda task: written.append(("task", threading.current_thread().name))
+
+    hog = _Hogged()
+    try:
+        job = _job()
+        await asyncio.wait_for(job_repo.record(job), timeout=1.0)
+        task = types.SimpleNamespace(task_id="t1", status=JobStatus.RUNNING)
+        await asyncio.wait_for(task_repo.record(task), timeout=1.0)
+    finally:
+        await hog.close()
+    assert [k for k, _ in written] == ["job", "task"]
+    assert all(name.startswith("meta-io") for _, name in written)
+
+
+async def test_self_report_는_기본_풀이_차도_밀리지_않는다():
+    """self-report 가 밀리면 coordinator 가 executor 를 오래된 상태로 본다."""
+    from core.metaio import run_meta_io
+
+    hog = _Hogged()
+    try:
+        name = await asyncio.wait_for(run_meta_io(lambda: threading.current_thread().name), timeout=1.0)
+    finally:
+        await hog.close()
+    assert name.startswith("meta-io")
+
+
+async def test_기록_풀이_막혀도_job_저장은_진행된다():
+    """이력·heartbeat 쪽 DB 호출이 몰리거나 걸려도 job 상태 저장은 store 풀에서 따로 돈다."""
+    from core import metaio
+
+    release = threading.Event()
+    stuck = [asyncio.ensure_future(metaio.run_meta_io(release.wait, 5))
+             for _ in range(metaio._POOL_WORKERS["meta"])]
+    try:
+        store = _SlowSqlStore(delay_s=0.0)
+        await asyncio.wait_for(save_job(store, _job()), timeout=1.0)
+        assert len(store.written) == 1
+    finally:
+        release.set()
+        await asyncio.gather(*stuck)
+
+
+def test_메타_연결에는_연결_대기_상한이_붙는다(monkeypatch):
+    import sys
+    import types
+
+    from core import metaio
+
+    calls = []
+    fake = types.ModuleType("psycopg")
+    fake.connect = lambda dsn, **kw: calls.append((dsn, kw)) or "conn"
+    monkeypatch.setitem(sys.modules, "psycopg", fake)
+
+    monkeypatch.setattr(core_settings, "db_connect_timeout_s", 7, raising=False)
+    assert metaio.meta_connect("postgresql://h/db") == "conn"
+    # DSN 에 직접 적은 값은 덮어쓰지 않는다.
+    metaio.meta_connect("postgresql://h/db?connect_timeout=2")
+    metaio.meta_connect("host=h dbname=db connect_timeout=3")
+    # 0 이면 상한 없이 연다(libpq 기본).
+    monkeypatch.setattr(core_settings, "db_connect_timeout_s", 0, raising=False)
+    metaio.meta_connect("postgresql://h/db")
+    assert calls == [
+        ("postgresql://h/db", {"connect_timeout": 7}),
+        ("postgresql://h/db?connect_timeout=2", {}),
+        ("host=h dbname=db connect_timeout=3", {}),
+        ("postgresql://h/db", {}),
+    ]
+
+
+def test_메타_저장소들은_모두_meta_connect_로_연다():
+    """새 저장소가 psycopg.connect 를 직접 불러 연결 대기 상한을 빠뜨리지 않게 막는다."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "src"
+    files = [
+        "coordinator/job_store.py", "coordinator/history.py", "coordinator/executor_status.py",
+        "coordinator/ha.py", "coordinator/reservation.py", "coordinator/monitor.py",
+        "executor/history.py", "executor/status.py",
+    ]
+    for rel in files:
+        text = (src / rel).read_text(encoding="utf-8")
+        assert "psycopg.connect(" not in text, rel
+        assert "asyncio.to_thread(" not in text, rel

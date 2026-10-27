@@ -40,6 +40,7 @@ def masked_config(settings) -> list[dict]:
         ("executor", "advertise_url", settings.executor_advertise_url or "(없음)",
          "self-report 에 기록할 자기 base URL(HA URL 키 부하 뷰). coordinator.executors 와 일치"),
         ("db", "schema", settings.db_schema, "메타 테이블 공통 스키마(상태/이력 테이블명 한정)"),
+        ("db", "connect_timeout_s", settings.db_connect_timeout_s, "메타 저장소 연결 대기 상한(초). 0=상한 없음"),
         ("executor", "status_table", settings.executor_status_table, "self-report 상태 테이블(스키마 한정)"),
         ("executor", "status_interval_s", settings.executor_status_interval_s,
          "self-report 주기(초)"),

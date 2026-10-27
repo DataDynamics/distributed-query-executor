@@ -120,6 +120,12 @@ FIELD_HELP: dict[str, str] = {
         "jobs·job_history·task_history 같은 메타 테이블을 담을 스키마다. 바꾸면 앱 설정만이 아니라 "
         "config/postgresql.sql 과 config/warehousepg.sql 의 DDL 도 함께 고쳐야 둘이 같은 곳을 가리킨다."
     ),
+    "db.connect_timeout_s": (
+        "메타 저장소(history.db_dsn·monitor.db_dsn)에 연결할 때 기다리는 상한(초)이다. 이력·heartbeat·self-report 는 "
+        "작은 전용 스레드 풀에서 도는데, 상한이 없으면 DB 가 응답하지 않는 동안 그 스레드가 모두 묶여 기록이 "
+        "통째로 멈춘다. 같은 네트워크의 PostgreSQL 이면 기본 5초로 충분하고, 0 은 상한을 없앤다. DSN 에 "
+        "connect_timeout 을 직접 적었으면 그 값이 우선한다."
+    ),
 
     # ── 장애 대응 ─────────────────────────────────────────────────────────
     "coordinator.task_timeout_s": (

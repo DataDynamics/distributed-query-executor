@@ -103,6 +103,7 @@ db:
   # 앱 런타임 SQL 과 DDL(postgresql.sql/warehousepg.sql)이 같은 스키마를 가리키게 한다.
   # 개별 테이블명을 'myschema.t' 처럼 이미 한정하면 그 값은 그대로 둔다(중복 한정 안 함).
   schema: ${db.schema:public}
+  connect_timeout_s: ${db.connect_timeout_s:5}   # 메타 저장소 연결 대기 상한(초, 0=상한 없음). DSN 에 connect_timeout 이 있으면 그 값을 쓴다
 
 store:
   backend: ${store.backend:memory}                # 작업 저장소: memory(휘발) | file(단일 노드 파일 영속/크래시 복구) | postgres(멀티 coordinator 공유)

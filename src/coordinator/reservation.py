@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 
+from core.metaio import meta_connect
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,8 +56,7 @@ class ReservationRepository:
         self.table = table
 
     def _conn(self):
-        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
-        return psycopg.connect(self.dsn)
+        return meta_connect(self.dsn)
 
     def reserve(self, url: str) -> None:
         sql = (

@@ -52,6 +52,7 @@ from .executor_status import ExecutorStatusRepository
 from .ha import CoordinatorHeartbeat, reconcile_orphaned_jobs
 from .history import JobHistoryRepository, QueryRunHistoryRepository
 from core.loopwatch import start_loop_watchdog
+from core.metaio import run_meta_io
 from .job_store import (
     JobStore, build_job_store, count_jobs_by_status, reconcile_interrupted_jobs, run_store_io, save_job,
 )
@@ -627,13 +628,15 @@ def create_app(
 
     async def _ha_loop() -> None:
         # 주기적으로 자기 생존을 heartbeat 하고, 죽은 coordinator 소유의 비종료 job 을
-        # FAILED 로 정합한다(블로킹 DB 작업은 to_thread 로 이벤트 루프 비차단). 한 번의 오류가
-        # 루프를 멈추지 않도록 예외는 로깅만 한다.
+        # FAILED 로 정합한다. 블로킹 DB 작업은 전용 풀에서 돌린다. heartbeat 를 asyncio 기본 풀에
+        # 넣으면 Phase 2 GP INSERT 가 풀을 채운 동안 coordinator_stale_s 넘게 밀려, 다른 coordinator 가
+        # 이 coordinator 를 죽은 것으로 보고 실행 중인 job 을 FAILED 로 정합해 버린다. 정합은 job
+        # 저장소를 읽고 쓰므로 store 풀을 쓴다. 한 번의 오류가 루프를 멈추지 않도록 예외는 로깅만 한다.
         interval = settings.orphan_reconcile_interval_s
         while True:
             try:
-                await asyncio.to_thread(heartbeat.beat)
-                await asyncio.to_thread(
+                await run_meta_io(heartbeat.beat)
+                await run_store_io(
                     reconcile_orphaned_jobs, store, heartbeat, settings.coordinator_stale_s
                 )
             except Exception:

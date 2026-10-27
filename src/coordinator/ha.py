@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timezone
 
 from core.timeutil import now_iso
+from core.metaio import meta_connect
 
 from .models import JobStatus, TaskStatus
 
@@ -57,8 +58,7 @@ class CoordinatorHeartbeat:
         self.table = table
 
     def _conn(self):
-        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
-        return psycopg.connect(self.dsn)
+        return meta_connect(self.dsn)
 
     def beat(self) -> None:
         sql = (

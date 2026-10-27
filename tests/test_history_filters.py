@@ -65,7 +65,7 @@ def fake_psycopg(monkeypatch):
     """sys.modules 의 psycopg 를 가짜로 바꿔 read() 의 지연 임포트를 가로챈다."""
     log: list[tuple[str, tuple]] = []
     mod = types.ModuleType("psycopg")
-    mod.connect = lambda dsn: _FakeConn(log)
+    mod.connect = lambda dsn, **kw: _FakeConn(log)  # meta_connect 가 connect_timeout 을 넘긴다
     monkeypatch.setitem(sys.modules, "psycopg", mod)
     return log
 

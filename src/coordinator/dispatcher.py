@@ -35,6 +35,7 @@ import httpx
 from core import s3_stage as s3_sql
 from core.config import is_custom_source
 from core.logging import job_log_context, with_log_context
+from core.metaio import run_meta_io
 from core.phases import close_open_phases
 from . import stage as stage_sql
 from .config import Settings
@@ -757,7 +758,7 @@ class HttpDispatcher(_DispatcherBase):
             # 배정 executor 기준으로 예약하고, 종료 시 해제한다(근사 — 실제 self-report 가 보정).
             reserved_url = task.executor_url if self.reservations is not None else None
             if reserved_url:
-                await asyncio.to_thread(self.reservations.reserve, reserved_url)
+                await run_meta_io(self.reservations.reserve, reserved_url)
             try:
                 await self._dispatch_with_failover(client, job, task)
             except Exception as exc:
@@ -774,7 +775,7 @@ class HttpDispatcher(_DispatcherBase):
                 await self._save(job)
             finally:
                 if reserved_url:
-                    await asyncio.to_thread(self.reservations.release, reserved_url)
+                    await run_meta_io(self.reservations.release, reserved_url)
 
     async def _dispatch_with_failover(
         self, client: httpx.AsyncClient, job: Job, task: Task

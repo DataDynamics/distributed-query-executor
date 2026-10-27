@@ -85,6 +85,7 @@ def masked_config(settings) -> list[dict]:
         ("coordinator", "orphan_reconcile_interval_s", settings.orphan_reconcile_interval_s,
          "죽은 coordinator 소유 job 정합 주기(초). 0=비활성"),
         ("db", "schema", settings.db_schema, "메타 테이블 공통 스키마(모든 메타 테이블명 한정)"),
+        ("db", "connect_timeout_s", settings.db_connect_timeout_s, "메타 저장소 연결 대기 상한(초). 0=상한 없음"),
         ("store", "backend", settings.store_backend,
          "Job 저장소: memory(단일) | postgres(멀티 coordinator 공유)"),
         ("store", "table", settings.store_table, "공유 store 테이블명(postgres backend, 스키마 한정)"),

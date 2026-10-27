@@ -144,7 +144,7 @@ class _FakeConn:
 def fake_psycopg(monkeypatch):
     log: list = []
     mod = types.ModuleType("psycopg")
-    mod.connect = lambda dsn: _FakeConn(log)
+    mod.connect = lambda dsn, **kw: _FakeConn(log)  # meta_connect 가 connect_timeout 을 넘긴다
     monkeypatch.setitem(sys.modules, "psycopg", mod)
     return log
 

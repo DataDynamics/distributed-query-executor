@@ -10,6 +10,7 @@ import asyncio
 import logging
 
 from core.metrics import collect_system_metrics
+from core.metaio import meta_connect, run_meta_io
 from .history import _executor_id
 
 logger = logging.getLogger(__name__)
@@ -89,12 +90,13 @@ class ExecutorStatusReporter:
         """interval 초 간격으로 self-report 를 반복하는 루프다.
 
         한 번의 보고 실패가 루프를 멈추지 않도록 예외를 잡아 로깅만 하고 계속 진행한다.
-        블로킹 DB 작업(``_report_once``)은 ``to_thread`` 로 스레드에서 실행해 이벤트 루프를
-        막지 않는다.
+        블로킹 DB 작업(``_report_once``)은 meta 전용 스레드 풀(``run_meta_io``)에서 실행해 이벤트 루프를
+        막지 않는다. 기본 풀에 넣으면 적재가 풀을 채운 동안 보고가 밀려, coordinator 가 이 executor 를
+        오래된 상태로 보게 된다.
         """
         while True:
             try:
-                await asyncio.to_thread(self._report_once)
+                await run_meta_io(self._report_once)
             except Exception:
                 logger.exception("executor self-report 실패")
             await asyncio.sleep(self.interval)
@@ -104,7 +106,6 @@ class ExecutorStatusReporter:
 
         테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         """
-        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         m = collect_system_metrics(self.disk_path)
         mem, disk = m["memory"], m["disk"]
@@ -118,7 +119,7 @@ class ExecutorStatusReporter:
             mem["total_mb"], disk["percent"], disk["used_gb"], disk["total_gb"],
             active, mx,
         )
-        with psycopg.connect(self.dsn) as conn:
+        with meta_connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(_UPSERT.format(table=self.table), row)
             conn.commit()

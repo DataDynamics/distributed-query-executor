@@ -431,8 +431,11 @@ redoc_url=None)` 로 CDN 기반 기본 docs 를 끄고 이 헬퍼로 다시 등�
 비동기 디스패처에서 블로킹 DB 호출(impyla/psycopg)은 `run_in_executor` 나 `to_thread` 로 감싸
 이벤트 루프를 막지 않는다. **job store 도 예외가 아니다.** async 코드에서는 `store.save` 대신
 `save_job`(`asave` — 직렬화는 루프, 쓰기는 스레드, job 별 락으로 순서 유지)을, 그 밖의 store·
-status_repo 호출은 `run_store_io`(store 전용 스레드 풀)를 쓴다. asyncio 기본 풀은 Phase 2 GP INSERT 가
-몇 분씩 점유하므로 짧은 store 호출을 거기 넣으면 INSERT 뒤에서 기다린다. 집계에는 `store.list()` 대신
+status_repo 호출은 `run_store_io`(store 전용 스레드 풀)를 쓴다. 이력·heartbeat·self-report·예약·메트릭
+기록은 `run_meta_io`(meta 전용 풀)를 쓰고, 메타 저장소 연결은 `psycopg.connect` 대신 `meta_connect`
+(`db.connect_timeout_s` 상한)로 연다(둘 다 `core/metaio.py`). asyncio 기본 풀은 Phase 2 GP INSERT 와
+executor 의 task 적재가 몇 분씩 점유하므로, 짧은 메타 호출을 거기 넣으면 적재 뒤에서 기다린다. 실행 경로에서
+await 하는 이력은 슬롯 반납을, heartbeat·self-report 는 생존 판정을 그만큼 늦춘다. 집계에는 `store.list()` 대신
 `count_jobs_by_status` 를 쓴다(전체 job JSONB 복원은 job 이 쌓일수록 수 초가 걸린다). 루프가 멈추면
 헬스 체크·폴링이 timeout 나 executor 가 끊긴 것처럼 보이는데, `core/loopwatch.py` 가
 `logging.loop_stall_ms`(기본 500ms)를 넘긴 순간의 루프 스레드 스택을 WARNING 으로 남긴다.

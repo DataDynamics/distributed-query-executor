@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 
+from core.metaio import meta_connect
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +42,6 @@ class ExecutorStatusRepository:
         없음) healthy=False 로 본다. 조회 자체가 실패하면 예외를 잡아 로그를 남기고 빈 리스트를
         반환해 호출 측(대시보드)이 깨지지 않게 한다.
         """
-        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         sql = (
             "SELECT executor_id, cpu_percent, memory_percent, memory_used_mb, "
@@ -51,7 +52,7 @@ class ExecutorStatusRepository:
             f"FROM {self.table}"
         )
         try:
-            with psycopg.connect(self.dsn) as conn:
+            with meta_connect(self.dsn) as conn:
                 with conn.cursor() as cur:
                     cur.execute(sql)
                     rows = cur.fetchall()

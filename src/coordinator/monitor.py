@@ -25,6 +25,7 @@ from typing import Optional
 import httpx
 
 from core.timeutil import now_iso
+from core.metaio import meta_connect, run_meta_io
 
 logger = logging.getLogger(__name__)
 
@@ -211,12 +212,12 @@ class HealthMonitor:
         """무한 루프: 기록 간격만큼 잔 뒤 현재 스냅샷을 PostgreSQL 에 기록한다.
 
         먼저 sleep 하고 기록하므로 기동 직후가 아니라 한 주기 뒤부터 기록이 시작된다.
-        동기 DB 쓰기는 to_thread 로 위임하고, 실패해도 루프가 죽지 않도록 예외를 잡아 로그만 남긴다.
+        동기 DB 쓰기는 meta 전용 스레드 풀(run_meta_io)로 위임하고, 실패해도 루프가 죽지 않도록 예외를 잡아 로그만 남긴다.
         """
         while True:
             await asyncio.sleep(self.settings.monitor_record_interval_s)
             try:
-                await asyncio.to_thread(self._write_pg, self.snapshot())
+                await run_meta_io(self._write_pg, self.snapshot())
             except Exception:
                 logger.exception("메트릭 PostgreSQL 기록 실패")
 
@@ -226,7 +227,6 @@ class HealthMonitor:
         snapshot dict 의 일부 필드만 골라(테이블 컬럼에 맞춰) 튜플로 변환한 뒤 한 번에 기록한다.
         테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         """
-        import psycopg  # 모니터를 쓰지 않으면 psycopg 가 필요 없으므로 지연 임포트한다
 
         table = self.settings.monitor_table
         rows = [
@@ -242,7 +242,7 @@ class HealthMonitor:
             )
             for r in snapshot
         ]
-        with psycopg.connect(self.settings.monitor_db_dsn) as conn:
+        with meta_connect(self.settings.monitor_db_dsn) as conn:
             with conn.cursor() as cur:
                 cur.executemany(_INSERT.format(table=table), rows)
             conn.commit()

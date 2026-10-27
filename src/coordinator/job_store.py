@@ -21,14 +21,13 @@ Job(작업) 객체를 보관·조회·갱신하고 취소 플래그를 관리하
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import json
 import logging
 import threading
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+from core.metaio import meta_connect, run_store_io  # noqa: F401  run_store_io 는 호출부가 여기서 가져간다
 from core.timeutil import now_iso
 from pathlib import Path
 from typing import Optional
@@ -37,29 +36,9 @@ from .models import Job, JobStatus, TaskStatus
 
 logger = logging.getLogger(__name__)
 
-# job 저장소 I/O(저장·취소 플래그 조회·건수 집계) 전용 스레드 풀이다. asyncio 기본 풀은 몇 분씩
-# 걸리는 Phase 2 GP INSERT 도 함께 쓰므로, 그 풀이 차면 짧은 store 호출이 INSERT 가 끝날 때까지
-# 기다려 task 폴링이 멈춘다. store 호출은 짧고 잦으므로 따로 둔다.
-_STORE_IO_WORKERS = 8
-_store_io_pool: Optional[ThreadPoolExecutor] = None
-_store_io_pool_lock = threading.Lock()
-
-
-def _store_io_executor() -> ThreadPoolExecutor:
-    global _store_io_pool
-    with _store_io_pool_lock:
-        if _store_io_pool is None:
-            _store_io_pool = ThreadPoolExecutor(
-                max_workers=_STORE_IO_WORKERS, thread_name_prefix="store-io",
-            )
-        return _store_io_pool
-
-
-async def run_store_io(fn, *args):
-    """블로킹 store 호출을 전용 스레드 풀에서 실행한다. 로그 컨텍스트([job_id])를 이어 준다."""
-    ctx = contextvars.copy_context()
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_store_io_executor(), lambda: ctx.run(fn, *args))
+# job 저장소 I/O(저장·취소 플래그 조회·건수 집계)는 core.metaio 의 store 전용 스레드 풀에서 돈다.
+# asyncio 기본 풀은 몇 분씩 걸리는 Phase 2 GP INSERT 도 함께 쓰므로, 그 풀이 차면 짧은 store 호출이
+# INSERT 가 끝날 때까지 기다려 task 폴링이 멈추기 때문이다.
 
 
 class InMemoryJobStore:
@@ -312,11 +291,9 @@ class SqlJobStore:
         """새 DB 연결을 연다.
 
         테이블 생성(DDL)은 앱이 하지 않는다 — 사전에 postgresql.sql 로 스키마를 만들어
-        두어야 한다. psycopg는 여기서 지연 임포트한다(모듈 로드 비용·선택 의존성 처리).
+        두어야 한다. DB 가 응답하지 않을 때 store 풀 스레드가 묶이지 않도록 연결 대기 상한을 붙인다.
         """
-        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
-
-        return psycopg.connect(self.dsn)
+        return meta_connect(self.dsn)
 
     def add(self, job: Job) -> None:
         """새 Job을 저장한다(내부적으로 ``save`` 와 동일한 UPSERT)."""

@@ -7,13 +7,13 @@ DSN이 설정되지 않으면 비활성(경고)된다.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
 import socket
 
 from core.phases import phase_of
+from core.metaio import meta_connect, run_meta_io
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,6 @@ class TaskHistoryRepository:
         """
         if not self.enabled:
             return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
-        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         # 검색 필터(WHERE) 조립. 값은 전부 바인드 파라미터로 넘겨 SQL 주입을 차단한다.
         conds: list[str] = []
@@ -122,7 +121,7 @@ class TaskHistoryRepository:
         )
 
         # 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
-        with psycopg.connect(self.dsn) as conn:
+        with meta_connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT count(*) FROM ({latest}) t{where}",
@@ -158,7 +157,9 @@ class TaskHistoryRepository:
     async def record(self, task) -> None:
         """task 의 현재 상태를 이력 테이블에 한 행으로 기록한다. psycopg 가 동기라 스레드에서 돌린다.
 
-        블로킹 DB 쓰기를 ``to_thread`` 로 넘겨 이벤트 루프를 막지 않는다. 이력 기록은
+        블로킹 DB 쓰기를 meta 전용 스레드 풀(``run_meta_io``)로 넘겨 이벤트 루프를 막지 않는다. asyncio 기본
+        풀은 task 적재 본체가 몇 분씩 차지하므로, 거기 넣으면 READING·WRITING 이력이 앞선 적재가 끝날
+        때까지 기다려 이 task 의 읽기 시작이 그만큼 늦어진다. 이력 기록은
         부가 기능이므로, 비활성(DSN 미설정)이면 경고만 남기고 넘어가고, 기록 실패도
         예외를 삼켜 로깅만 한다(본 task 실행을 중단시키지 않음).
         """
@@ -170,13 +171,12 @@ class TaskHistoryRepository:
             )
             return
         try:
-            await asyncio.to_thread(self._write, task)
+            await run_meta_io(self._write, task)
         except Exception:
             logger.exception("task %s 이력 기록 실패", task.task_id)
 
     def _write(self, task) -> None:
         """이력 테이블에 한 행 INSERT(동기). 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다."""
-        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         phases = getattr(task, "phases", None) or []
         read_wait_ms, write_wait_ms, read_starve_ms, finalize_wait_ms = _stream_copy_metrics(task)
@@ -204,7 +204,7 @@ class TaskHistoryRepository:
             # phases 는 JSONB 컬럼이다. 표준 라이브러리 json 으로 직렬화해 텍스트로 넣고 ::jsonb 로 캐스트한다.
             json.dumps(phases, ensure_ascii=False),
         )
-        with psycopg.connect(self.dsn) as conn:
+        with meta_connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(_INSERT.format(table=self.table), row)
             conn.commit()

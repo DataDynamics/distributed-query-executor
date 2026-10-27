@@ -588,7 +588,10 @@ grep -A30 '이벤트 루프가' $L/query-coordinator-server-warn.log
 ```
 
 job 저장·취소 플래그 조회·`/cluster` 집계처럼 예전에 루프를 막던 store 호출은 전용 스레드 풀로 옮겨
-두었다. 그래도 이 경고가 나온다면 스택이 가리키는 호출을 개발자에게 전달한다. 실행 중인 job 의 취소
+두었다. 이력 기록·heartbeat·self-report·예약·메트릭 기록도 적재가 쓰는 스레드 풀과 떨어진 별도 풀에서
+돌므로, 적재가 몰려도 이 기록들이 적재가 끝나기를 기다리지 않는다. 메타 저장소 연결은
+`db.connect_timeout_s`(기본 5초) 안에 붙지 못하면 포기하고 경고를 남긴다. 부하 중에 `이력 기록 실패`나
+`coordinator heartbeat 실패` 가 `timeout` 과 함께 보이면 메타 DB 가 느리거나 접속이 막힌 것이다. 그래도 이 경고가 나온다면 스택이 가리키는 호출을 개발자에게 전달한다. 실행 중인 job 의 취소
 요청은 공유 store 에서 job 단위로 `coordinator.cancel_check_interval_s`(기본 2초)에 한 번 확인하므로,
 다른 coordinator 가 받은 취소는 그만큼 늦게 감지될 수 있다.
 
@@ -787,9 +790,9 @@ GRANT CONNECT ON DATABASE queryexec TO queryexec_app;
 방화벽에서 coordinator 호스트뿐 아니라 **모든 executor 호스트**의 접속을 허용한다. executor 가
 `task_history` 와 `executor_status` 를 직접 쓰기 때문에, 이것을 빠뜨리면 이력과 self-report 만
 조용히 실패한다. 셋째, `max_connections` 를 확인한다. 앱은 호출마다 연결을 열고 닫으므로 동시 연결
-수는 동시에 진행 중인 호출 수와 같다. coordinator 한 대는 store 전용 스레드 풀 8개에 기본 스레드
-풀(`min(32, CPU+4)`) 몫을 더한 만큼, executor 한 대는 동시 task 수에 self-report 하나를 더한 만큼까지
-연다. 이 합에 운영자 접속 몫을 넉넉히 얹는다.
+수는 동시에 진행 중인 호출 수와 같다. coordinator 한 대는 job 저장용과 기록용 전용 스레드 풀에서 8개씩,
+최대 16개를 열고, executor 한 대는 기록용 전용 풀에서 최대 8개를 연다. 여기에 대시보드 조회 몫과 운영자
+접속 몫을 넉넉히 얹는다.
 
 **1. 스키마를 만든다.** 서비스를 멈추기 전에 미리 해 둘 수 있다. 앞에서 만든 앱 사용자로 접속하고,
 오류가 나면 바로 멈추도록 `ON_ERROR_STOP` 을 켠다. 여러 번 실행해도 안전하다.

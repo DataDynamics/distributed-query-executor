@@ -8,7 +8,9 @@ PostgreSQL 테이블에 "한 상태당 한 행"으로 누적 기록하기 위한
 설계 의도:
   - 기록 실패가 본래 Job 처리 흐름을 막아서는 안 되므로, 기록은 best-effort 로 수행하고
     예외는 잡아서 로그만 남긴다(record()).
-  - 동기 psycopg 호출이 이벤트 루프를 막지 않도록 asyncio.to_thread 로 별도 스레드에서 실행한다.
+  - 동기 psycopg 호출이 이벤트 루프를 막지 않도록 meta 전용 스레드 풀(core.metaio)에서 실행한다.
+    asyncio 기본 풀은 Phase 2 GP INSERT 가 몇 분씩 차지하므로, 거기 넣으면 실행 경로에서 await 하는
+    시작·종료 이력이 INSERT 뒤에 줄을 서 슬롯 반납까지 늦어진다.
   - DSN(history.db_dsn)이 설정되지 않으면 기록 기능 전체를 비활성화하고 경고만 남긴다.
 
 조회(read)는 job_id 별 "가장 최근 상태" 한 행씩만 추려서 페이징해 보여준다(아래 read() 참고).
@@ -16,9 +18,10 @@ PostgreSQL 테이블에 "한 상태당 한 행"으로 누적 기록하기 위한
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
+
+from core.metaio import meta_connect, run_meta_io
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +58,7 @@ class JobHistoryRepository:
         """현재 Job 상태를 이력 테이블에 한 행 기록한다(append-only).
 
         호출 시점의 job 스냅샷을 새 행으로 INSERT 한다. 동기 psycopg 작업은
-        asyncio.to_thread 로 워커 스레드에 위임해 이벤트 루프 블로킹을 막는다.
+        meta 전용 스레드 풀(run_meta_io)에 위임해 이벤트 루프와 기본 풀의 적재 작업 양쪽을 피한다.
         기록 실패가 Job 처리 흐름을 깨지 않도록 모든 예외를 잡아 로그만 남긴다(best-effort).
 
         Args:
@@ -69,7 +72,7 @@ class JobHistoryRepository:
             )
             return
         try:
-            await asyncio.to_thread(self._write, job)
+            await run_meta_io(self._write, job)
         except Exception:
             logger.exception("job %s 이력 기록 실패", job.job_id)
 
@@ -108,7 +111,6 @@ class JobHistoryRepository:
         """
         if not self.enabled:
             return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
-        import psycopg  # 이력을 쓰지 않는 환경에 psycopg 의존을 강제하지 않으려고 지연 임포트한다
 
         # 검색 필터(WHERE) 조립. 값은 전부 바인드 파라미터로 넘겨 SQL 주입을 차단한다.
         conds: list[str] = []
@@ -133,7 +135,7 @@ class JobHistoryRepository:
             f"FROM {self.table} ORDER BY job_id, recorded_at DESC"
         )
 
-        with psycopg.connect(self.dsn) as conn:
+        with meta_connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 # 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
                 # 페이징용 전체 건수: 필터가 적용된 "job 별 최신 행" 수를 센다.
@@ -166,11 +168,10 @@ class JobHistoryRepository:
     def _write(self, job) -> None:
         """job 스냅샷 한 건을 동기 psycopg 로 INSERT 한다(워커 스레드에서 호출됨).
 
-        record() 가 asyncio.to_thread 로 이 메서드를 실행한다. 테이블은 postgresql.sql 로
+        record() 가 run_meta_io 로 이 메서드를 실행한다. 테이블은 postgresql.sql 로
         사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
         row 튜플의 값 순서는 _INSERT 문의 컬럼 순서와 정확히 일치해야 한다.
         """
-        import psycopg  # 드라이버가 없을 수 있어 지연 임포트한다
 
         row = (
             job.job_id,
@@ -189,7 +190,7 @@ class JobHistoryRepository:
             job.original_sql,
         )
         # 테이블은 postgresql.sql 로 사전 생성돼 있어야 한다(앱은 DDL 하지 않음).
-        with psycopg.connect(self.dsn) as conn:
+        with meta_connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(_INSERT.format(table=self.table), row)
             conn.commit()
@@ -232,7 +233,6 @@ class QueryRunHistoryRepository:
         """
         if not self.enabled:
             return {"enabled": False, "rows": [], "total": 0, "limit": limit, "offset": offset}
-        import psycopg  # 이력을 쓰지 않는 환경에 psycopg 의존을 강제하지 않으려고 지연 임포트한다
 
         conds: list[str] = []
         params: list[object] = []
@@ -257,7 +257,7 @@ class QueryRunHistoryRepository:
             f"FROM {self.table} WHERE exec_mode = 'query_run' "
             "ORDER BY task_id, recorded_at DESC"
         )
-        with psycopg.connect(self.dsn) as conn:
+        with meta_connect(self.dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT count(*) FROM ({latest}) t{where}", tuple(params))
                 total = cur.fetchone()[0]

@@ -291,6 +291,9 @@ class Settings:
         # 아래 모든 메타 테이블명을 이 스키마로 한정하므로, 앱 런타임 SQL 과 DDL(postgresql.sql/
         # warehousepg.sql)이 같은 스키마를 가리킨다. search_path 가 비표준이어도 안전하다.
         self.db_schema: str = _get("db", "schema", "public")
+        # 메타 저장소 연결 대기 상한(초)이다. libpq 기본은 상한이 없어 DB 가 응답하지 않으면 메타 I/O 전용 풀의
+        # 스레드가 무한정 묶인다(core.metaio.meta_connect). 0 이면 상한 없이 연다.
+        self.db_connect_timeout_s: int = int(_get("db", "connect_timeout_s", 5))
         self.store_table: str = _qualify_table(self.db_schema, _get("store", "table", "jobs"))
         # coordinator HA 보조 테이블이다. 설정 키 없이 스키마만 한정하며 app.py 가 repo 에 주입한다.
         self.coordinator_status_table: str = _qualify_table(self.db_schema, "coordinator_status")
