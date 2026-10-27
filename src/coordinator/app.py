@@ -77,6 +77,7 @@ from .parser import (
     validate_select_query,
 )
 from .reservation import ReservationRepository, ReservingLoadView
+from .retention import build_retention_cleaner
 from .selector import ExecutorSelector, SharedLoadView
 from .splitter import SubQuery, split, wrap
 from .template import TemplateEngine, TemplateError
@@ -612,9 +613,15 @@ def create_app(
             await monitor.start()
         # HA 용 백그라운드 루프다. coordinator heartbeat 를 남기고 죽은 coordinator 소유 job 을 정합한다.
         ha_task = asyncio.create_task(_ha_loop()) if heartbeat is not None else None
+        # 보관 정책: 이력·메트릭(설정 시 종료된 job)의 오래된 행을 주기적으로 지운다. 켜진 대상이 없으면 None.
+        cleaner = build_retention_cleaner(settings)
+        if cleaner is not None:
+            cleaner.start()
         try:
             yield
         finally:
+            if cleaner is not None:
+                await cleaner.stop()
             if ha_task is not None:
                 ha_task.cancel()
                 try:

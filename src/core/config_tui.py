@@ -100,6 +100,10 @@ INT_BOUNDS: dict[str, tuple[int, int, int]] = {
     "executor.max_concurrent_tasks": (0, 1024, 1),          # 0=무제한
     "executor.task_retention_s": (0, 604800, 600),          # 0=시간 기준 끔
     "db.connect_timeout_s": (0, 120, 1),                    # 0=상한 없음
+    "history.retention_days": (0, 3650, 1),                 # 0=무기한
+    "monitor.retention_days": (0, 3650, 1),                 # 0=무기한
+    "store.retention_days": (0, 3650, 1),                   # 0=무기한
+    "history.retention_interval_s": (0, 86400, 300),        # 0=정리 끔
     "executor.max_finished_tasks": (0, 1000000, 100),       # 0=개수 기준 끔
     "greenplum.pool_max": (0, 1024, 1),                     # 0=max_concurrent_tasks 와 동일
     "copy.batch_size": (1, 1000000, 1000),

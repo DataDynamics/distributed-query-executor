@@ -924,6 +924,41 @@ psql ... -c "SELECT recorded_at, executor_url, healthy, cpu_percent, memory_perc
 
 ---
 
+## 이력 보관 기간 정하기
+
+`job_history`·`task_history`·`executor_health_metrics` 는 상태가 바뀌거나 메트릭을 잴 때마다 한 행씩
+쌓이기만 한다. 그대로 두면 테이블이 끝없이 커지고, 대시보드의 이력 화면은 job·task 별 최신 행을 고르려고
+전체 이력을 훑으므로 갈수록 느려진다. 그래서 coordinator 가 보관 기간이 지난 행을 주기적으로 지운다.
+
+```properties
+history.retention_days=90            # job_history·task_history 보관 일수(0=무기한)
+monitor.retention_days=30            # executor_health_metrics 보관 일수(0=무기한)
+store.retention_days=0               # 종료된 job 을 공유 jobs 테이블에 남길 일수(0=무기한, 기본)
+history.retention_interval_s=3600    # 정리 주기(초, 0=정리 끔)
+```
+
+정리는 coordinator 가 기동 1분 뒤 한 번, 그 뒤로 `history.retention_interval_s` 마다 한다. 한 번에 다
+지우지 않고 5000행씩 지우고 커밋하기를 반복하므로, 오랫동안 쌓인 행을 처음 정리할 때도 테이블을 오래
+잠그지 않는다. 100만 행 테이블에서 60만 행을 지우는 데 십여 초가 걸리는 정도다. 지운 행 수는
+coordinator 로그에 `보관 기간 정리 — <테이블> 에서 N일 지난 행 M건 삭제` 로 남고, 실패하면
+`보관 기간 정리 실패` 가 경고 로그에 남는다. coordinator 를 여러 대 띄우면 모두 같은 정리를 돌리지만,
+같은 행을 동시에 지우려 하면 뒤쪽은 0건으로 끝나므로 따로 조정할 필요가 없다. 기준 시각은 DB 의 KST
+시각이다.
+
+`store.retention_days` 는 신중하게 켠다. `store.backend=postgres` 일 때 끝난 job(DONE·PARTIAL·FAILED·
+CANCELLED)이 `jobs` 테이블에 계속 남는데, 이 값을 주면 마지막 갱신에서 그 일수가 지난 job 을 지운다.
+실행 중이거나 대기 중인 job 은 아무리 오래돼도 지우지 않는다. 대신 지운 job 은 `GET /jobs/{id}` 가
+404 를 주고, 같은 `Idempotency-Key` 로 다시 내면 재생되지 않고 새 작업으로 실행된다. 그러므로 클라이언트가
+재제출할 수 있는 기간보다 넉넉히 길게 잡는다. 지난 실행 기록은 `job_history` 에 남으므로 이력 화면에서는
+`history.retention_days` 까지 계속 보인다.
+
+정리 직후에는 지운 행의 공간이 바로 디스크로 돌아가지 않는다. PostgreSQL 의 autovacuum 이 그 공간을 다음
+기록에 다시 쓰도록 표시할 뿐이므로, 처음 크게 정리한 뒤 디스크를 실제로 줄이고 싶다면 한가한 시간에
+`VACUUM FULL public.task_history;` 처럼 테이블별로 실행한다(실행하는 동안 그 테이블을 잠그므로 서비스를
+멈추고 한다).
+
+---
+
 ## 정기적으로 살필 것
 
 디스크부터 본다. `local_stage` 와 `s3_stage` 의 스테이징 경로, 그리고 로그 디렉터리가 대상이다.

@@ -109,6 +109,7 @@ store:
   backend: ${store.backend:memory}                # 작업 저장소: memory(휘발) | file(단일 노드 파일 영속/크래시 복구) | postgres(멀티 coordinator 공유)
   table: ${store.table:jobs}                      # 공유 store 테이블명(postgres)
   path: ${store.path:}                            # backend=file 일 때 스냅샷 경로(비우면 로그 디렉터리 옆 jobs-state.json)
+  retention_days: ${store.retention_days:0}       # 종료된 job 을 jobs 테이블에 남길 일수(postgres, 0=무기한). 지우면 조회·멱등 재생 불가
 
 dashboard:
   enabled: ${dashboard.enabled:true}              # / 모니터링 대시보드 사용 여부(읽기 전용)
@@ -120,11 +121,14 @@ monitor:
   db_dsn: ${monitor.db_dsn:}                      # 메트릭 기록 DB DSN(미설정 시 기록 생략)
   table: ${monitor.table:executor_health_metrics}       # 메트릭 테이블명
   disk_path: ${monitor.disk_path:/}              # 디스크 사용량 측정 경로
+  retention_days: ${monitor.retention_days:30}   # executor_health_metrics 보관 일수(0=무기한)
 
 history:
   db_dsn: ${history.db_dsn:}                      # 실행 이력/상태 공유 DB DSN(미설정 시 이력 비활성)
   table: ${history.table:job_history}             # job 실행 이력 테이블
   task_table: ${history.task_table:task_history}  # task 실행 이력 테이블
+  retention_days: ${history.retention_days:90}    # job_history·task_history 보관 일수(0=무기한)
+  retention_interval_s: ${history.retention_interval_s:3600}  # 보관 기간 정리 주기(초, coordinator 가 수행, 0=정리 끔)
 
 # ───────── Executor ─────────
 executor:

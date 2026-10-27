@@ -383,6 +383,23 @@ FIELD_HELP: dict[str, str] = {
         "수집한 메트릭을 쌓을 DB DSN 이다. 비우면 화면에만 보이고 기록은 남지 않으므로, 지난 부하를 "
         "돌아봐야 한다면 채운다."
     ),
+    "monitor.retention_days": (
+        "executor_health_metrics 에 메트릭을 며칠 남길지 정한다. executor 수 × 하루 1440건(기록 주기 60초 기준)씩 "
+        "쌓이므로 추세를 볼 기간만큼만 둔다. 0 이면 지우지 않는다."
+    ),
+    "history.retention_days": (
+        "job_history·task_history 를 며칠 남길지 정한다. 상태 전이마다 한 행씩 쌓여 테이블이 커지면 대시보드 "
+        "이력 조회가 갈수록 느려지므로, 지난 실행을 되짚어 볼 기간만큼만 둔다. 0 이면 지우지 않는다."
+    ),
+    "history.retention_interval_s": (
+        "보관 기간이 지난 행을 지우는 주기다. coordinator 가 이 주기마다 배치로 지우며, 0 이면 정리 자체를 "
+        "끈다(보관 일수 설정과 무관하게 아무것도 지우지 않는다). 기동 1분 뒤 첫 정리를 한다."
+    ),
+    "store.retention_days": (
+        "종료된(DONE·PARTIAL·FAILED·CANCELLED) job 을 공유 jobs 테이블에 며칠 남길지 정한다. 지운 job 은 "
+        "조회되지 않고, 같은 Idempotency-Key 로 다시 내면 재생 대신 새 job 이 된다. 클라이언트가 재제출을 "
+        "얼마나 오래 할 수 있는지보다 길게 둔다. 실행 중·대기 중인 job 은 지우지 않으며 0(기본)은 무기한이다."
+    ),
     "dashboard.enabled": (
         "읽기 전용 웹 대시보드를 연다. 쓰기 동작이 없어 켜 두어도 안전하지만, 외부에 노출되는 포트라면 "
         "job 목록과 SQL 이 보인다는 점을 감안한다."

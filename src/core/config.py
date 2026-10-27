@@ -402,6 +402,14 @@ class Settings:
         self.history_table: str = _qualify_table(self.db_schema, _get("history", "table", "job_history"))
         # executor 가 task 단위 이력을 남길 테이블이다(history_db_dsn 을 공유한다).
         self.task_history_table: str = _qualify_table(self.db_schema, _get("history", "task_table", "task_history"))
+        # 보관 정책(coordinator/retention.py)이다. job_history·task_history 는 history.retention_days,
+        # executor_health_metrics 는 monitor.retention_days 보다 오래된 행을 지운다. 공유 jobs 테이블의 종료된
+        # job 은 지우면 조회·멱등 재생이 안 되므로 store.retention_days 로 따로 켜며 기본은 끈다. 0 은 무기한
+        # 보관이고, history.retention_interval_s 마다 정리하며 0 이면 정리 자체를 끈다.
+        self.history_retention_days: int = int(_get("history", "retention_days", 90))
+        self.monitor_retention_days: int = int(_get("monitor", "retention_days", 30))
+        self.store_retention_days: int = int(_get("store", "retention_days", 0))
+        self.retention_interval_s: float = float(_get("history", "retention_interval_s", 3600))
 
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")

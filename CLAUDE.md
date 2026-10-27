@@ -440,6 +440,12 @@ await 하는 이력은 슬롯 반납을, heartbeat·self-report 는 생존 판�
 헬스 체크·폴링이 timeout 나 executor 가 끊긴 것처럼 보이는데, `core/loopwatch.py` 가
 `logging.loop_stall_ms`(기본 500ms)를 넘긴 순간의 루프 스레드 스택을 WARNING 으로 남긴다.
 
+**이력은 보관 기간이 지나면 지운다.** `coordinator/retention.py` 의 `RetentionCleaner` 가
+`history.retention_interval_s` 마다 job_history·task_history(`history.retention_days`, 기본 90)와
+executor_health_metrics(`monitor.retention_days`, 30)를, 켰다면 종료된 job(`store.retention_days`, 기본 0=끔 —
+지우면 조회·멱등 재생이 안 된다)을 5000행 배치로 지운다. 삭제문은 `IN (서브쿼리)` 가 아니라
+`= ANY(ARRAY(...))` 로 써야 PK 인덱스를 탄다(`IN` 은 배치마다 테이블 전체를 훑는다).
+
 새 기능에는 `tests/` 에 테스트를 추가하되, 실제 DB 없이 `MockBackend`/`FakeRunner` 로 검증한다.
 
 **메타 테이블은 모두 스키마 한정된다.** jobs·job_history·task_history·executor_status·
