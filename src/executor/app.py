@@ -39,6 +39,10 @@ from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
 from core.sqllog import log_sql
 from core.loopwatch import start_loop_watchdog
+from core.perf import (
+    bottleneck, copy_metrics, emit_event, job_summary_enabled, perf, phases_span_s, slowest_stage,
+    stage_durations, start_perf_reporter,
+)
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
@@ -235,6 +239,9 @@ def create_app(
         # 이벤트 루프가 블로킹 호출로 멈추면 coordinator 의 헬스 체크·폴링이 timeout 나므로,
         # 멈춘 순간의 스택을 남긴다.
         watchdog = start_loop_watchdog(getattr(settings, "log_loop_stall_ms", 0))
+        # 성능 지표 로그: task 슬롯 사용·대기 수와 인메모리 task 수를 게이지로 걸고 리포터를 띄운다.
+        perf.gauge("tasks", _task_perf_gauges)
+        perf_reporter = start_perf_reporter("executor", settings)
         try:
             yield
         finally:
@@ -253,7 +260,9 @@ def create_app(
                         "드레이닝 타임아웃(%ss): 미완료 task %d개 — 종료 진행",
                         timeout, len(still),
                     )
-            # 3) self-report 루프와 정지 감시를 정리한다.
+            # 3) self-report 루프와 정지 감시, 성능 지표 리포터를 정리한다.
+            if perf_reporter is not None:
+                await perf_reporter.stop()
             await reporter.stop()
             if watchdog is not None:
                 watchdog.stop()
@@ -312,6 +321,56 @@ def create_app(
                     await _run(task)
             else:
                 await _run(task)
+            _record_task_perf(task)
+
+    def _task_perf_gauges() -> dict:
+        active, queued, mx = _task_counts()
+        return {"running": active, "queued": queued, "max": mx, "in_memory": len(tasks)}
+
+    def _record_task_perf(task: Task) -> None:
+        """끝난 task 를 성능 지표에 반영하고, 켜져 있으면 task 요약 한 줄(kind=task_done)을 남긴다.
+
+        단계별 소요는 ``stage.<단계>_ms`` 분포로, 읽기·쓰기 병목 지표는 ``copy.*`` 분포로 모은다. 요약 줄에는
+        가장 느린 단계와 병목 판정(source=소스 대기, target=GP 쓰기)을 담는다. 지표 기록 실패가 task 마무리를
+        깨지 않도록 예외는 삼킨다.
+        """
+        if task.status not in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED):
+            return
+        try:
+            durations = stage_durations(task.phases)
+            metrics = copy_metrics(task.phases)
+            span = phases_span_s(task.phases)
+            perf.inc(f"tasks_done.{task.status.value}")
+            perf.inc("rows_read", task.rows_read or 0)
+            perf.inc("rows_written", task.rows_written or 0)
+            for name, ms in durations.items():
+                perf.observe(f"stage.{name}_ms", ms)
+            for key, ms in metrics.items():
+                perf.observe(f"copy.{key}", ms)
+            if span is not None:
+                if task.exec_mode == "query_run":
+                    perf.observe("query_run.ms", span * 1000)
+                else:
+                    perf.observe("task.elapsed_s", span)
+            if not job_summary_enabled(settings):
+                return
+            rows = task.rows_written or task.rows_read or 0
+            stage, stage_ms = slowest_stage(durations)
+            fields = {
+                "task_id": task.task_id, "job_id": task.job_id, "status": task.status.value,
+                "exec_mode": task.exec_mode, "rows_read": task.rows_read or 0,
+                "rows_written": task.rows_written or 0,
+                "elapsed_s": round(span, 1) if span is not None else "-",
+                "queue_wait_ms": durations.get("QUEUE_WAIT", 0),
+                "rows_per_s": int(rows / span) if span else 0,
+                "bottleneck": bottleneck(metrics),
+                "slowest_stage": stage, "slowest_stage_s": round(stage_ms / 1000, 1),
+            }
+            fields.update({f"stage.{n}_ms": ms for n, ms in durations.items()})
+            fields.update(metrics)
+            emit_event("task_done", fields)
+        except Exception:
+            logger.debug("task 성능 지표 기록 실패", exc_info=True)
 
     async def _run(task: Task) -> None:
         """task 를 실제로 실행하면서 상태를 READING, WRITING, DONE 으로 옮기고 이력을 기록한다.
@@ -804,6 +863,7 @@ def create_app(
                         return await _query_run_execute(req, task)
                 return await _query_run_execute(req, task)
         finally:
+            _record_task_perf(task)
             if me is not None:
                 inflight.discard(me)
 

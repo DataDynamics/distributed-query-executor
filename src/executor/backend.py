@@ -16,6 +16,7 @@ from typing import Protocol
 
 from core.config import is_custom_source
 from core.dbprobe import _is_missing
+from core.perf import perf
 from core.sqllog import datasource_of, log_sql
 
 # 적재 대상이 도는 엔진의 이름이다(local_stage·s3_stage 의 외부테이블과 staging 도 여기에 속한다).
@@ -273,6 +274,14 @@ class _GreenplumPool:
         # 반납되어 재사용할 수 있는 유휴 연결을 보관한다. LIFO 라 최근에 쓴 연결을 먼저 재사용해 캐시에 유리하다.
         self._idle: "queue.LifoQueue" = queue.LifoQueue()
         self._connect = connect or self._default_connect
+        # 지금 빌려 가 있는 연결 수다(성능 지표 gp_pool.in_use). 여러 스레드가 바꾸므로 락으로 지킨다.
+        self._in_use = 0
+        self._count_lock = threading.Lock()
+        perf.gauge("gp_pool", self.perf_gauges)
+
+    def perf_gauges(self) -> dict:
+        """성능 지표 로그에 남길 사용 중·유휴 연결 수와 한도다."""
+        return {"in_use": self._in_use, "idle": self._idle.qsize(), "max": self._maxsize}
 
     def _default_connect(self):
         import psycopg  # 드라이버를 선택 설치하므로 지연 임포트한다
@@ -298,6 +307,7 @@ class _GreenplumPool:
                 conn.autocommit = prev
             return True
         except Exception:
+            perf.inc("gp_pool.reset_failures")
             logger.warning("GP 커넥션 초기화(DISCARD ALL) 실패 — 해당 연결은 폐기", exc_info=True)
             return False
 
@@ -311,13 +321,24 @@ class _GreenplumPool:
     @contextmanager
     def connection(self):
         """풀에서 연결을 하나 빌려 준다(없으면 생성, maxsize 도달 시 반납 대기)."""
+        t0 = time.monotonic()
         self._sema.acquire()  # 동시 연결 슬롯을 확보한다(없으면 반납될 때까지 막힌다)
+        # 슬롯을 얻기까지 기다린 시간이다. 이 값이 크면 pool_max 가 동시 task 수보다 작다는 뜻이다.
+        perf.observe("gp_pool.acquire_wait_ms", (time.monotonic() - t0) * 1000)
+        with self._count_lock:
+            self._in_use += 1
         conn = None
         try:
             try:
                 conn = self._idle.get_nowait()  # 유휴 연결이 있으면 재사용한다
             except queue.Empty:
-                conn = self._connect()  # 없으면 새로 연결한다(슬롯을 이미 잡았으므로 상한 안이다)
+                t_conn = time.monotonic()
+                try:
+                    conn = self._connect()  # 없으면 새로 연결한다(슬롯을 이미 잡았으므로 상한 안이다)
+                except Exception:
+                    perf.inc("gp_pool.connect_errors")
+                    raise
+                perf.observe("gp_pool.connect_ms", (time.monotonic() - t_conn) * 1000)
             try:
                 yield conn
             except Exception:
@@ -332,6 +353,8 @@ class _GreenplumPool:
                 self._safe_close(conn)
             conn = None
         finally:
+            with self._count_lock:
+                self._in_use -= 1
             self._sema.release()
 
     def close(self) -> None:

@@ -53,6 +53,7 @@ from .ha import CoordinatorHeartbeat, reconcile_orphaned_jobs
 from .history import JobHistoryRepository, QueryRunHistoryRepository
 from core.loopwatch import start_loop_watchdog
 from core.metaio import run_meta_io
+from core.perf import perf, start_perf_reporter
 from .job_store import (
     JobStore, build_job_store, count_jobs_by_status, reconcile_interrupted_jobs, run_store_io, save_job,
 )
@@ -617,9 +618,13 @@ def create_app(
         cleaner = build_retention_cleaner(settings)
         if cleaner is not None:
             cleaner.start()
+        # 성능 지표 로그: 기본 스레드 풀을 계측용으로 바꾸고 interval_s 마다 *-perf.log 에 지표 한 줄을 남긴다.
+        perf_reporter = start_perf_reporter("coordinator", settings)
         try:
             yield
         finally:
+            if perf_reporter is not None:
+                await perf_reporter.stop()
             if cleaner is not None:
                 await cleaner.stop()
             if ha_task is not None:
@@ -935,6 +940,7 @@ def create_app(
         # 테스트용 더미처럼 runner 가 admission 속성을 갖지 않을 수도 있어 getattr 로 방어한다.
         admission = getattr(runner, "admission", None)
         if admission is not None and not admission.try_admit():
+            perf.inc("admission.rejected")  # 성능 지표: 한도 초과로 429 를 준 건수
             logger.warning(
                 "동시 job 한도 초과로 거부 (in-flight=%s, capacity=%s)",
                 admission.inflight, admission.capacity,
@@ -1142,6 +1148,7 @@ def create_app(
 
         admission = getattr(runner, "admission", None)
         if admission is not None and not admission.try_admit():
+            perf.inc("admission.rejected")  # 성능 지표: 한도 초과로 429 를 준 건수
             logger.warning(
                 "재실행 거부: 동시 실행/대기 한도 초과 job=%s (capacity=%s, inflight=%s)",
                 job_id, admission.capacity, admission.inflight,

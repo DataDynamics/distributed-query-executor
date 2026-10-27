@@ -251,6 +251,12 @@ class Settings:
         # 이벤트 루프가 이 시간(ms) 넘게 응답하지 않으면 루프 스레드의 실행 위치를 WARNING 으로 남긴다.
         # 0 이면 감시를 끈다(core.loopwatch).
         self.log_loop_stall_ms: int = int(_get("logging", "loop_stall_ms", 500))
+        # 성능 지표 로그(core.perf). 켜면 서비스 로그 옆 *-perf.log 에 interval_s 마다 지표 한 줄을 남기고,
+        # job_summary 가 켜져 있으면 job(coordinator)·task(executor)가 끝날 때마다 요약 한 줄을 더한다.
+        self.log_perf_enabled: bool = _to_bool(_get_nested("logging", "perf", "enabled", True))
+        self.log_perf_interval_s: float = float(_get_nested("logging", "perf", "interval_s", 30))
+        self.log_perf_job_summary: bool = _to_bool(_get_nested("logging", "perf", "job_summary", True))
+        self.log_perf_suffix: str = str(_get_nested("logging", "perf", "suffix", "-perf") or "-perf")
 
         self.config_dir: Path = _CONFIG_DIR
         self.config_yaml_path: Path = _yaml_path

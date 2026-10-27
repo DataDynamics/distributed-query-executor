@@ -152,6 +152,36 @@ class _DailyFileHandler(TimedRotatingFileHandler):
         return archives[:-self.backupCount]
 
 
+# 성능 지표 로그 한 줄 포맷이다. 시각 뒤에 core.perf 가 만든 key=value 들이 그대로 붙는다.
+PERF_LOG_FORMAT = "%(asctime)s %(message)s"
+
+
+def _setup_perf_logging(log_dir: Path, filename: str, settings) -> None:
+    """성능 지표 전용 로거(dqe.perf)에 ``<이름>-perf.log`` 핸들러를 붙인다.
+
+    지표 줄은 서비스 로그·경고 로그와 섞이면 둘 다 읽기 어려우므로 상위로 전파하지 않는다. 꺼져 있으면
+    핸들러를 떼고 레벨을 WARNING 으로 올려, 지표를 만드는 쪽(core.perf.emit_event)이 줄 조립부터 건너뛰게 한다.
+    """
+    from core.perf import PERF_LOGGER_NAME
+
+    perf_log = logging.getLogger(PERF_LOGGER_NAME)
+    for h in list(perf_log.handlers):
+        perf_log.removeHandler(h)
+        h.close()
+    perf_log.propagate = False
+    if not getattr(settings, "log_perf_enabled", False):
+        perf_log.setLevel(logging.WARNING)
+        return
+    handler = _DailyFileHandler(
+        log_dir=log_dir,
+        filename=_warn_filename(filename, getattr(settings, "log_perf_suffix", "-perf")),
+        backup_count=settings.log_rolling_backup_count,
+    )
+    handler.setFormatter(logging.Formatter(fmt=PERF_LOG_FORMAT, datefmt=DATE_FORMAT))
+    perf_log.addHandler(handler)
+    perf_log.setLevel(logging.INFO)
+
+
 def setup_logging(program_name: str, filename: str, settings=default_settings) -> None:
     """설정에 따라 루트 로거의 파일 핸들러를 구성하고 식별자 팩토리를 설치한다.
 
@@ -217,6 +247,8 @@ def setup_logging(program_name: str, filename: str, settings=default_settings) -
         warn_handler.setFormatter(logging.Formatter(fmt=WARN_LOG_FORMAT, datefmt=DATE_FORMAT))
         warn_handler.addFilter(program_filter)
         root_logger.addHandler(warn_handler)
+
+    _setup_perf_logging(log_dir, filename, settings)
 
     # uvicorn/httpx 등 서드파티의 과도한 로그를 정리한다.
     # access 로그는 메인 레벨이 INFO 이하일 때만 INFO 로 남기고, 그보다 엄격하면

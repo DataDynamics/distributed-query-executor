@@ -64,6 +64,13 @@ logging:
   # 이벤트 루프 정지 감시(core.loopwatch). 루프가 이 시간 넘게 응답하지 않으면 그 순간 루프
   # 스레드가 실행 중인 코드 위치(스택)를 WARNING 으로 남긴다. 헬스 체크·폴링 timeout 의 원인 추적용.
   loop_stall_ms: ${log.loop_stall_ms:500}         # 정지로 볼 기준(ms, 0=감시 끔)
+  # 성능 지표 로그(core.perf). 서비스 로그 옆 <이름>-perf.log 에 interval_s 마다 key=value 한 줄로
+  # 실행 슬롯·디스패치·스레드 풀·GP 풀·루프 지연·처리량·자원을 남긴다. bin/perf-report 로 요약한다.
+  perf:
+    enabled: ${log.perf.enabled:true}             # 지표 로그 사용 여부
+    interval_s: ${log.perf.interval_s:30}         # 지표 한 줄을 남기는 주기(초)
+    job_summary: ${log.perf.job_summary:true}     # job(coordinator)·task(executor) 종료마다 요약 한 줄 추가
+    suffix: ${log.perf.suffix:-perf}              # 파일명 접미사(<서비스>-perf.log)
 
 # ───────── Coordinator ─────────
 coordinator:

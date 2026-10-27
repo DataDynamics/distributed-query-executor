@@ -959,6 +959,96 @@ CANCELLED)이 `jobs` 테이블에 계속 남는데, 이 값을 주면 마지막 
 
 ---
 
+## 성능 지표 로그로 튜닝하기
+
+부하가 몰릴 때 어디서 기다리는지는 CPU 그래프만으로는 알 수 없다. 실행 슬롯이 찼는지, 디스패치 한도에
+걸렸는지, 스레드 풀이나 GP 커넥션 풀 앞에서 줄을 섰는지, 이벤트 루프가 늦게 도는지가 각각 다른 설정을
+가리키기 때문이다. 그래서 coordinator 와 executor 는 이 값들을 서비스 로그 옆의 별도 파일에 주기적으로
+남긴다.
+
+```properties
+log.perf.enabled=true         # 지표 로그 사용(기본 켜짐)
+log.perf.interval_s=30        # 한 줄을 남기는 주기(초). 부하 테스트 중에는 10 이 알맞다
+log.perf.job_summary=true     # job·task 가 끝날 때마다 요약 한 줄 추가
+```
+
+파일은 `query-coordinator-server-perf.log`, `query-executor-server-<포트>-perf.log` 이고 다른 로그와 같이
+자정마다 `<이름>-perf_YYYYMMDD.log` 로 넘어가며 같은 보관 개수를 따른다. 30초 주기면 서비스 하나가 하루
+2880줄을 남긴다. 값은 메모리에서만 읽으므로 지표를 남기느라 DB 나 네트워크에 부하를 더하지 않는다.
+
+### 한 줄의 모양
+
+한 줄은 시각 뒤에 `키=값` 을 공백으로 이어 붙인 것이다. `kind=snapshot` 은 주기마다 남는 지표 줄이고,
+`kind=job_done`(coordinator)과 `kind=task_done`(executor)은 끝날 때마다 남는 요약 줄이다.
+
+```
+2026-10-29 14:03:30 kind=snapshot role=coordinator window_s=30 admission.max_pending=100 admission.max_running=16
+  admission.pending=37 admission.running=16 admission.rejected=3 admission.slot_wait_ms.n=12
+  admission.slot_wait_ms.p50=800 admission.slot_wait_ms.p95=42000 admission.slot_wait_ms.max=61000
+  dispatch.inflight=32 dispatch.max=32 dispatch.waiting=118 loop.lag_ms.max=48 pool.default.queued=9 ...
+2026-10-29 14:03:41 kind=job_done job_id=job_3f9c2a1b7d4e status=DONE exec_mode=copy tasks=8 done=8
+  rows=18400000 elapsed_s=212.4 slot_wait_ms=41800 execute_s=212.3 load_s=- rows_per_s=86629
+  bottleneck=source read_starve_ms=1290400 ... slowest_task=t_a1b2c3d4e5f6 slowest_stage=STREAM_COPY
+```
+
+(실제로는 한 줄이다.) 값의 종류는 이름 끝으로 구분한다. `.n`·`.p50`·`.p95`·`.max` 가 붙은 것은 그 구간에
+관측한 값들의 건수와 분포이고, 관측이 없던 구간에는 빠진다. `admission.rejected` 처럼 끝이 붙지 않은 횟수와
+양은 그 구간에 일어난 만큼이며, `admission.running` 같은 상태 값은 기록하는 순간의 값이다. 시간은 `_ms`
+(밀리초)와 `_s`(초)로 표시한다.
+
+### 무엇을 보고 무엇을 바꾸나
+
+| 지표 | 뜻 | 커지면 |
+|---|---|---|
+| `admission.running`/`max_running`, `admission.pending`/`max_pending`, `admission.rejected` | job 실행 슬롯과 대기 큐, 429 거절 수 | executor 에 여유가 있는데 슬롯이 늘 차 있으면 `coordinator.max_concurrent_jobs` 를, 순간 몰림이면 `max_pending_jobs` 를 올린다 |
+| `admission.slot_wait_ms` | job 이 PENDING 에서 슬롯을 기다린 시간 | 위와 같다 |
+| `dispatch.inflight`/`max`, `dispatch.waiting`, `dispatch.slot_wait_ms` | 동시에 띄운 task 수와 기다리는 task 수 | `inflight` 가 `max` 에 붙고 `waiting` 이 있으면 `coordinator.max_dispatch_concurrency` 를 executor 슬롯 합계까지 올린다 |
+| `dispatch.poll_errors.*`, `dispatch.start_errors.*`, `dispatch.failover` | executor 호출 실패를 종류(timeout·disconnected·connect·http_코드)별로 센 것 | 같은 시각 executor 의 `loop.lag_ms` 와 `keep_alive_s` 를 본다 |
+| `executor[호스트:포트].inflight`, `.poll_rtt_ms` | executor 별로 맡긴 task 수와 상태 조회 왕복 시간 | 한쪽으로 쏠리면 `coordinator.executor_select=p2c` 나 예약을 켠다 |
+| `dispatch.phase2_running`, `phase2.load_s` | local_stage·s3_stage 의 Phase 2 적재 중인 job 수와 소요 | GP 쪽 적재 용량을 본다 |
+| `tasks.running`/`max`, `tasks.queued` (executor) | task 실행 슬롯과 대기 | 슬롯이 늘 차 있고 CPU·네트워크에 여유가 있으면 `executor.max_concurrent_tasks` 를, 아니면 executor 를 늘린다 |
+| `gp_pool.in_use`/`max`, `gp_pool.acquire_wait_ms` | GP 커넥션 풀 사용과 연결을 얻기까지 기다린 시간 | 기다림이 보이면 `greenplum.pool_max` 를 동시 task 수 이상으로 올린다 |
+| `gp_pool.reset_failures`, `gp_pool.connect_errors` | 세션 초기화(DISCARD ALL)·연결 실패 | 경고 로그에서 원인을 본다 |
+| `stage.<단계>_ms` (executor) | 끝난 task 의 단계별 소요 분포(QUEUE_WAIT·IMPALA_SUBMIT·STREAM_COPY·COMMIT 등) | 가장 큰 단계가 병목이다 |
+| `copy.read_starve_ms`, `copy.read_wait_ms` | 소스(Impala 등)를 기다린 시간 | 크면 소스가 병목이다. 소스 쪽 자원과 `impala_query_options` 를 본다 |
+| `copy.write_wait_ms`, `copy.finalize_wait_ms` | GP 에 쓰고 반영을 기다린 시간 | 크면 GP 가 병목이다. 대상 테이블 분산키와 GP 부하를 본다 |
+| `loop.lag_ms`, `loop.stalls` | 이벤트 루프가 예정보다 늦게 돈 시간과 멈춘 횟수 | 수십 ms 를 넘으면 블로킹 호출이 있다. 경고 로그의 `이벤트 루프가` 스택을 본다 |
+| `pool.default.*` | 적재 본체(executor)·Phase 2 INSERT(coordinator)가 쓰는 스레드 풀의 사용·큐·대기(`wait_ms`)·실행(`run_ms`) | `queued` 와 `wait_ms` 가 크면 동시 적재 수가 풀 크기(min(32, CPU+4))를 넘는다 |
+| `pool.store.*`, `pool.meta.*`, `meta_db.*` | job 저장, 이력·heartbeat 기록 풀과 메타 DB 연결 시간·실패 | `run_ms` 가 크면 메타 DB 가 느리고, `wait_ms` 가 크면 호출이 몰린다 |
+| `pool.anyio.*` | 대시보드·조회 API 가 쓰는 스레드 | `busy` 가 `max` 에 붙으면 조회가 밀린다 |
+| `jobs_done.*`, `tasks_done.*`, `rows_written`, `rows_read` | 구간 처리량 | 튜닝 전후 비교의 기준이다 |
+| `process.*`, `system.*` | 프로세스 CPU·RSS·스레드·fd, 호스트 CPU·메모리·디스크 사용률과 네트워크·디스크 I/O(MB/s) | 자원 포화 여부를 본다 |
+
+요약 줄의 `bottleneck` 은 읽기와 쓰기 중 어느 쪽이 시간을 더 먹었는지를 판정한 것이다. `source` 면 소스를
+기다린 시간이, `target` 이면 GP 에 쓰고 반영을 기다린 시간이 다른 쪽의 1.5배를 넘었다는 뜻이고, 비슷하면
+`mixed`, 지표가 없는 모드(statement 등)면 `-` 다.
+
+### 요약 도구
+
+`bin/perf-report` 가 지표 파일을 서비스별로 나눠 읽고 시간대별 요약, 병목 의심 구간과 조정 방향, 느린
+job·task, 병목 분포를 출력한다. 경로를 주지 않으면 설정의 로그 디렉터리 전체를 읽는다.
+
+```bash
+bin/perf-report                                              # 로그 디렉터리 전체, 10분 단위
+bin/perf-report --bucket 1m --since '2026-10-29 09:00' --until '2026-10-29 12:00'
+bin/perf-report /data1/distributed-query-executor/logs/query-executor-server-8087-perf.log
+bin/perf-report --source query-coordinator-server --keys admission.pending,dispatch.waiting,rows_written:rate
+```
+
+`--keys` 는 요약 표의 열을 원하는 지표로 바꾼다. 키 뒤에 `:sum`(구간 합), `:max`(최대, 기본), `:rate`(초당),
+`:last`(마지막 값)를 붙여 묶는 방법을 정한다. 병목 의심 항목은 지표 줄마다 규칙을 대 보고 걸린 구간을 묶은
+것으로, 예를 들어 다음처럼 나온다.
+
+```
+[디스패치 한도 포화] 3구간 (14:01~14:05), 최대 118task @ 14:03:30
+    → 동시에 띄운 task 가 coordinator.max_dispatch_concurrency 에 닿아 나머지가 기다린다. executor 슬롯 합계보다 작으면 올린다.
+```
+
+튜닝은 한 번에 한 값만 바꾸고 같은 부하로 다시 돌려, 처리량(`적재행/s`)과 바꾼 지점의 대기 지표가 함께
+좋아졌는지 확인한다. 한 곳의 대기를 풀면 다음 병목이 드러나므로 이 과정을 반복한다.
+
+---
+
 ## 정기적으로 살필 것
 
 디스크부터 본다. `local_stage` 와 `s3_stage` 의 스테이징 경로, 그리고 로그 디렉터리가 대상이다.

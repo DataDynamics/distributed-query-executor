@@ -259,6 +259,16 @@ multiline`)은 머리줄 아래에 원문 줄을 `    | ` 를 붙여 그대로 �
 본문·헤더는 `core.masking`으로 가리며 health·metrics·정적 파일·docs는 기본 제외한다. 두 앱의
 `install_http_logging`으로 등록하며 순수 포매팅 함수는 별도로 테스트한다.
 
+**`core/perf.py`** 는 튜닝용 지표를 `<로그이름>-perf.log` 에 주기적으로(`logging.perf.interval_s`, 기본
+30초) `key=value` 한 줄로 남긴다. 레지스트리 `perf` 에 횟수(`inc`)·분포(`observe`, 구간별 n·p50·p95·max)를
+쌓고 상태 값은 `gauge(name, fn)` 콜백으로 기록 순간에 읽으며, 횟수와 분포는 구간마다 비운다. 지표를 더할
+때는 이 레지스트리에 이름만 붙이면 되고 DB·네트워크 호출을 넣지 않는다(메모리 값만 읽는 것이 전제다).
+스레드 풀은 `InstrumentedThreadPoolExecutor` 로 만들면 `pool.<이름>.*`(사용·큐·대기·실행 시간)가 붙고,
+asyncio 기본 풀도 `start_perf_reporter` 가 이것으로 갈아 끼운다. job·task 가 끝나면 `job_done`·`task_done`
+요약 줄(`logging.perf.job_summary`)이 남고 `bottleneck` 은 소스 대기와 GP 쓰기 대기를 비교한 판정이다.
+`dqe.perf` 로거는 전파하지 않으므로 서비스 로그에 섞이지 않는다. 읽는 쪽은 `bin/perf-report`
+(`tools/perf_report.py`)이고 지표별 조정 기준은 OPERATOR.md 에 있다. 검증은 `tests/test_perf.py` 다.
+
 ### 데이터소스 미리보기(`core/dbprobe.py`)
 
 임의 SQL 을 Impala·Greenplum·history DB 에 실행해 상위 N행을 JSON 안전 형태로 돌려주는 공용
@@ -325,6 +335,8 @@ Executor 상세는 coordinator 프록시를 거치며, 설정 목록의 index로
 - **`bin/s3-ops`** 는 S3 객체를 올리고 내리고 지운다(`ls`·`upload`·`download`·`head`·`cp`·`mv`·
   `rm`·`rmdir`·`exists`·`mkdir`·`buckets`).
 - **`bin/load-test`** 는 coordinator API 부하 테스트 도구다(`tools/load/`, `run`·`plan`·`wizard`).
+- **`bin/perf-report`** 는 성능 지표 로그를 시간대별로 묶고 병목 의심 구간과 조정 방향을 출력한다
+  (`tools/perf_report.py`, `--bucket`·`--since`·`--until`·`--source`·`--keys`).
 
 **`tools/appconfig.py`** 는 공용 설정을 CLI의 `impala`·`greenplum`·`s3`·`sql` 섹션으로
 변환한다. 값은 명령행 > 설정 > 기본값 순이다. `--config-dir`로 위치를 바꾸고
@@ -385,6 +397,8 @@ VU 감소와 drain 중에는 진행 중인 작업을 기다린다. drain 시간�
   조회(폴링)는 `read_level` 로 남긴다. `X-Request-ID` 는 로깅이 꺼져 있어도 붙는다.
 - **실행 SQL 로깅** — `logging.sql.{enabled,format,max_length,params}`(기본 on/multiline/20000/on).
   INFO로 기록하며 로거·핸들러의 레벨 필터를 따른다. 템플릿 렌더 로그도 같은 설정을 따른다.
+- **성능 지표 로그** — `logging.perf.{enabled,interval_s,job_summary}`(기본 on/30/on, properties 는
+  `log.perf.*`). 주기 지표와 job·task 종료 요약을 `*-perf.log` 에 남긴다.
 - **멀티 coordinator** — `store.backend=postgres` 와 공유 `history.db_dsn`,
   `executor.self_report=true` 를 함께 켠다.
 - **백엔드 선택** — `build_backend` 는 **`greenplum.dsn` 하나만** 본다. 비어 있으면 경고를 남기고

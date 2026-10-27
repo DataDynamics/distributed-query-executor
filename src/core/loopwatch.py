@@ -21,6 +21,8 @@ import time
 import traceback
 from typing import Optional
 
+from core.perf import perf
+
 logger = logging.getLogger(__name__)
 
 # 경고에 담을 루프 스레드 스택의 최대 프레임 수다(가장 최근 호출부터).
@@ -79,6 +81,7 @@ class LoopStallWatchdog:
                 return  # 루프가 닫혔다(종료 중)
             if not answered.wait(self.threshold_s):
                 self.stalls += 1
+                perf.inc("loop.stalls")  # 성능 지표 로그의 구간별 정지 횟수
                 # 멈춘 바로 그 순간의 스택이 원인을 가리키므로 기다리기 전에 먼저 잡는다.
                 logger.warning(
                     "이벤트 루프가 %dms 넘게 응답하지 않음 — 루프 스레드 실행 위치:\n%s",

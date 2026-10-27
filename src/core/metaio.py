@@ -20,26 +20,32 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
 from typing import Dict
+
+from core.perf import InstrumentedThreadPoolExecutor, perf
 
 # 풀 이름별 스레드 수다. 메타 호출은 ms 단위로 끝나므로 이 정도면 동시 디스패치가 몰려도 충분하고,
 # DB 가 멈췄을 때 붙잡히는 연결 수에도 상한이 된다.
 _POOL_WORKERS: Dict[str, int] = {"store": 8, "meta": 8}
-_pools: Dict[str, ThreadPoolExecutor] = {}
+_pools: Dict[str, InstrumentedThreadPoolExecutor] = {}
 _pools_lock = threading.Lock()
 
 # 설정을 읽지 못할 때 쓰는 연결 대기 상한(초)이다.
 _DEFAULT_CONNECT_TIMEOUT_S = 5
 
 
-def _executor(name: str) -> ThreadPoolExecutor:
-    """이름에 해당하는 전용 풀을 처음 쓸 때 만든다(프로세스당 하나)."""
+def _executor(name: str) -> InstrumentedThreadPoolExecutor:
+    """이름에 해당하는 전용 풀을 처음 쓸 때 만든다(프로세스당 하나).
+
+    계측용 풀이라 성능 지표 로그에 ``pool.store.*``·``pool.meta.*``(사용 중·큐 길이·대기·실행 시간)가
+    남는다. 실행 시간이 곧 메타 저장소 호출 한 건의 지연이다.
+    """
     with _pools_lock:
         pool = _pools.get(name)
         if pool is None:
-            pool = _pools[name] = ThreadPoolExecutor(
-                max_workers=_POOL_WORKERS[name], thread_name_prefix=f"{name}-io",
+            pool = _pools[name] = InstrumentedThreadPoolExecutor(
+                name, _POOL_WORKERS[name], thread_name_prefix=f"{name}-io",
             )
         return pool
 
@@ -79,6 +85,15 @@ def meta_connect(dsn: str):
     import psycopg
 
     timeout = _connect_timeout_s()
-    if timeout > 0 and "connect_timeout" not in dsn:
-        return psycopg.connect(dsn, connect_timeout=timeout)
-    return psycopg.connect(dsn)
+    kwargs = {"connect_timeout": timeout} if timeout > 0 and "connect_timeout" not in dsn else {}
+    t0 = time.monotonic()
+    try:
+        conn = psycopg.connect(dsn, **kwargs)
+    except Exception as exc:
+        # 연결 실패는 성능 지표 로그에서 구간별로 센다. 대기 상한에 걸린 것은 따로 센다.
+        perf.inc("meta_db.connect_errors")
+        if type(exc).__name__ == "ConnectionTimeout" or "timeout" in str(exc).lower():
+            perf.inc("meta_db.connect_timeouts")
+        raise
+    perf.observe("meta_db.connect_ms", (time.monotonic() - t0) * 1000)
+    return conn

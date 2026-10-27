@@ -36,6 +36,10 @@ from core import s3_stage as s3_sql
 from core.config import is_custom_source
 from core.logging import job_log_context, with_log_context
 from core.metaio import run_meta_io
+from core.perf import (
+    bottleneck, copy_metrics, emit_event, endpoint_key, job_summary_enabled, perf, phases_span_s,
+    slowest_stage, stage_durations,
+)
 from core.phases import close_open_phases
 from . import stage as stage_sql
 from .config import Settings
@@ -56,6 +60,19 @@ _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
 
 # 전송·HTTP 오류는 접수 여부와 상태 코드에 따라 재시도 또는 실패 처리한다.
 _RETRYABLE = (httpx.TransportError, httpx.HTTPStatusError)
+
+
+def _http_error_kind(exc: Exception) -> str:
+    """성능 지표에서 HTTP 오류를 종류별로 세기 위한 짧은 이름이다."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"http_{exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "disconnected"
+    if isinstance(exc, httpx.ConnectError):
+        return "connect"
+    return "other"
 
 
 def _src_kw(job: Job) -> dict:
@@ -138,6 +155,15 @@ class JobAdmission:
         self._sem = asyncio.Semaphore(self.max_running) if self.max_running > 0 else None
         # 현재 수용된 job 수(대기 + 실행). try_admit/release 로만 증감한다.
         self._inflight = 0
+        # 실행 슬롯을 실제로 잡고 있는 job 수다. 대기 수는 inflight 에서 이 값을 뺀 것이다(성능 지표용).
+        self._running = 0
+
+    def perf_gauges(self) -> dict:
+        """성능 지표 로그에 남길 실행·대기 수와 각 한도다(0 은 무제한)."""
+        return {
+            "running": self._running, "max_running": self.max_running,
+            "pending": max(0, self._inflight - self._running), "max_pending": self.max_pending,
+        }
 
     @property
     def capacity(self) -> Optional[int]:
@@ -189,10 +215,18 @@ class JobAdmission:
         무제한 모드(_sem is None)에서는 대기 없이 즉시 통과한다.
         """
         if self._sem is None:
-            yield
+            self._running += 1
+            try:
+                yield
+            finally:
+                self._running -= 1
             return
         async with self._sem:
-            yield
+            self._running += 1
+            try:
+                yield
+            finally:
+                self._running -= 1
 
 
 class _DispatcherBase:
@@ -234,6 +268,44 @@ class _DispatcherBase:
         # job_id 별로 공유 store 의 취소 플래그를 마지막으로 조회한 시각(monotonic)이다.
         # _cancel_observed 가 조회 빈도를 줄이는 데 쓰고, job 이 끝나면 run() 이 지운다.
         self._cancel_checked_at: dict[str, float] = {}
+        # 성능 지표용 계수다. 디스패치 슬롯을 기다리는·잡은 task 수, Phase 2 적재 중인 job 수,
+        # executor 별로 지금 폴링 중인(=실행을 맡긴) task 수를 센다. 모두 이벤트 루프에서만 바꾼다.
+        self._dispatch_waiting = 0
+        self._dispatch_inflight = 0
+        self._phase2_running = 0
+        self._inflight_by_url: dict[str, int] = {}
+        perf.gauge("admission", self.admission.perf_gauges)
+        perf.gauge("dispatch", self._dispatch_gauges)
+        perf.gauge("executor", self._executor_gauges, prefix=False)
+
+    def _dispatch_gauges(self) -> dict:
+        return {
+            "inflight": self._dispatch_inflight, "max": self.settings.max_dispatch_concurrency,
+            "waiting": self._dispatch_waiting, "phase2_running": self._phase2_running,
+        }
+
+    def _executor_gauges(self) -> dict:
+        return {f"executor[{endpoint_key(u)}].inflight": n for u, n in self._inflight_by_url.items()}
+
+    @asynccontextmanager
+    async def _dispatch_slot(self):
+        """디스패치 동시성 세마포어를 잡는다. 기다린 시간과 대기·실행 수를 성능 지표로 남긴다.
+
+        대기 중에 취소되면 슬롯을 얻지 못한 것이므로 반납하지 않고 그대로 예외를 올린다.
+        """
+        t0 = time.monotonic()
+        self._dispatch_waiting += 1
+        try:
+            await self._sem.acquire()
+        finally:
+            self._dispatch_waiting -= 1
+        perf.observe("dispatch.slot_wait_ms", (time.monotonic() - t0) * 1000)
+        self._dispatch_inflight += 1
+        try:
+            yield
+        finally:
+            self._dispatch_inflight -= 1
+            self._sem.release()
 
     def _get_stage_backend(self):
         """local_stage Phase 2 용 GP 백엔드를 lazy 로 생성한다(순수 GP 작업, Impala 불필요).
@@ -611,6 +683,49 @@ class _DispatcherBase:
         """
         return
 
+    def _record_job_perf(self, job: Job, slot_wait_ms: float, elapsed_s: float, timing: dict) -> None:
+        """끝난 job 을 성능 지표에 반영하고, 켜져 있으면 job 요약 한 줄(kind=job_done)을 남긴다.
+
+        요약은 job 전체 소요를 슬롯 대기·Phase 1·Phase 2 로 나누고, 가장 오래 걸린 task 와 그 task 의 가장
+        느린 단계, 읽기·쓰기 병목 판정을 담는다. 지표 기록 실패가 job 마무리를 깨지 않도록 예외는 삼킨다.
+        """
+        try:
+            rows = sum(t.rows_written or 0 for t in job.tasks)
+            perf.inc(f"jobs_done.{job.status.value}")
+            perf.inc("rows_written", rows)
+            perf.observe("job.elapsed_s", elapsed_s)
+            if not job_summary_enabled(self.settings):
+                return
+            totals: dict = {}
+            slowest = None
+            for t in job.tasks:
+                for k, v in copy_metrics(t.phases).items():
+                    totals[k] = totals.get(k, 0) + v
+                span = phases_span_s(t.phases)
+                if span is not None and (slowest is None or span > slowest[1]):
+                    slowest = (t, span)
+            fields = {
+                "job_id": job.job_id, "status": job.status.value, "exec_mode": job.exec_mode,
+                "tasks": len(job.tasks), "done": sum(1 for t in job.tasks if t.status == TaskStatus.DONE),
+                "rows": rows, "elapsed_s": round(elapsed_s, 1), "slot_wait_ms": int(slot_wait_ms),
+                "execute_s": round(timing["execute_s"], 1) if timing.get("execute_s") is not None else "-",
+                "load_s": round(timing["load_s"], 1) if timing.get("load_s") is not None else "-",
+                "rows_per_s": int(rows / elapsed_s) if elapsed_s > 0 else 0,
+                "bottleneck": bottleneck(totals),
+            }
+            fields.update(totals)
+            if slowest is not None:
+                task, span = slowest
+                stage, stage_ms = slowest_stage(stage_durations(task.phases))
+                fields.update({
+                    "slowest_task": task.task_id, "slowest_task_s": round(span, 1),
+                    "slowest_executor": endpoint_key(task.executor_url) if task.executor_url else "-",
+                    "slowest_stage": stage, "slowest_stage_s": round(stage_ms / 1000, 1),
+                })
+            emit_event("job_done", fields)
+        except Exception:
+            logger.debug("job 성능 지표 기록 실패", exc_info=True)
+
     async def run(self, job: Job) -> str:
         """Job 한 건의 전체 수명주기를 구동하고 job_id 를 반환한다.
 
@@ -640,7 +755,10 @@ class _DispatcherBase:
                         self.admission.inflight, self.admission.max_running,
                         self.admission.max_pending,
                     )
+                slot_t0 = time.monotonic()
                 async with self.admission.slot():
+                    slot_wait_ms = (time.monotonic() - slot_t0) * 1000
+                    perf.observe("admission.slot_wait_ms", slot_wait_ms)
                     # 대기하는 사이에 취소됐다면 실행하지 않고 곧바로 종료 처리한다.
                     if await self._cancel_observed(job):
                         logger.info("대기 중 취소 감지 → 실행 건너뜀(CANCELLED)")
@@ -659,16 +777,30 @@ class _DispatcherBase:
                         "job 실행 시작 — exec_mode=%s tasks=%d target=%s write_mode=%s",
                         job.exec_mode, len(job.tasks), job.target_table, job.write_mode,
                     )
+                    # 성능 지표용 구간 소요다. execute 는 task 디스패치(Phase 1), load 는 Phase 2·3 이다.
+                    timing = {"execute_s": None, "load_s": None}
                     try:
                         # local_stage 는 Phase 1 전에 파일을 호스트별 예산(S_h)에 맞춰 배분한다. 예산을 넘겨
                         # 배치할 수 없으면 실행을 건너뛰고 FAILED 로 마감한다.
                         if await self._plan_local_stage(job):
+                            t_exec = time.monotonic()
                             await self._execute(job)
+                            timing["execute_s"] = time.monotonic() - t_exec
                             # local_stage: 모든 export 완료(배리어) 후 GP file:// 적재(Phase 2+3).
                             # s3_stage: 모든 업로드 완료(배리어) 후 GP PXF 적재(Phase 2+3).
                             # 다른 exec_mode 에는 둘 다 즉시 반환하는 no-op 이다.
-                            await self._run_stage_load(job)
-                            await self._run_s3_load(job)
+                            staged = job.exec_mode in ("local_stage", "s3_stage")
+                            t_load = time.monotonic()
+                            if staged:
+                                self._phase2_running += 1
+                            try:
+                                await self._run_stage_load(job)
+                                await self._run_s3_load(job)
+                            finally:
+                                if staged:
+                                    self._phase2_running -= 1
+                                    timing["load_s"] = time.monotonic() - t_load
+                                    perf.observe("phase2.load_s", timing["load_s"])
                     finally:
                         # _execute 가 예외로 끝나도 최종 상태/종료시각/이력은 반드시 남긴다.
                         finalize_job(job)
@@ -684,13 +816,14 @@ class _DispatcherBase:
                             if job.status in (JobStatus.FAILED, JobStatus.PARTIAL)
                             else logging.INFO
                         )
+                        elapsed_s = time.monotonic() - t0
                         logger.log(
                             level,
                             "job 실행 종료 — status=%s 완료=%d/%d 적재=%d행 소요=%.1fs%s",
-                            job.status.value, done, len(job.tasks), rows,
-                            time.monotonic() - t0,
+                            job.status.value, done, len(job.tasks), rows, elapsed_s,
                             f" error={job.error}" if job.error else "",
                         )
+                        self._record_job_perf(job, slot_wait_ms, elapsed_s, timing)
             finally:
                 # PENDING 대기 중 취소든 정상 종료든 예외든, 모든 경로에서 슬롯을 반납한다.
                 self.admission.release()
@@ -748,7 +881,7 @@ class HttpDispatcher(_DispatcherBase):
 
     async def _run_task(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         # 디스패치 동시성 세마포어로 한 번에 떠 있는 task 수를 제한한다.
-        async with self._sem:
+        async with self._dispatch_slot():
             # 슬롯을 잡기까지 기다리는 사이에 취소됐을 수 있으므로 실행 직전에 다시 확인한다.
             if await self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
@@ -805,12 +938,14 @@ class HttpDispatcher(_DispatcherBase):
                         task.task_id, url, task.attempt,
                     )
                     await self._start_task(client, job, task, url)
+                    perf.inc("dispatch.tasks_started")
                     started = True
                     logger.debug("task %s 시작 성공 executor=%s", task.task_id, url)
                     break
                 except _RETRYABLE as exc:
                     last_err = exc
                     task.error = str(exc)
+                    perf.inc(f"dispatch.start_errors.{_http_error_kind(exc)}")
                     if isinstance(exc, httpx.HTTPStatusError):
                         status = exc.response.status_code
                         if 400 <= status < 500 and status != 429:
@@ -841,6 +976,7 @@ class HttpDispatcher(_DispatcherBase):
                     await self._save(job)
                     return
                 if idx + 1 < len(order):
+                    perf.inc("dispatch.failover")
                     logger.warning(
                         "task %s → 다른 executor 로 failover (%s)", task.task_id, url,
                     )
@@ -915,7 +1051,21 @@ class HttpDispatcher(_DispatcherBase):
         # executor가 task를 종료 상태로 보고할 때까지 주기적으로 상태를 조회한다.
         # 일시적 전송 오류(blip)는 task_max_retries 회까지 흡수하고, 그 한도를 넘으면
         # 예외를 올려 상위(_dispatch_with_failover)가 failover/실패를 결정하게 한다.
+        # 성능 지표: 이 executor 에 맡겨 둔 task 수와 폴링 왕복 시간을 남긴다.
+        url = task.executor_url or ""
+        self._inflight_by_url[url] = self._inflight_by_url.get(url, 0) + 1
+        try:
+            await self._poll_loop(client, job, task)
+        finally:
+            left = self._inflight_by_url.get(url, 1) - 1
+            if left > 0:
+                self._inflight_by_url[url] = left
+            else:
+                self._inflight_by_url.pop(url, None)
+
+    async def _poll_loop(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         transient = 0
+        rtt_key = f"executor[{endpoint_key(task.executor_url or '')}].poll_rtt_ms"
         while task.status not in _TERMINAL:
             # 매 폴링마다 취소를 확인해, 취소가 감지되면 더 기다리지 않고 즉시 빠져나온다.
             if await self._cancel_observed(job):
@@ -924,10 +1074,13 @@ class HttpDispatcher(_DispatcherBase):
             # 폴링 간격만큼 쉬었다가 다음 상태를 조회한다. executor 에 과도한 부하를 주지 않기 위해서다.
             await asyncio.sleep(self.settings.poll_interval_s)
             try:
+                t_req = time.monotonic()
                 resp = await client.get(f"{task.executor_url}/tasks/{task.task_id}")
+                perf.observe(rtt_key, (time.monotonic() - t_req) * 1000)
                 resp.raise_for_status()
                 transient = 0  # 성공했으니 일시 오류 카운터를 초기화한다
-            except _RETRYABLE:
+            except _RETRYABLE as exc:
+                perf.inc(f"dispatch.poll_errors.{_http_error_kind(exc)}")
                 transient += 1
                 if transient > self.settings.task_max_retries:
                     raise  # 한도를 넘겼으니 상위에서 실패 처리한다
@@ -1100,7 +1253,7 @@ class LocalDispatcher(_DispatcherBase):
         await asyncio.gather(*(self._run_task(job, t) for t in job.tasks))
 
     async def _run_task(self, job: Job, task: Task) -> None:
-        async with self._sem:
+        async with self._dispatch_slot():
             # 슬롯을 기다리는 사이에 취소됐을 수 있으므로 실행 직전에 확인한다.
             if await self._cancel_observed(job):
                 task.status = TaskStatus.CANCELLED
