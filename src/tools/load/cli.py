@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import yaml
 
 from ..progress import is_interactive
-from . import report, request, scenario
+from . import report, request, resultfile, scenario
 from .client import CoordinatorClient
 from .runner import LoadConfig, LoadRunner
 
@@ -186,6 +186,10 @@ def _add_arguments(p: argparse.ArgumentParser) -> None:
     g.add_argument("--max-error-rate", type=float,
                    help="오류율(0~1)이 이 값을 넘으면 종료 코드 3")
     g.add_argument("--no-progress", action="store_true", default=None, help="진행 줄을 끈다")
+    g.add_argument("--result-dir", metavar="DIR",
+                   help="테스트 기록 파일(YYYYMMDD-HHMMSS.txt)을 둘 디렉터리 (기본 <log.dir>/test_results)")
+    g.add_argument("--no-result-file", action="store_true", default=None,
+                   help="테스트 기록 파일을 만들지 않는다")
     g.add_argument("--yes", "-y", action="store_true", default=None,
                    help="실제 적재 요청의 시작 확인을 건너뛴다")
     g.add_argument("--seed", type=int, help="난수 시드(치환·폴링 jitter 재현용)")
@@ -706,36 +710,73 @@ def cmd_run(opts: Dict[str, Any], stages: Optional[List[scenario.Stage]] = None)
     warmup = opts.get("warmup")
     warmup = min(max(float(warmup), 0.0), 0.9) if warmup is not None else 0.3
     result = report.build_result(runner, meta, warmup_frac=warmup)
-    print(report.format_summary(result))
+    summary_text = report.format_summary(result)
+    print(summary_text)
+    files: Dict[str, str] = {}
     if opts.get("out"):
         report.write_json(opts["out"], result)
         print(f"결과 JSON: {opts['out']}", file=sys.stderr)
+        files["결과 JSON"] = os.path.abspath(opts["out"])
     if opts.get("csv"):
         report.write_csv(opts["csv"], result["timeline"])
         print(f"시계열 CSV: {opts['csv']}", file=sys.stderr)
+        files["시계열 CSV"] = os.path.abspath(opts["csv"])
     if opts.get("samples_csv"):
         report.write_csv(opts["samples_csv"], result["samples"])
         print(f"자원 표본 CSV: {opts['samples_csv']}", file=sys.stderr)
+        files["자원 표본 CSV"] = os.path.abspath(opts["samples_csv"])
     if opts.get("saturation_csv"):
         report.write_csv(opts["saturation_csv"], result["saturation"]["levels"])
         print(f"포화 분석 CSV: {opts['saturation_csv']}", file=sys.stderr)
+        files["포화 분석 CSV"] = os.path.abspath(opts["saturation_csv"])
     if opts.get("chart"):
         _write_chart(opts["chart"], result["saturation"])
+        files["차트"] = os.path.abspath(opts["chart"])
 
+    code, reason = EXIT_OK, "정상 종료"
     limit = opts.get("max_error_rate")
     if limit is not None and result["summary"]["error_rate"] > float(limit):
         print(f"오류율 {result['summary']['error_rate']:.2%} 가 한도 {float(limit):.2%} 를 넘었습니다.",
               file=sys.stderr)
-        return EXIT_THRESHOLD
-    if runner.stop_reason in ("사용자 중단", "SIGTERM"):
-        return EXIT_INTERRUPTED
-    return EXIT_OK
+        code, reason = EXIT_THRESHOLD, f"오류율이 --max-error-rate {float(limit):.2%} 를 넘음"
+    elif runner.stop_reason in ("사용자 중단", "SIGTERM"):
+        code, reason = EXIT_INTERRUPTED, f"중단({runner.stop_reason})"
+    if not opts.get("no_result_file"):
+        _write_result_file(opts, result, summary_text, files, code, reason, started)
+    return code
+
+
+def _write_result_file(opts: Dict[str, Any], result: Dict[str, Any], summary_text: str,
+                       files: Dict[str, str], code: int, reason: str, started: datetime) -> None:
+    """테스트마다 ``<log.dir>/test_results/YYYYMMDD-HHMMSS.txt`` 기록을 남긴다.
+
+    기록은 부가 기능이라 쓰지 못해도(권한·디스크) 테스트 결과와 종료 코드는 바꾸지 않고 경고만 낸다.
+    입력 파라미터에서 헤더는 명령행 줄에 이미 가려져 있으므로 값이 그대로 드러나지 않게 뺀다.
+    """
+    params = {k: v for k, v in opts.items() if k not in ("header", "body") and v is not None}
+    try:
+        text = resultfile.render(
+            result, summary=summary_text,
+            command=resultfile.masked_command(_INVOKED_ARGV, os.environ.get("PROG_NAME", "bin/load-test")),
+            cwd=os.getcwd(), exit_code=code, exit_reason=reason, files=files, params=params)
+        path = resultfile.write(text, started, opts.get("result_dir"))
+    except OSError as exc:
+        print(f"테스트 기록 파일을 쓰지 못했습니다: {exc}", file=sys.stderr)
+        return
+    print(f"테스트 기록: {path}", file=sys.stderr)
+
+
+#: 이번 실행의 명령행 인자다. 테스트 기록 파일에 "어떤 명령으로 돌렸는지"를 그대로 남기려고 main 이 담아 둔다
+#: (wizard 는 만든 인자로 main 을 부르므로 그 인자가 남는다).
+_INVOKED_ARGV: List[str] = []
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    global _INVOKED_ARGV
     parser = build_parser()
     if argv is None:
         argv = sys.argv[1:]
+    _INVOKED_ARGV = list(argv)
     args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()

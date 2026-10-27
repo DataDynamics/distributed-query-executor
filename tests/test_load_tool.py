@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 
 import httpx
 import pytest
@@ -1216,3 +1217,74 @@ def test_choice_는_개수를_주면_중복_없이_여러_개를_후보_순서�
     for bad in ("${choice:a,b|3}", "${choice:a,b|0}", "${choice:a,b|x}", "${choice:a,b|2-1}"):
         with pytest.raises(ValueError):
             scenario.validate_body({"v": bad})
+
+
+# ───────────────────────── 테스트 기록 파일(test_results) ─────────────────────────
+
+def _run_cli_with_fake(monkeypatch, argv):
+    """가짜 coordinator 를 끼워 cli.main 을 끝까지 돌린다(실행 경로·요약·기록 파일까지)."""
+    fake = FakeCoordinator(polls_to_finish=1)
+    real = cli.execute
+
+    async def fake_execute(*a, **kw):
+        kw["transport"] = httpx.MockTransport(fake.handler)
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(cli, "execute", fake_execute)
+    return cli.main(argv)
+
+
+def test_run_은_테스트마다_기록_파일을_남긴다(tmp_path, monkeypatch, capsys):
+    body = tmp_path / "job.json"
+    body.write_text('{"sql": "SELECT 1", "target_table": "t", "password": "s3cret"}', encoding="utf-8")
+    out_dir = tmp_path / "results"
+    argv = ["run", "-c", "http://coord", "--body", str(body), "--vus", "2", "--iterations", "1",
+            "--poll-interval", "10ms", "--baseline", "0", "--no-sample", "--no-progress", "--yes",
+            "-H", "Authorization: Bearer topsecret", "--result-dir", str(out_dir)]
+    assert _run_cli_with_fake(monkeypatch, argv) == cli.EXIT_OK
+    files = sorted(out_dir.glob("*.txt"))
+    assert len(files) == 1 and re.fullmatch(r"\d{8}-\d{6}\.txt", files[0].name)
+    text = files[0].read_text(encoding="utf-8")
+    for section in ("[테스트 커맨드]", "[입력 파라미터]", "[요청 본문]", "[테스트 결과]", "[결과 JSON]"):
+        assert section in text, section
+    assert "bin/load-test run -c http://coord" in text and "--vus 2" in text
+    assert "종료 코드   : 0 (정상 종료)" in text and "[처리량]" in text
+    # 비밀값은 명령행·본문·JSON 어디에도 남지 않는다.
+    assert "topsecret" not in text and "s3cret" not in text and "Authorization: ***" in text
+    # 결과 JSON 은 파싱 가능한 완전한 객체다.
+    blob = text.split("[결과 JSON]", 1)[1].split("\n", 1)[1]
+    data = json.loads(blob)
+    assert data["summary"]["completed"] == 2 and data["meta"]["options"]["vus"] in (2, "2")
+    assert f"테스트 기록: {files[0]}" in capsys.readouterr().err
+
+
+def test_같은_초에_시작하면_번호를_붙이고_끌_수도_있다(tmp_path, monkeypatch):
+    from datetime import datetime
+    from tools.load import resultfile
+    t = datetime(2026, 10, 28, 9, 30, 1)
+    a = resultfile.write("a", t, tmp_path)
+    b = resultfile.write("b", t, tmp_path)
+    assert (a.name, b.name) == ("20261028-093001.txt", "20261028-093001-2.txt")
+    body = tmp_path / "job.json"
+    body.write_text('{"sql": "SELECT 1"}', encoding="utf-8")
+    off = tmp_path / "off"
+    argv = ["run", "-c", "http://coord", "--body", str(body), "--vus", "1", "--iterations", "1",
+            "--poll-interval", "10ms", "--baseline", "0", "--no-sample", "--no-progress", "--yes",
+            "--result-dir", str(off), "--no-result-file"]
+    assert _run_cli_with_fake(monkeypatch, argv) == cli.EXIT_OK
+    assert not off.exists()
+
+
+def test_기본_위치는_설정의_로그_디렉터리_아래_test_results(monkeypatch, tmp_path):
+    from core.config import settings
+    from tools.load import resultfile
+    monkeypatch.setattr(settings, "log_dir", tmp_path / "logs", raising=False)
+    assert resultfile.default_dir() == tmp_path / "logs" / "test_results"
+
+
+def test_명령행_마스킹():
+    from tools.load import resultfile
+    cmd = resultfile.masked_command(
+        ["run", "--header=X-Api-Key: k1", "-H", "Accept: application/json", "--set", "password=pw1"],
+        "bin/load-test")
+    assert "k1" not in cmd and "pw1" not in cmd and "'Accept: application/json'" in cmd

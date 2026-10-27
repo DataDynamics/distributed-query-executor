@@ -411,6 +411,8 @@ VU 감소와 drain 중에는 진행 중인 작업을 기다린다. drain 시간�
 `saturation`은 계단 부하를 만들며, 콘솔·SVG·선택적 PNG(Pillow)로 결과를 표시한다.
 VU 별 곡선(`ascii_chart`)은 VU 수준이 둘 이상일 때만 성립하므로, 모든 실행에 붙는 시간축 그래프는
 `timeline_chart` 가 따로 그린다(열 묶기·이동평균·VU 줄·오류 표시). 포화 분석을 못 그리면 `_saturation_skipped` 가 이유를 남긴다.
+테스트가 끝날 때마다 `resultfile.py` 가 `<log.dir>/test_results/YYYYMMDD-HHMMSS.txt` 에 명령(`_INVOKED_ARGV`)·합친
+파라미터·본문·요약·결과 JSON 을 비밀값을 가려 남긴다(`--result-dir`·`--no-result-file`). 쓰기 실패는 종료 코드를 바꾸지 않는다.
 검증은 `tests/test_load_tool.py`, 사용법은 `src/tools/load/README.md`에 있다.
 
 **`core/version.py`** 의 `__version__`이 버전의 단일 출처다. `pyproject.toml`도 이 값을 읽는다.
