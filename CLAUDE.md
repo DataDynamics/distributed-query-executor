@@ -403,6 +403,9 @@ S3의 같은 버킷 내 재귀 복사·이동은 원본과 대상 프리픽스�
 `${data:<컬럼>}`으로 채운다(`DataFeed`, sequential|random). 한 요청 안의 `${data:..}`는 같은 행을
 보며, 시작 전에 모든 행으로 렌더해 컬럼 누락을 거절한다.
 
+도구의 실패 수는 서버 실패(`server`)·제출 오류(`submit`)·도구 판정(`tool`)의 합이라 대시보드 FAILED 와 다르다.
+`Collector._note_failure` 가 분류(`FAILURE_KINDS`)와 job id 를 남기고 보고서의 `[실패 내역]` 이 이를 나눠 보여 준다.
+
 VU 감소와 drain 중에는 진행 중인 작업을 기다린다. drain 시간을 넘기면 취소하고
 `ABANDONED`로 집계한다. `wizard.py`는 실행 인자를 만들고 `cli.main`을 호출한다.
 화면은 `LiveRenderer`가 갱신하며 비터미널에서는 30초 간격으로 요약한다.

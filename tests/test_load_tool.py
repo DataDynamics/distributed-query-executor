@@ -1288,3 +1288,51 @@ def test_명령행_마스킹():
         ["run", "--header=X-Api-Key: k1", "-H", "Accept: application/json", "--set", "password=pw1"],
         "bin/load-test")
     assert "k1" not in cmd and "pw1" not in cmd and "'Accept: application/json'" in cmd
+
+
+# ───────────────────────── 실패 내역(도구 실패 수 ↔ 대시보드 FAILED 대조) ─────────────────────────
+
+async def test_서버가_FAILED_로_끝낸_job_은_서버_분류로_job_id_와_함께_남는다():
+    fake = FakeCoordinator(final="FAILED")
+    runner = await _run(fake, iterations=1)
+    s = runner.collector.summary(runner.total_elapsed, runner.load_elapsed)
+    assert s["failure_breakdown"]["server"] == {"FAILED": s["failed"]} and s["failed"] > 0
+    assert s["failure_breakdown"]["submit"] == {} and s["failure_breakdown"]["tool"] == {}
+    fails = runner.collector.failures
+    assert all(f["kind"] == "server" and f["job_id"] and f["coordinator"] == "http://coord" for f in fails)
+    text = "\n".join(report.format_failures(s, fails))
+    assert "① 서버가 실패로 끝낸 job" in text and "서버 실패 job:" in text and "(FAILED)" in text
+
+
+async def test_사라진_job_은_도구_판정으로_분류한다():
+    fake = FakeCoordinator(lose_jobs=True)
+    runner = await _run(fake, iterations=1)
+    s = runner.collector.summary(runner.total_elapsed, runner.load_elapsed)
+    assert s["failure_breakdown"]["tool"].get("LOST", 0) == s["failed"] > 0
+    assert "③ 도구 판정" in "\n".join(report.format_failures(s, runner.collector.failures))
+
+
+def test_제출_오류는_job_이_없는_분류로_세고_대시보드에_없다고_알린다():
+    col = Collector()
+    col.record_submit(1.0, "conn_error", None, error="ReadTimeout: timed out", coordinator="http://c")
+    col.record_submit(1.5, "client_error", 0.01, error="HTTP 422 ...", coordinator="http://c", status_code=422)
+    col.record_submit(2.0, "rejected_429", 0.01)      # 429 는 실패가 아니다
+    col.record_job(3.0, "PARTIAL", False, 1.0, job_id="job_p", coordinator="http://c")
+    s = col.summary(10.0, 10.0)
+    assert s["failed"] == 3
+    assert s["failure_breakdown"] == {"server": {"PARTIAL": 1}, "submit": {"conn_error": 1, "client_error": 1},
+                                      "tool": {}}
+    assert [f["http_status"] for f in col.failures if f["kind"] == "submit"] == [None, 422]
+    text = "\n".join(report.format_failures(s, col.failures))
+    assert "② 제출 단계 오류(job id 없음)  2건" in text and "conn_error" in text and "job_p(PARTIAL)" in text
+    assert report.format_failures(Collector().summary(1, 1), []) == []
+
+
+def test_실패_상세는_상한까지만_담고_나머지는_센다(monkeypatch):
+    from tools.load import stats
+    monkeypatch.setattr(stats, "MAX_FAILURE_DETAILS", 2)
+    col = Collector()
+    for i in range(5):
+        col.record_job(float(i), "FAILED", False, 1.0, job_id=f"j{i}")
+    s = col.summary(5, 5)
+    assert len(col.failures) == 2 and s["failures_dropped"] == 3 and s["failure_breakdown"]["server"]["FAILED"] == 5

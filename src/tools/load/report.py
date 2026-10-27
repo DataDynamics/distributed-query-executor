@@ -62,6 +62,7 @@ def build_result(runner: Any, meta: Dict[str, Any], warmup_frac: float = 0.3) ->
         "resources": runner.sampler.summary() if runner.sampler else None,
         "saturation": {"warmup_frac": warmup_frac, "levels": levels, "knee": knee},
         "timeline": timeline,
+        "failures": list(col.failures),
         "samples": runner.sampler.rows() if runner.sampler else [],
     }
 
@@ -185,6 +186,11 @@ def format_summary(result: Dict[str, Any]) -> str:
         lines.append(f"  coordinator 처리 중 job 최대: {res['jobs_active_max']} "
                      "(도구 밖에서 들어온 job 포함)")
 
+    fail = format_failures(s, result.get("failures") or [])
+    if fail:
+        lines.append(_section("실패 내역"))
+        lines.extend(fail)
+
     if s["top_errors"]:
         lines.append(_section("주요 오류"))
         for msg, n in s["top_errors"]:
@@ -210,6 +216,55 @@ def _saturation_skipped(sat: Optional[Dict[str, Any]]) -> str:
         head = "  VU 별 처리량을 잴 만큼 부하가 유지되지 않아 생략했다."
     return (head + " 포화점을 찾으려면 saturation 명령이나 --stages 로 VU 를 계단으로 올리며 각 단을 "
             "충분히(30초 이상) 유지한다.")
+
+
+#: 실패 분류별 제목과, coordinator 대시보드에서 어떻게 보이는지에 대한 한 줄 설명이다.
+_FAILURE_LABELS = {
+    "server": ("서버가 실패로 끝낸 job",
+               "대시보드 실행 이력에 같은 상태로 보인다(PARTIAL·CANCELLED 는 FAILED 가 아니라 그 상태로 센다)"),
+    "submit": ("제출 단계 오류(job id 없음)", "서버에 job 이 만들어지지 않아 대시보드에 없다"),
+    "tool": ("도구 판정",
+             "POLL_TIMEOUT·LOST 는 도구가 기다림을 그만둔 것이라 서버에서는 계속 돌았거나 성공했을 수 있다"),
+}
+
+
+def format_failures(s: Dict[str, Any], failures: Sequence[Dict[str, Any]], sample: int = 10) -> List[str]:
+    """도구가 센 실패를 어디서 났는지(서버·제출·도구 판정)로 나눠 보여 준다.
+
+    도구의 실패 수는 서버가 FAILED 로 끝낸 job 만이 아니라 제출 오류와 도구 판정까지 더한 값이라
+    coordinator 대시보드의 FAILED 수와 다를 수 있다. 그 차이를 한눈에 가르고, 대시보드에서 찾아볼 수 있도록
+    서버 쪽 실패 job id 를 몇 개 보여 준다. 실패가 없으면 빈 목록이다.
+    """
+    breakdown = s.get("failure_breakdown") or {}
+    total = sum(sum(v.values()) for v in breakdown.values())
+    if not total:
+        return []
+    out = [f"  도구가 센 실패 {total:,}건의 출처다. coordinator 대시보드에는 ① 만 job 으로 보인다."]
+    for no, kind in zip("①②③", ("server", "submit", "tool")):
+        counts = breakdown.get(kind) or {}
+        n = sum(counts.values())
+        if not n:
+            continue
+        title, note = _FAILURE_LABELS[kind]
+        detail = " · ".join(f"{k} {v:,}" for k, v in counts.items())
+        out.append(f"  {no} {title}  {n:,}건  ({detail})")
+        out.append(f"     → {note}")
+        if kind == "submit" and counts.get("conn_error"):
+            # 응답을 못 받았을 뿐 서버는 요청을 받아 job 을 만들었을 수 있다(제출 HTTP 타임아웃이 대표적이다).
+            out.append("     → conn_error 는 응답을 받지 못한 것이라 서버가 이미 받아 실행했을 수 있다. 서버가 느려 "
+                       "--http-timeout 을 넘겼다면 대시보드에는 그 job 이 DONE 으로 남는다")
+    server_ids = [f"{f['job_id']}({f['outcome']})" for f in failures if f.get("kind") == "server" and f.get("job_id")]
+    if server_ids:
+        more = f" 외 {len(server_ids) - sample}건" if len(server_ids) > sample else ""
+        out.append(f"  서버 실패 job: {', '.join(server_ids[:sample])}{more}")
+    tool_ids = [f"{f['job_id']}({f['outcome']})" for f in failures if f.get("kind") == "tool" and f.get("job_id")]
+    if tool_ids:
+        more = f" 외 {len(tool_ids) - sample}건" if len(tool_ids) > sample else ""
+        out.append(f"  도구 판정 job: {', '.join(tool_ids[:sample])}{more}  (대시보드에서 실제 최종 상태를 확인한다)")
+    if s.get("failures_dropped"):
+        out.append(f"  (상세는 {len(failures):,}건까지만 담았다. 나머지 {s['failures_dropped']:,}건은 건수만 셌다)")
+    out.append("  전체 목록은 결과 JSON 의 failures 에 있다(job_id·분류·HTTP 상태·오류).")
+    return out
 
 
 def format_saturation(sat: Optional[Dict[str, Any]]) -> List[str]:

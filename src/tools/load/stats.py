@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 #: 요청 결과 분류다. accepted 는 async 요청이 접수된 것(이후 폴링으로 완료를 본다)이고, ok 는 sync
 #: 요청이 성공 응답을 받은 것(받는 순간 완료)이다. unexpected_status 는 sync 에서 2xx 이지만 성공
@@ -27,6 +27,17 @@ SUBMIT_ERRORS = ("client_error", "server_error", "conn_error", "unexpected_statu
 #: 중 요청이 사라진 것(404), ABANDONED 는 테스트를 멈출 때 drain 시간 안에 끝나지 않아 도구가 손을
 #: 뗀 것이다. ABANDONED 는 도구가 끊은 것이라 오류율에 넣지 않는다.
 TOOL_OUTCOMES = ("POLL_TIMEOUT", "LOST", "ABANDONED")
+
+#: 실패 한 건이 어디서 났는지의 분류다. 도구의 "실패" 수와 coordinator 대시보드의 FAILED 수가 다른 이유를
+#: 가르는 기준이라 보고서에 이 셋으로 나눠 보여 준다.
+#:   server — 서버가 성공이 아닌 종료 상태(FAILED·PARTIAL·CANCELLED 등)로 끝낸 job. 대시보드에 그 상태로 남는다.
+#:   submit — 제출 요청 자체가 실패해 job id 를 받지 못한 것. 대개 서버에 job 이 없지만, conn_error(타임아웃)는
+#:            서버가 이미 받아 실행했을 수 있다.
+#:   tool   — 도구가 판정한 실패(POLL_TIMEOUT·LOST). 서버에서는 계속 돌았거나 성공했을 수 있다.
+FAILURE_KINDS = ("server", "submit", "tool")
+
+#: 실패 상세(job id·오류)를 결과에 담는 상한이다. 넘으면 건수만 센다(결과 파일이 끝없이 커지지 않게).
+MAX_FAILURE_DETAILS = 1000
 
 
 def percentile(sorted_values: Sequence[float], p: float) -> Optional[float]:
@@ -94,11 +105,30 @@ class Collector:
         self.first_accept_at: Optional[float] = None
         self.first_reject_at: Optional[float] = None
         self.first_reject_vus: Optional[int] = None
+        # 실패 한 건마다의 상세다. 대시보드와 대조할 수 있도록 job id 와 실패 분류(FAILURE_KINDS)를 담는다.
+        self.failures: List[Dict[str, Any]] = []
+        self.failure_kinds: Dict[str, Counter] = {k: Counter() for k in FAILURE_KINDS}
+        self.failures_dropped = 0
 
     # ── 기록 ──
 
+    def _note_failure(self, t: float, kind: str, outcome: str, *, job_id: Optional[str] = None,
+                      coordinator: Optional[str] = None, status_code: Optional[int] = None,
+                      error: Optional[str] = None) -> None:
+        """실패 한 건을 분류별로 세고, 상한까지 상세를 남긴다."""
+        self.failure_kinds[kind][outcome] += 1
+        if len(self.failures) >= MAX_FAILURE_DETAILS:
+            self.failures_dropped += 1
+            return
+        self.failures.append({
+            "t": round(t, 2), "kind": kind, "outcome": outcome, "job_id": job_id,
+            "coordinator": coordinator, "http_status": status_code,
+            "error": _short(error) if error else None,
+        })
+
     def record_submit(self, t: float, outcome: str, latency: Optional[float],
-                      error: Optional[str] = None, vus: Optional[int] = None) -> None:
+                      error: Optional[str] = None, vus: Optional[int] = None,
+                      coordinator: Optional[str] = None, status_code: Optional[int] = None) -> None:
         """요청 한 건을 기록한다. latency 는 응답을 받은 경우에만 있다(연결 오류면 None).
 
         sync 요청의 ok 는 받는 순간이 완료이므로 완료·성공으로도 함께 센다.
@@ -122,12 +152,16 @@ class Collector:
                 self.first_reject_vus = vus
         else:
             b["request_errors"] += 1
+            if outcome in SUBMIT_ERRORS:
+                self._note_failure(t, "submit", outcome, coordinator=coordinator,
+                                   status_code=status_code, error=error)
         if error:
             self.errors[_short(error)] += 1
 
     def record_job(self, t: float, outcome: str, success: bool, e2e: Optional[float],
                    queue: Optional[float] = None, run: Optional[float] = None,
-                   rows: Optional[int] = None, error: Optional[str] = None) -> None:
+                   rows: Optional[int] = None, error: Optional[str] = None,
+                   job_id: Optional[str] = None, coordinator: Optional[str] = None) -> None:
         """async 요청 하나의 종료를 기록한다. outcome 은 서버 상태이거나 TOOL_OUTCOMES 중 하나다."""
         self.job_counts[outcome] += 1
         terminal = outcome not in TOOL_OUTCOMES
@@ -145,6 +179,8 @@ class Collector:
         elif outcome != "ABANDONED":
             self.job_failed += 1
             b["failed"] += 1
+            self._note_failure(t, "tool" if outcome in TOOL_OUTCOMES else "server", outcome,
+                               job_id=job_id, coordinator=coordinator, error=error)
         if queue is not None and queue >= 0:
             self.queue_time.append(queue)
         if run is not None and run >= 0:
@@ -235,6 +271,8 @@ class Collector:
                 "queue": summarize(self.queue_time),
                 "run": summarize(self.run_time),
             },
+            "failure_breakdown": {k: dict(self.failure_kinds[k].most_common()) for k in FAILURE_KINDS},
+            "failures_dropped": self.failures_dropped,
             "poll_requests": self.poll_requests,
             "poll_errors": self.poll_errors,
             "cancel_sent": self.cancel_sent,

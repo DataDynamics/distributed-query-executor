@@ -289,7 +289,8 @@ class LoadRunner:
         elif outcome == "unexpected_status":
             error = f"성공 코드로 지정하지 않은 응답 HTTP {res.status_code}"
         self.collector.record_submit(self.elapsed(), outcome, res.latency, error,
-                                     vus=self.active_vus)
+                                     vus=self.active_vus, coordinator=res.coordinator,
+                                     status_code=res.status_code)
         if outcome == "accepted":
             vu.job = {"base": res.coordinator, "id": self._request_id(res),
                       "submitted": time.monotonic() - (res.latency or 0.0)}
@@ -324,7 +325,8 @@ class LoadRunner:
             waited = time.monotonic() - job["submitted"]
             if waited > self.cfg.job_timeout:
                 self.collector.record_job(self.elapsed(), "POLL_TIMEOUT", False, None,
-                                          error=f"{job['id']} {int(waited)}초 초과")
+                                          error=f"{job['id']} {int(waited)}초 초과",
+                                          job_id=job["id"], coordinator=job["base"])
                 return
             self.collector.poll_requests += 1
             pr = await self.client.poll(job["base"], path)
@@ -333,7 +335,8 @@ class LoadRunner:
                 not_found += 1
                 if not_found >= 3:
                     self.collector.record_job(self.elapsed(), "LOST", False, None,
-                                              error=f"{job['id']} 404")
+                                              error=f"{job['id']} 404",
+                                              job_id=job["id"], coordinator=job["base"])
                     return
                 continue
             if pr.status_code != 200 or not isinstance(pr.data, dict):
@@ -350,6 +353,7 @@ class LoadRunner:
                     run=server_seconds(b.get(poll.started_field), b.get(poll.finished_field)),
                     rows=_as_int(b.get(poll.rows_field)),
                     error=None if success else b.get(poll.error_field),
+                    job_id=job["id"], coordinator=job["base"],
                 )
                 return
 
