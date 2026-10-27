@@ -956,6 +956,47 @@ def test_format_saturation_은_표와_곡선과_무릎점을_낸다():
         _staircase_timeline({4: 10})), "knee": None}) == []
 
 
+def _flat_timeline(seconds, vus, tps, events=None):
+    """VU 하나로 고정한 실행의 초 단위 시계열이다(일반 run 의 모양)."""
+    rows = []
+    for i in range(seconds):
+        row = {"second": i, "vus": vus, "inflight": 0, "submitted": tps, "completed": tps,
+               "success": tps, "failed": 0, "request_errors": 0, "rejected_429": 0, "rows": tps * 10}
+        row.update((events or {}).get(i, {}))
+        rows.append(row)
+    return rows
+
+
+def test_timeline_chart_는_VU_가_하나여도_시간축_막대를_그린다():
+    tl = _flat_timeline(120, 2, 3, events={50: {"failed": 1}, 80: {"rejected_429": 2}})
+    out = analysis.timeline_chart(tl, width=60, height=6)
+    text = "\n".join(out)
+    assert "완료 TPS 추이" in text and "열 하나 = 2초" in text and "최고 3.0 TPS" in text
+    assert "█" in text and "(0~2)" in text and "!" in text and "×" in text
+    assert out[-1].strip().startswith("0s") and out[-1].rstrip().endswith("2m")
+    # 막대 열 수는 width 를 넘지 않는다.
+    bar_rows = [ln for ln in out if "┤" in ln or "┼" in ln]
+    assert len(bar_rows) == 6 and all(len(ln.split("┤")[-1].split("┼")[-1]) <= 60 for ln in bar_rows)
+
+
+def test_timeline_chart_는_끝의_빈_초를_자르고_짧으면_그리지_않는다():
+    tl = _flat_timeline(10, 1, 2) + [{"second": 10 + i, "vus": 0, "submitted": 0, "completed": 0}
+                                     for i in range(50)]
+    out = analysis.timeline_chart(tl, width=60)
+    assert "열 하나 = 1초" in out[0] and out[-1].rstrip().endswith("10s")
+    assert analysis.timeline_chart(_flat_timeline(1, 1, 1)) == []
+
+
+def test_요약은_VU_가_하나인_실행에도_추이를_그리고_포화_생략_이유를_적는다():
+    tl = _flat_timeline(60, 2, 4)
+    levels = analysis.per_vu_levels(tl)
+    result = {"timeline": tl, "saturation": {"levels": levels, "knee": analysis.find_knee(levels)}}
+    lines = ["[시간대별 추이]"] + analysis.timeline_chart(tl)
+    assert "완료 TPS 추이" in "\n".join(lines)
+    msg = report._saturation_skipped(result["saturation"])
+    assert "VU 수준이 하나뿐이라(VU 2)" in msg and "saturation" in msg
+
+
 @pytest.mark.skipif(not charts.available(), reason="Pillow 미설치(에어갭 번들 등)")
 def test_charts_png_은_Pillow_로_파일을_만든다(tmp_path):
     levels = analysis.per_vu_levels(_staircase_timeline({1: 5, 2: 10, 4: 18, 8: 26, 16: 27, 32: 25}))

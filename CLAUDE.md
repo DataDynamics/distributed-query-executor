@@ -409,6 +409,8 @@ VU 감소와 drain 중에는 진행 중인 작업을 기다린다. drain 시간�
 
 `analysis.py`는 VU 수준별 과도구간을 제외하고 완료 TPS와 무릎점을 계산한다.
 `saturation`은 계단 부하를 만들며, 콘솔·SVG·선택적 PNG(Pillow)로 결과를 표시한다.
+VU 별 곡선(`ascii_chart`)은 VU 수준이 둘 이상일 때만 성립하므로, 모든 실행에 붙는 시간축 그래프는
+`timeline_chart` 가 따로 그린다(열 묶기·이동평균·VU 줄·오류 표시). 포화 분석을 못 그리면 `_saturation_skipped` 가 이유를 남긴다.
 검증은 `tests/test_load_tool.py`, 사용법은 `src/tools/load/README.md`에 있다.
 
 **`core/version.py`** 의 `__version__`이 버전의 단일 출처다. `pyproject.toml`도 이 값을 읽는다.

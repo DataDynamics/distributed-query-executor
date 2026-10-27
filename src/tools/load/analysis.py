@@ -162,3 +162,95 @@ def ascii_chart(levels: Sequence[Dict[str, Any]], field: str = "complete_tps",
     lines.append(" " * gutter + "└" + "─" * (cw * len(pts)))
     lines.append(" " * (gutter + 1) + "".join(x.center(cw) for x in labels) + "  VU")
     return lines
+
+
+#: 막대 끝을 1/8 칸 단위로 그리는 문자다(아래에서 위로 차오른다).
+_EIGHTHS = " ▁▂▃▄▅▆▇█"
+
+
+def _fmt_secs(sec: float) -> str:
+    """x 축 시각 라벨이다. 1분 미만은 초, 그 이상은 분·초로 줄여 쓴다."""
+    sec = int(round(sec))
+    if sec < 60:
+        return f"{sec}s"
+    m, s = divmod(sec, 60)
+    return f"{m}m" if s == 0 else f"{m}m{s:02d}s"
+
+
+def timeline_chart(timeline: Sequence[Dict[str, Any]], width: int = 60, height: int = 8,
+                   field: str = "completed", title: str = "완료 TPS 추이") -> List[str]:
+    """초 단위 시계열을 시간축 막대그래프로 그린다. VU 가 하나로 고정된 실행에서도 그려진다.
+
+    포화 곡선(:func:`ascii_chart`)은 VU 수준이 둘 이상이어야 의미가 있지만, 처리량이 시간에 따라 어떻게
+    오르내렸는지(워밍업·정체·급락·drain)는 어떤 실행에서든 궁금한 것이라 따로 그린다. 시계열이 ``width``
+    보다 길면 연속한 초를 한 열로 묶어 평균 TPS 를 쓰고, 막대 끝은 1/8 칸 문자로 그려 높이 차이가 작아도
+    보이게 한다. 막대 아래에는 그 열의 최대 VU 를 같은 문자로 한 줄 그리고, 오류(``!``)나 429(``×``)가
+    난 열은 표시 줄로 짚는다. 한 열이 묶는 초가 적으면 몇 초의 이동평균으로 다듬는다. 표시할 초가 둘
+    미만이면 빈 목록을 돌려준다.
+    """
+    # 마지막 활동(제출·완료) 뒤에 남은 빈 초는 그래프를 납작하게 만들 뿐이라 잘라 낸다.
+    rows = list(timeline)
+    while rows and not any(rows[-1].get(f, 0) for f in ("submitted", "completed")) and rows[-1].get("vus", 0) == 0:
+        rows.pop()
+    if len(rows) < 2:
+        return []
+    width = max(10, width)
+    plot_h = max(3, height)
+    per = max(1, -(-len(rows) // width))          # 한 열이 묶는 초(올림)
+    cols = []
+    for i in range(0, len(rows), per):
+        chunk = rows[i:i + per]
+        cols.append({
+            "tps": sum(r.get(field, 0) for r in chunk) / len(chunk),
+            "vus": max(r.get("vus", 0) for r in chunk),
+            "err": sum(r.get("failed", 0) + r.get("request_errors", 0) for r in chunk),
+            "rej": sum(r.get("rejected_429", 0) for r in chunk),
+        })
+    # 완료는 job 이 끝나는 순간에만 세므로 1초 열은 0·1·2 처럼 들쭉날쭉하다. 열이 묶는 초가 적으면 앞쪽
+    # 몇 열의 이동평균으로 다듬어 추세가 보이게 한다(시계열이 짧을수록 창도 작게, 최대 5초).
+    window = max(1, min(5, len(rows) // 6) // per)
+    if window > 1:
+        raw = [c["tps"] for c in cols]
+        for k, c in enumerate(cols):
+            span = raw[max(0, k - window + 1):k + 1]
+            c["tps"] = sum(span) / len(span)
+    vmax = max(c["tps"] for c in cols)
+    gutter = 7
+    unit = f"열 하나 = {per}초"
+    if window > 1:
+        unit += f", {window * per}초 이동평균"
+    lines = [f"  {title}   ({unit}, 최고 {vmax:.1f} TPS)"]
+    for r in range(plot_h - 1, -1, -1):
+        lbl = f"{vmax:6.1f}" if r == plot_h - 1 else (f"{0.0:6.1f}" if r == 0 else " " * 6)
+        cells = []
+        for c in cols:
+            level = c["tps"] / vmax * plot_h if vmax > 0 else 0.0
+            if level >= r + 1:
+                cells.append("█")
+            elif level > r:
+                # 값이 0 이 아니면 바닥 줄에 최소 한 칸은 보이게 한다.
+                cells.append(_EIGHTHS[max(1, int(round((level - r) * 8)))])
+            else:
+                cells.append(" ")
+        lines.append(f"{lbl} {'┼' if r == 0 else '┤'}" + "".join(cells))
+    lines.append(" " * gutter + "└" + "─" * len(cols))
+    vmax_vu = max(c["vus"] for c in cols)
+    vu_cells = "".join(_EIGHTHS[int(round(c["vus"] / vmax_vu * 8))] if vmax_vu else " " for c in cols)
+    lines.append(f"{'VU':>6}  {vu_cells}  (0~{vmax_vu})")
+    if any(c["err"] or c["rej"] for c in cols):
+        marks = "".join("×" if c["rej"] else ("!" if c["err"] else " ") for c in cols)
+        lines.append(f"{'':6}  {marks}  (! 오류, × 429)")
+    total = len(rows)
+    left, mid, right = _fmt_secs(0), _fmt_secs(total / 2), _fmt_secs(total)
+    axis = [" "] * len(cols)
+    def put(pos: int, text: str) -> None:
+        pos = max(0, min(len(cols) - len(text), pos))
+        for k, ch in enumerate(text):
+            if 0 <= pos + k < len(axis):
+                axis[pos + k] = ch
+    put(0, left)
+    if len(cols) >= len(left) + len(mid) + len(right) + 4:
+        put(len(cols) // 2 - len(mid) // 2, mid)
+    put(len(cols) - len(right), right)
+    lines.append(" " * (gutter + 1) + "".join(axis))
+    return lines

@@ -190,11 +190,26 @@ def format_summary(result: Dict[str, Any]) -> str:
         for msg, n in s["top_errors"]:
             lines.append(f"  {n:>6,} × {msg}")
 
+    trend = analysis.timeline_chart(result.get("timeline") or [])
+    if trend:
+        lines.append(_section("시간대별 추이"))
+        lines.extend(trend)
+
     sat = format_saturation(result.get("saturation"))
-    if sat:
-        lines.append(_section("포화 분석"))
-        lines.extend(sat)
+    lines.append(_section("포화 분석"))
+    lines.extend(sat or [_saturation_skipped(result.get("saturation"))])
     return "\n".join(lines)
+
+
+def _saturation_skipped(sat: Optional[Dict[str, Any]]) -> str:
+    """포화 분석을 그리지 못한 이유다. VU 를 하나로 고정한 실행이면 VU 별 곡선이 성립하지 않는다."""
+    levels = [lv for lv in (sat or {}).get("levels", []) if lv["seconds"] > 0]
+    if len(levels) == 1:
+        head = f"  VU 수준이 하나뿐이라(VU {levels[0]['vus']}) VU 별 처리량 곡선은 생략했다."
+    else:
+        head = "  VU 별 처리량을 잴 만큼 부하가 유지되지 않아 생략했다."
+    return (head + " 포화점을 찾으려면 saturation 명령이나 --stages 로 VU 를 계단으로 올리며 각 단을 "
+            "충분히(30초 이상) 유지한다.")
 
 
 def format_saturation(sat: Optional[Dict[str, Any]]) -> List[str]:
