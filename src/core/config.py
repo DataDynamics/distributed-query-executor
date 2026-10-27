@@ -257,6 +257,9 @@ class Settings:
         self.log_perf_interval_s: float = float(_get_nested("logging", "perf", "interval_s", 30))
         self.log_perf_job_summary: bool = _to_bool(_get_nested("logging", "perf", "job_summary", True))
         self.log_perf_suffix: str = str(_get_nested("logging", "perf", "suffix", "-perf") or "-perf")
+        # Prometheus exporter(core.prometheus)다. 켜면 두 앱이 GET /metrics/prometheus 를 등록하고, 지표 로그를
+        # 꺼 두어도 루프 지연·기본 스레드 풀 계측은 exporter 를 위해 계속 돈다.
+        self.prometheus_enabled: bool = _to_bool(_get("prometheus", "enabled", True))
 
         self.config_dir: Path = _CONFIG_DIR
         self.config_yaml_path: Path = _yaml_path

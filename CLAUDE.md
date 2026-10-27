@@ -269,6 +269,16 @@ asyncio 기본 풀도 `start_perf_reporter` 가 이것으로 갈아 끼운다. j
 `dqe.perf` 로거는 전파하지 않으므로 서비스 로그에 섞이지 않는다. 읽는 쪽은 `bin/perf-report`
 (`tools/perf_report.py`)이고 지표별 조정 기준은 OPERATOR.md 에 있다. 검증은 `tests/test_perf.py` 다.
 
+**`core/prometheus.py`** 는 같은 레지스트리를 `GET /metrics/prometheus` 로 Prometheus 텍스트 형식으로
+내보내는 exporter 다(`prometheus.enabled`, 의존성 없이 직접 직렬화). `/metrics` 는 대시보드·헬스 모니터가
+읽는 JSON 이라 경로를 바꾸지 않는다. Prometheus 는 누적값을 긁으므로 레지스트리는 구간 값과 별도로
+카운터 누적 합(`totals`)과 분포의 누적 히스토그램(`histograms`)을 쌓고, 지표 로그의 `collect()` 는 이를
+비우지 않는다. 이름은 키에서 기계적으로 만들되 가변 부분(executor 주소·풀·단계·상태·오류 종류)은
+`_LABEL_RULES` 로 레이블로 빼고, 시간 지표는 초(`_seconds`)로 바꾼다. 키에 새 가변 부분을 넣는 지표를
+더하면 이 규칙도 함께 고친다. 직전 호출과의 차이로 값을 내는 `system` 게이지는 지표 로그 몫이라 exporter 가
+부르지 않고 자원은 누적값으로 따로 읽는다. coordinator 의 `GET /prometheus/targets` 는 executor 목록을
+`http_sd_configs` 형식으로 준다. 검증은 `tests/test_prometheus.py` 다.
+
 ### 데이터소스 미리보기(`core/dbprobe.py`)
 
 임의 SQL 을 Impala·Greenplum·history DB 에 실행해 상위 N행을 JSON 안전 형태로 돌려주는 공용
@@ -399,6 +409,8 @@ VU 감소와 drain 중에는 진행 중인 작업을 기다린다. drain 시간�
   INFO로 기록하며 로거·핸들러의 레벨 필터를 따른다. 템플릿 렌더 로그도 같은 설정을 따른다.
 - **성능 지표 로그** — `logging.perf.{enabled,interval_s,job_summary}`(기본 on/30/on, properties 는
   `log.perf.*`). 주기 지표와 job·task 종료 요약을 `*-perf.log` 에 남긴다.
+- **Prometheus exporter** — `prometheus.enabled`(기본 on). `GET /metrics/prometheus` 와 coordinator 의
+  `GET /prometheus/targets`(http_sd) 를 등록한다.
 - **멀티 coordinator** — `store.backend=postgres` 와 공유 `history.db_dsn`,
   `executor.self_report=true` 를 함께 켠다.
 - **백엔드 선택** — `build_backend` 는 **`greenplum.dsn` 하나만** 본다. 비어 있으면 경고를 남기고

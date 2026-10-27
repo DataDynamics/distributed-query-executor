@@ -37,6 +37,7 @@ from core.http_logging import install_http_logging
 from core.logging import job_log_context, request_id_var
 from core.metrics import collect_system_metrics
 from core.phases import close_open_phases
+from core.prometheus import install_prometheus
 from core.sqllog import log_sql
 from core.loopwatch import start_loop_watchdog
 from core.perf import (
@@ -290,6 +291,8 @@ def create_app(
     register_offline_docs(app)
     # HTTP 요청/응답을 DEBUG 로 남긴다. 로그 레벨이 DEBUG 일 때만 자동으로 기록하고 잡음 경로는 기본 제외한다.
     install_http_logging(app, settings)
+    # Prometheus exporter: GET /metrics/prometheus 로 task 슬롯·GP 풀·스레드 풀·루프 지연과 자원을 내보낸다.
+    install_prometheus(app, "executor", settings)
     app.state.backend = backend
     app.state.tasks = tasks
     app.state.task_history = history

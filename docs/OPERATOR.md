@@ -1049,6 +1049,127 @@ bin/perf-report --source query-coordinator-server --keys admission.pending,dispa
 
 ---
 
+## Prometheus 로 수집하기
+
+지표 로그와 같은 측정값을 Prometheus 로도 긁어 갈 수 있다. coordinator 와 executor 는 각자
+`GET /metrics/prometheus` 로 Prometheus 텍스트 형식을 내보낸다. `/metrics` 는 대시보드와 coordinator 헬스
+모니터가 읽는 JSON 응답이라 경로를 따로 두었다. 별도 패키지나 사이드카 없이 서비스 프로세스가 직접
+응답하고, 값은 메모리와 psutil 에서만 읽으므로 scrape 가 DB 나 네트워크 부하를 더하지 않는다. 지표
+로그(`log.perf.enabled`)를 꺼도 exporter 는 따로 동작한다.
+
+```properties
+prometheus.enabled=true       # 기본 켜짐. 끄면 두 경로가 404 다
+```
+
+Prometheus 서버는 coordinator 포트(8088)와 모든 executor 포트(8087 등)에 닿아야 한다. executor 포트는
+보통 바깥에 열지 않으므로, Prometheus 가 다른 호스트에 있으면 방화벽에서 Prometheus 서버 주소에만 길을
+터 준다.
+
+### scrape 설정
+
+coordinator 는 자기 executor 목록을 `GET /prometheus/targets` 로 Prometheus `http_sd_configs` 형식으로
+돌려준다. 경로(`__metrics_path__`)와 스킴까지 실어 주므로 executor 를 늘리고 줄일 때 Prometheus 설정을
+고치지 않아도 된다. coordinator 자신은 고정 대상으로 적는다.
+
+```yaml
+scrape_configs:
+  - job_name: dqe-coordinator
+    metrics_path: /metrics/prometheus
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["coord1.example.com:8088"]
+        labels: {role: coordinator}
+  - job_name: dqe-executor
+    scrape_interval: 15s
+    http_sd_configs:
+      - url: http://coord1.example.com:8088/prometheus/targets
+        refresh_interval: 60s
+```
+
+coordinator 를 여러 대 둔다면 coordinator 는 모두 `static_configs` 에 나열하고, executor 목록은 그중 한
+대에서만 받는다(모든 coordinator 가 같은 목록을 돌려주므로 여러 대에서 받으면 같은 executor 를 중복해 긁는다).
+`http_sd_configs` 를 쓸 수 없는 환경이면 executor 도 `static_configs` 에 `metrics_path:
+/metrics/prometheus` 와 함께 적으면 된다.
+
+### 이름 읽는 법
+
+지표 이름은 지표 로그의 키에서 기계적으로 만든다. 점을 밑줄로 바꾸고 앞에 `dqe_` 를 붙이며, 키 안의 가변
+부분은 레이블로 뺀다. 그래서 지표 로그의 `executor[10.0.0.1:8087].inflight` 는
+`dqe_executor_inflight{executor="10.0.0.1:8087"}` 가 되고, `pool.meta.wait_ms` 는
+`dqe_pool_wait_seconds{pool="meta"}`, `jobs_done.FAILED` 는 `dqe_jobs_done_total{status="FAILED"}`,
+`stage.STREAM_COPY_ms` 는 `dqe_task_stage_seconds{stage="STREAM_COPY"}` 가 된다. 시간 값은 모두 초로 바꿔
+`_seconds` 로 끝난다.
+
+값의 종류도 지표 로그와 다르다. 지표 로그는 구간마다 새로 세지만 Prometheus 에는 프로세스가 뜬 뒤 쌓인
+누적값이 나가므로, 횟수는 `_total` 로 끝나는 counter 로 내보내 `rate()` 로 초당 값을 구한다. 지표 로그의
+분포(p50·p95·max)는 누적 히스토그램(`_bucket`·`_sum`·`_count`)으로 나가고 백분위는
+`histogram_quantile()` 로 구한다. 서비스를 재기동하면 누적값이 0 에서 다시 시작하는데, `rate()` 가 이를
+알아서 처리한다.
+
+지표 로그 키와 무관하게 더 나가는 것은 다음과 같다.
+
+| 지표 | 뜻 |
+|---|---|
+| `dqe_info{role,version}` | 역할과 버전(값은 항상 1). 버전이 섞여 배포됐는지 볼 때 쓴다 |
+| `dqe_executor_up{executor}` (coordinator) | coordinator 헬스 모니터가 본 executor 생존(1=정상). 헬스 모니터가 돌 때만 나간다. self-report 모드처럼 모니터가 꺼져 있으면 Prometheus 가 executor 를 직접 긁는 `up` 을 본다 |
+| `process_cpu_seconds_total`, `process_resident_memory_bytes`, `process_open_fds`, `process_threads`, `process_start_time_seconds` | 서비스 프로세스 자원(Prometheus 표준 이름) |
+| `dqe_system_cpu_seconds_total{mode}`, `dqe_system_memory_{total,available}_bytes`, `dqe_system_disk_{total,used}_bytes{path}`, `dqe_system_network_{receive,transmit}_bytes_total`, `dqe_system_disk_{read,written}_bytes_total` | 호스트 자원. 사용률이 아니라 누적 시간·바이트라 `rate()` 로 본다. 디스크 용량은 `monitor.disk_path` 기준이다 |
+
+### 자주 쓰는 쿼리
+
+```promql
+# 실행 슬롯과 대기 큐가 얼마나 찼나
+dqe_admission_running / dqe_admission_max_running
+dqe_admission_pending / dqe_admission_max_pending
+# 429 거절(분당)과 job 종료 상태별 처리량(분당)
+rate(dqe_admission_rejected_total[5m]) * 60
+sum by (status) (rate(dqe_jobs_done_total[5m])) * 60
+# job 이 실행 슬롯을 기다린 시간 p95
+histogram_quantile(0.95, sum by (le) (rate(dqe_admission_slot_wait_seconds_bucket[5m])))
+# 디스패치 한도에 막혀 기다리는 task 와 executor 별 맡긴 task
+dqe_dispatch_waiting
+dqe_executor_inflight
+# executor 전체 적재 처리량(행/초)
+sum(rate(dqe_rows_written_total{role="executor"}[5m]))
+# 단계별 평균 소요(어느 단계가 길어졌나)
+sum by (stage) (rate(dqe_task_stage_seconds_sum[15m])) / sum by (stage) (rate(dqe_task_stage_seconds_count[15m]))
+# 소스 대기 대 GP 쓰기 대기(executor 별)
+sum by (instance, metric) (rate(dqe_task_copy_seconds_sum[15m]))
+# GP 커넥션을 얻기까지 기다린 시간 p95, 스레드 풀 큐 대기 p95
+histogram_quantile(0.95, sum by (le, instance) (rate(dqe_gp_pool_acquire_wait_seconds_bucket[5m])))
+histogram_quantile(0.95, sum by (le, pool, instance) (rate(dqe_pool_wait_seconds_bucket[5m])))
+# 이벤트 루프 지연 p99
+histogram_quantile(0.99, sum by (le, instance) (rate(dqe_loop_lag_seconds_bucket[5m])))
+```
+
+위 쿼리의 `role` 레이블은 scrape 설정에서 붙인 것이다(coordinator 는 `static_configs` 의 `labels`,
+executor 는 `/prometheus/targets` 가 붙여 준다). 어떤 값이 커질 때 무엇을 바꾸는지는 지표 로그 절의 표와
+같다. 경보를 건다면 다음 정도가 출발점이다.
+
+```yaml
+groups:
+  - name: dqe
+    rules:
+      - alert: DqeJobRejected
+        expr: rate(dqe_admission_rejected_total[5m]) > 0
+        for: 5m
+        annotations: {summary: "대기 큐가 차서 job 을 429 로 거절하고 있다"}
+      - alert: DqeExecutorDown
+        expr: up{job="dqe-executor"} == 0
+        for: 2m
+        annotations: {summary: "executor {{ $labels.instance }} 에 닿지 않는다"}
+      - alert: DqeEventLoopLag
+        expr: histogram_quantile(0.99, sum by (le, instance) (rate(dqe_loop_lag_seconds_bucket[5m]))) > 0.2
+        for: 10m
+        annotations: {summary: "{{ $labels.instance }} 이벤트 루프가 200ms 넘게 늦다(블로킹 호출 의심)"}
+      - alert: DqeMetaDbConnectErrors
+        expr: rate(dqe_meta_db_connect_errors_total[5m]) > 0
+        for: 5m
+        annotations: {summary: "{{ $labels.instance }} 가 메타 저장소에 연결하지 못한다"}
+```
+
+---
+
 ## 정기적으로 살필 것
 
 디스크부터 본다. `local_stage` 와 `s3_stage` 의 스테이징 경로, 그리고 로그 디렉터리가 대상이다.

@@ -341,10 +341,18 @@ sudo firewall-cmd --reload
 ```
 
 executor 포트(8087, 8086 ...)는 보통 coordinator 와 같은 호스트 안 내부 통신이므로 외부로 열 필요가 없다.
+다만 Prometheus 로 지표를 수집한다면 Prometheus 서버가 모든 executor 포트의 `/metrics/prometheus` 에 닿아야
+하므로, 그 서버 주소에만 길을 터 준다(`--add-rich-rule='rule family=ipv4 source address=<Prometheus IP>
+port port=8087 protocol=tcp accept'`).
 
 ## 헬스/메트릭 모니터링
 
 단순히 살아 있는지를 넘어 자원 사용 추세를 보고 싶어지는 때가 온다. 두 서비스는 모두 살아 있는지를 알려 주는 `/health`(liveness) 와 CPU·메모리·디스크 사용량을 알려 주는 `/metrics` 를 제공한다. coordinator 는 `monitor.health_interval_s` 마다 모든 executor 의 `/health`·`/metrics` 를 폴링해 그 상태를 보유하고(`GET /executors` 로 조회), `monitor.record_interval_s` 마다 그 사용량을 PostgreSQL 테이블(`monitor.table`)에 기록한다.
+
+Prometheus 를 쓰는 사이트라면 두 서비스의 `GET /metrics/prometheus`(`prometheus.enabled`, 기본 켜짐)를 긁는다.
+실행 슬롯·디스패치·스레드 풀·GP 커넥션 풀·루프 지연·처리량과 프로세스·호스트 자원이 나가고, executor 대상은
+coordinator 의 `GET /prometheus/targets`(http_sd_configs 형식)로 받을 수 있다. scrape 설정과 쿼리 예시는
+OPERATOR.md 의 "Prometheus 로 수집하기" 절에 있다.
 
 ```properties
 monitor.enabled=true

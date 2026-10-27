@@ -327,7 +327,8 @@ executor task 슬롯·GP 커넥션 풀·스레드 풀 각각의 사용량과 대
 줄에 담기고, job·task 가 끝날 때마다 소스 대기와 GP 쓰기 대기를 비교한 `bottleneck` 판정이 남는다.
 `bin/perf-report` 가 이를 시간대별로 묶어 어느 한도에 먼저 닿았는지 보여 주므로, 값을 하나 바꾸고 같은
 부하를 다시 돌려 비교하면 된다. 지표별 뜻과 조정 대상 표는 OPERATOR.md 의 "성능 지표 로그로 튜닝하기"
-절에 있다.
+절에 있다. 같은 측정값이 `GET /metrics/prometheus` 로도 나가므로(`prometheus.enabled`), Prometheus 가 있다면
+시계열로 쌓아 두고 튜닝 전후를 그래프로 비교할 수 있다.
 
 ## 4. 값을 정하는 기준 (Sizing)
 

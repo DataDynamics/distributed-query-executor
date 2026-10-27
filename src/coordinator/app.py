@@ -53,7 +53,8 @@ from .ha import CoordinatorHeartbeat, reconcile_orphaned_jobs
 from .history import JobHistoryRepository, QueryRunHistoryRepository
 from core.loopwatch import start_loop_watchdog
 from core.metaio import run_meta_io
-from core.perf import perf, start_perf_reporter
+from core.perf import endpoint_key, perf, start_perf_reporter
+from core.prometheus import http_sd_targets, install_prometheus
 from .job_store import (
     JobStore, build_job_store, count_jobs_by_status, reconcile_interrupted_jobs, run_store_io, save_job,
 )
@@ -679,6 +680,24 @@ def create_app(
     register_offline_docs(app)
     # HTTP 요청/응답을 DEBUG 로 남긴다. 로그 레벨이 DEBUG 일 때만 자동으로 기록하고 잡음 경로는 기본 제외한다.
     install_http_logging(app, settings)
+
+    def _prometheus_extra():
+        # 헬스 모니터가 돌 때만 executor 생존을 더한다. 꺼져 있으면(self-report 모드) snapshot 이 초기값이라
+        # 틀린 0 을 내보내게 된다. 그때는 Prometheus 가 executor 를 직접 긁으므로 그쪽 up 지표로 본다.
+        if not monitor.running:
+            return []
+        samples = [
+            ({"executor": endpoint_key(h["executor_url"])}, 1 if h.get("healthy") else 0)
+            for h in monitor.snapshot()
+        ]
+        return [("dqe_executor_up", "gauge", "coordinator 헬스 모니터가 본 executor 생존(1=정상)", samples)]
+
+    # Prometheus exporter: GET /metrics/prometheus 와, executor 목록을 알려 주는 http_sd 엔드포인트다.
+    if install_prometheus(app, "coordinator", settings, extra=_prometheus_extra):
+        @app.get("/prometheus/targets", tags=["Monitoring"],
+                 summary="Prometheus http_sd_configs 용 executor 목록")
+        def prometheus_targets():
+            return http_sd_targets(settings.executors)
     # 핸들러들이 클로저로 직접 참조하지만, 미들웨어/디버깅/테스트에서 꺼내 쓸 수
     # 있도록 핵심 의존성을 app.state 에도 보관해 둔다.
     app.state.store = store

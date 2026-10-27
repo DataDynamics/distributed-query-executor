@@ -16,11 +16,18 @@ GP 커넥션 풀, 이벤트 루프)를 겉으로 드러내지 않는다. 그래�
 
 기록 비용은 관측 한 번에 락 한 번과 리스트 추가 정도라 실행 경로에 넣어도 부담이 없다. 리포터는 메모리
 값만 읽고 DB 나 네트워크를 건드리지 않으므로, 지표를 남기느라 다시 병목을 만들지 않는다.
+
+Prometheus exporter(:mod:`core.prometheus`)도 같은 레지스트리를 읽는다. 다만 Prometheus 는 구간마다 비우는
+값이 아니라 프로세스가 뜬 뒤 쌓인 누적값을 긁어 가서 ``rate()`` 로 나누므로, 레지스트리는 구간 값과 별도로
+카운터의 누적 합(:meth:`PerfRegistry.totals`)과 분포의 누적 히스토그램(:meth:`PerfRegistry.histograms`)을
+함께 쌓는다. 지표 로그를 비우는 :meth:`PerfRegistry.collect` 는 이 누적값을 건드리지 않으므로 두 소비자가
+서로의 값을 흐트러뜨리지 않는다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import bisect
 import logging
 import os
 import random
@@ -37,6 +44,55 @@ perf_logger = logging.getLogger(PERF_LOGGER_NAME)
 
 # 구간마다 분포 하나가 들고 있을 최대 샘플 수다. 백분위 추정에는 이 정도면 충분하다.
 _RESERVOIR = 10000
+
+# 누적 히스토그램의 버킷 상한(초)이다. 루프 지연(수 ms)부터 job 소요(수십 분)까지 한 벌로 덮는다.
+SECONDS_BUCKETS = (
+    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600,
+)
+# 단위를 알 수 없는 분포에 쓰는 버킷 상한이다(현재 그런 지표는 없고, 새 지표의 안전망이다).
+PLAIN_BUCKETS = (1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000)
+
+
+def unit_scale(name: str) -> Optional[float]:
+    """지표 이름 끝에서 시간 단위를 읽어 초로 바꾸는 배율을 돌려준다(시간 지표가 아니면 None).
+
+    ``_ms``·``.ms`` 로 끝나면 밀리초(0.001), ``_s`` 로 끝나면 초(1)다. Prometheus 의 기본 단위가 초라서
+    exporter 는 이 배율로 값을 초로 바꿔 ``*_seconds`` 로 내보내고, 히스토그램 버킷도 같은 배율로 맞춘다.
+    """
+    if name.endswith(("_ms", ".ms")):
+        return 0.001
+    if name.endswith("_s"):
+        return 1.0
+    return None
+
+
+class _Histogram:
+    """프로세스가 뜬 뒤 관측한 값 전체의 누적 히스토그램이다. 값은 지표 이름의 원래 단위로 센다."""
+
+    __slots__ = ("bounds", "counts", "count", "sum")
+
+    def __init__(self, name: str) -> None:
+        scale = unit_scale(name)
+        # 버킷 상한을 지표의 원래 단위로 바꿔 둔다(ms 지표면 0.001초 → 1ms). 관측할 때 매번 나누지 않으려는 것이다.
+        self.bounds = tuple(b / scale for b in SECONDS_BUCKETS) if scale else PLAIN_BUCKETS
+        self.counts = [0] * len(self.bounds)
+        self.count = 0
+        self.sum = 0.0
+
+    def add(self, value: float) -> None:
+        self.count += 1
+        self.sum += value
+        i = bisect.bisect_left(self.bounds, value)
+        if i < len(self.counts):
+            self.counts[i] += 1
+
+    def snapshot(self) -> Dict[str, object]:
+        """Prometheus 형식에 맞춘 누적 버킷(상한 이하 건수)과 합·건수를 돌려준다."""
+        cumulative, running = [], 0
+        for bound, n in zip(self.bounds, self.counts):
+            running += n
+            cumulative.append((bound, running))
+        return {"buckets": cumulative, "count": self.count, "sum": self.sum}
 
 
 class _Dist:
@@ -87,11 +143,15 @@ class PerfRegistry:
         self._counters: Dict[str, float] = {}
         self._dists: Dict[str, _Dist] = {}
         self._gauges: Dict[str, tuple] = {}
+        # Prometheus 용 누적값이다. collect() 가 비우지 않는다.
+        self._totals: Dict[str, float] = {}
+        self._hists: Dict[str, _Histogram] = {}
 
     def inc(self, name: str, n: float = 1) -> None:
         """카운터를 n 만큼 올린다. 처음 쓰는 이름이면 만든다."""
         with self._lock:
             self._counters[name] = self._counters.get(name, 0) + n
+            self._totals[name] = self._totals.get(name, 0) + n
 
     def observe(self, name: str, value: float) -> None:
         """분포에 값 하나를 더한다."""
@@ -100,6 +160,10 @@ class PerfRegistry:
             if dist is None:
                 dist = self._dists[name] = _Dist()
             dist.add(float(value))
+            hist = self._hists.get(name)
+            if hist is None:
+                hist = self._hists[name] = _Histogram(name)
+            hist.add(float(value))
 
     def gauge(self, name: str, fn: Callable[[], object], *, prefix: bool = True) -> None:
         """기록 시점에 부를 게이지 함수를 등록한다. 같은 이름이면 새 함수로 바꾼다.
@@ -124,7 +188,21 @@ class PerfRegistry:
         with self._lock:
             counters, self._counters = self._counters, {k: 0 for k in self._counters}
             dists, self._dists = self._dists, {}
-            gauges = list(self._gauges.items())
+        out = self.read_gauges()
+        out.update(counters)
+        for name, dist in dists.items():
+            for sub, v in dist.summary().items():
+                out[f"{name}.{sub}"] = v
+        return dict(sorted(out.items()))
+
+    def read_gauges(self, exclude=()) -> Dict[str, object]:
+        """등록된 게이지를 지금 읽어 펼친 dict 를 돌려준다. 카운터·분포는 건드리지 않는다.
+
+        ``exclude`` 에 든 게이지 이름은 부르지 않는다. 직전 호출과의 차이로 값을 내는 게이지(시스템 I/O
+        속도)는 다른 소비자가 부르면 지표 로그의 구간이 흐트러지므로 exporter 는 이것으로 뺀다.
+        """
+        with self._lock:
+            gauges = [(n, g) for n, g in self._gauges.items() if n not in exclude]
         out: Dict[str, object] = {}
         for name, (fn, use_prefix) in gauges:
             try:
@@ -138,11 +216,17 @@ class PerfRegistry:
                         out[f"{name}.{sub}" if use_prefix else sub] = v
             elif value is not None:
                 out[name] = value
-        out.update(counters)
-        for name, dist in dists.items():
-            for sub, v in dist.summary().items():
-                out[f"{name}.{sub}"] = v
-        return dict(sorted(out.items()))
+        return out
+
+    def totals(self) -> Dict[str, float]:
+        """프로세스가 뜬 뒤 쌓인 카운터 누적 합이다(Prometheus counter 용)."""
+        with self._lock:
+            return dict(self._totals)
+
+    def histograms(self) -> Dict[str, Dict[str, object]]:
+        """프로세스가 뜬 뒤 관측한 분포의 누적 히스토그램이다(Prometheus histogram 용)."""
+        with self._lock:
+            return {name: hist.snapshot() for name, hist in self._hists.items()}
 
     def reset(self) -> None:
         """모든 값과 게이지를 지운다(테스트용)."""
@@ -150,6 +234,8 @@ class PerfRegistry:
             self._counters.clear()
             self._dists.clear()
             self._gauges.clear()
+            self._totals.clear()
+            self._hists.clear()
 
 
 # 프로세스 하나에 레지스트리 하나를 둔다(coordinator 와 executor 는 서로 다른 프로세스다).
@@ -424,7 +510,7 @@ class PerfReporter:
 
     _LAG_TICK = 0.1
 
-    def __init__(self, role: str, interval_s: float, registry: PerfRegistry = perf,
+    def __init__(self, role: str, interval_s: Optional[float], registry: PerfRegistry = perf,
                  out: logging.Logger = perf_logger) -> None:
         self.role = role
         self.interval_s = interval_s
@@ -460,7 +546,10 @@ class PerfReporter:
 
     def start(self) -> None:
         self._last = time.monotonic()
-        self._tasks = [asyncio.create_task(self._report_loop()), asyncio.create_task(self._lag_loop())]
+        # 주기가 없으면(지표 로그는 끄고 Prometheus 만 켠 경우) 줄은 쓰지 않고 루프 지연만 잰다.
+        self._tasks = [asyncio.create_task(self._lag_loop())]
+        if self.interval_s:
+            self._tasks.append(asyncio.create_task(self._report_loop()))
 
     async def stop(self) -> None:
         for t in self._tasks:
@@ -474,23 +563,25 @@ class PerfReporter:
 
 
 def start_perf_reporter(role: str, settings) -> Optional[PerfReporter]:
-    """설정이 켜져 있으면 기본 스레드 풀을 계측용으로 바꾸고 공통 게이지를 등록한 뒤 리포터를 띄운다.
+    """지표 로그나 Prometheus 가 켜져 있으면 기본 스레드 풀을 계측용으로 바꾸고 공통 게이지를 등록한 뒤
+    리포터를 띄운다.
 
-    루프 안(lifespan)에서 불러야 한다. 꺼져 있으면 아무것도 하지 않고 None 을 돌려준다.
+    루프 안(lifespan)에서 불러야 한다. 지표 로그만 꺼져 있으면 줄은 쓰지 않고 Prometheus 가 읽을 루프 지연만
+    잰다. 둘 다 꺼져 있으면 아무것도 하지 않고 None 을 돌려준다.
     """
-    if not getattr(settings, "log_perf_enabled", False):
-        return None
     interval = float(getattr(settings, "log_perf_interval_s", 30) or 0)
-    if interval <= 0:
+    log_on = bool(getattr(settings, "log_perf_enabled", False)) and interval > 0
+    if not log_on and not getattr(settings, "prometheus_enabled", False):
         return None
     install_default_executor()
     perf.gauge("pool.anyio", _anyio_gauges)
-    try:
-        sampler = SystemSampler(getattr(settings, "monitor_disk_path", "/") or "/")
-        perf.gauge("system", sampler.gauges, prefix=False)  # process.* · system.* 키를 그대로 쓴다
-    except Exception:
-        logger.warning("perf 시스템 지표 수집을 켜지 못함(psutil)", exc_info=True)
-    reporter = PerfReporter(role, interval)
+    if log_on:
+        try:
+            sampler = SystemSampler(getattr(settings, "monitor_disk_path", "/") or "/")
+            perf.gauge("system", sampler.gauges, prefix=False)  # process.* · system.* 키를 그대로 쓴다
+        except Exception:
+            logger.warning("perf 시스템 지표 수집을 켜지 못함(psutil)", exc_info=True)
+    reporter = PerfReporter(role, interval if log_on else None)
     reporter.start()
     return reporter
 

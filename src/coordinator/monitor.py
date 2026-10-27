@@ -128,6 +128,11 @@ class HealthMonitor:
                 pass
         self._tasks.clear()
 
+    @property
+    def running(self) -> bool:
+        """폴링 루프가 돌고 있는지다. 꺼져 있으면 snapshot 의 healthy 는 갱신되지 않은 초기값이다."""
+        return bool(self._tasks)
+
     def snapshot(self) -> list[dict]:
         """현재 메모리에 보관된 모든 executor 의 최신 헬스 상태를 dict 리스트로 반환한다."""
         return [h.as_view() for h in self.executors.values()]

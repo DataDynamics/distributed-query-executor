@@ -212,6 +212,12 @@ FIELD_HELP: dict[str, str] = {
         "한 줄씩 더 남긴다. 느린 job 을 DB 이력 없이 지표 파일만으로 찾을 수 있다. task 가 아주 많아 파일이 "
         "커질 때만 끈다."
     ),
+    "prometheus.enabled": (
+        "GET /metrics/prometheus 로 성능 지표 로그와 같은 측정값(슬롯·디스패치·스레드 풀·GP 풀·루프 지연·처리량)과 "
+        "프로세스·호스트 자원을 Prometheus 텍스트 형식으로 내보낸다. coordinator 의 GET /prometheus/targets 는 "
+        "executor 목록을 http_sd_configs 형식으로 준다. 메모리 값만 읽어 scrape 부담이 없으니, Prometheus 를 쓰지 "
+        "않거나 이 경로를 외부에 열고 싶지 않을 때만 끈다."
+    ),
     "log.loop_stall_ms": (
         "이벤트 루프가 이 시간 넘게 응답하지 않으면 그 순간 루프 스레드가 실행 중인 코드 위치(스택)를 "
         "WARNING 으로 남긴다. coordinator 와 executor 는 단일 워커라 루프가 멈추면 헬스 체크와 폴링이 "

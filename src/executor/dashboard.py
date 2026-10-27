@@ -154,6 +154,8 @@ def masked_config(settings) -> list[dict]:
         ("logging", "perf.enabled", settings.log_perf_enabled, "성능 지표 로그(<이름>-perf.log) 사용 여부"),
         ("logging", "perf.interval_s", settings.log_perf_interval_s, "성능 지표 한 줄을 남기는 주기(초)"),
         ("logging", "perf.job_summary", settings.log_perf_job_summary, "job·task 종료마다 요약 한 줄 추가"),
+        ("prometheus", "enabled", settings.prometheus_enabled,
+         "Prometheus exporter(GET /metrics/prometheus) 사용 여부"),
         ("logging", "http.enabled", settings.log_http_enabled,
          "HTTP 요청·응답 로깅(core.http, 요청 하나를 레코드 하나로)"),
         ("logging", "http.level", settings.log_http_level,
