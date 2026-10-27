@@ -56,6 +56,8 @@ def masked_config(settings) -> list[dict]:
          "stage_insert: staging 테이블명에 task_id 를 붙여 고유화(풀 재사용 시 TEMP 충돌 방지)"),
         ("coordinator", "poll_interval_s", settings.poll_interval_s,
          "task 상태 폴링 간격(초)"),
+        ("coordinator", "keep_alive_s", settings.coordinator_keep_alive_s,
+         "HTTP 서버 유휴 keep-alive 유지(초). 클라이언트 httpx(5초)보다 길어야 끊김 경쟁이 없다"),
         ("coordinator", "cancel_check_interval_s", settings.cancel_check_interval_s,
          "공유 store 의 취소 요청 확인 간격(초, job 단위, 0=폴링마다)"),
         ("coordinator", "task_timeout_s", settings.task_timeout_s,

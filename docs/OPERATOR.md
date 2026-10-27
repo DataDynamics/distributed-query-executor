@@ -592,6 +592,18 @@ job 저장·취소 플래그 조회·`/cluster` 집계처럼 예전에 루프를
 요청은 공유 store 에서 job 단위로 `coordinator.cancel_check_interval_s`(기본 2초)에 한 번 확인하므로,
 다른 coordinator 가 받은 취소는 그만큼 늦게 감지될 수 있다.
 
+`*-warn.log` 에 `Server disconnected without sending a response` 가 반복된다면 HTTP keep-alive 시간을
+본다. coordinator 의 HTTP 클라이언트는 5초 지난 유휴 연결을 버리는데, 서버의 keep-alive 도 5초면
+클라이언트가 연결을 재사용하는 순간 서버가 닫는 경쟁이 생긴다. executor 가 적재로 바빠 루프가 늦게 깨면
+들어온 요청을 읽기 전에 연결이 닫혀 이 메시지가 된다. `executor.keep_alive_s`·`coordinator.keep_alive_s`
+(기본 30초)를 5초보다 넉넉히 길게 유지한다. 예전 설정을 복사해 쓰는 설치본은 이 키가 없어도 기본값
+30초로 동작한다.
+
+GP 쪽에서 `prepared statement "_pg3_N" does not exist` 나 `GP 커넥션 초기화(DISCARD ALL) 실패` 가 보였다면
+예전 버전의 문제다. executor 는 GP 연결을 풀에서 재사용하고 반납할 때 `DISCARD ALL` 로 세션을
+비우는데, 이 문장이 서버의 prepared statement 를 지워도 psycopg 는 캐시해 둔 이름을 그대로 불렀다.
+지금은 풀 연결의 자동 prepare 를 꺼 두었으므로 업그레이드 뒤에도 나온다면 개발자에게 알린다.
+
 ### local_stage 와 s3_stage 의 실패
 
 이 두 모드는 2단계로 돌기 때문에 실패 지점이 더 나뉜다.

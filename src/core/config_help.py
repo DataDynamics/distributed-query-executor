@@ -306,6 +306,16 @@ FIELD_HELP: dict[str, str] = {
         "디스패치한 task 의 상태를 얼마나 자주 물어볼지 정한다. 짧으면 진행률이 매끄럽지만 task 가 "
         "많을수록 executor 를 그만큼 자주 두드리고, 길면 종료 감지가 그만큼 늦어진다."
     ),
+    "coordinator.keep_alive_s": (
+        "coordinator HTTP 서버가 유휴 keep-alive 연결을 닫기까지 기다리는 시간이다. 클라이언트(httpx 기본 5초)보다 "
+        "길어야 한다. 같거나 짧으면 클라이언트가 연결을 재사용하는 순간 서버가 닫아 'Server disconnected "
+        "without sending a response' 가 난다. 늘려도 유휴 연결 몇 개를 더 오래 들고 있을 뿐이다."
+    ),
+    "executor.keep_alive_s": (
+        "executor HTTP 서버가 유휴 keep-alive 연결을 닫기까지 기다리는 시간이다. coordinator 의 httpx 는 5초 지난 "
+        "유휴 연결을 버리므로 이 값은 그보다 길어야 한다. uvicorn 기본값 5초로 두면 executor 루프가 적재로 바쁠 때 "
+        "task 폴링·헬스 체크가 'Server disconnected without sending a response' 로 끊긴다."
+    ),
     "coordinator.cancel_check_interval_s": (
         "실행 중인 job 의 취소 요청을 공유 store(jobs 테이블)에서 얼마나 자주 확인할지 정한다. task 폴링마다 "
         "확인하면 task 수만큼 DB 연결이 생기므로 job 단위로 이 간격에 한 번만 본다. 같은 coordinator 가 받은 "

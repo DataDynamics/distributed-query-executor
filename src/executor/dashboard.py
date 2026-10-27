@@ -43,6 +43,8 @@ def masked_config(settings) -> list[dict]:
         ("executor", "status_table", settings.executor_status_table, "self-report 상태 테이블(스키마 한정)"),
         ("executor", "status_interval_s", settings.executor_status_interval_s,
          "self-report 주기(초)"),
+        ("executor", "keep_alive_s", settings.executor_keep_alive_s,
+         "HTTP 서버 유휴 keep-alive 유지(초). coordinator httpx(5초)보다 길어야 끊김 경쟁이 없다"),
         ("executor", "max_concurrent_tasks", settings.executor_max_concurrent_tasks,
          "이 executor 가 동시에 실행하는 task 수(0=무제한)"),
         ("executor", "shutdown_drain_timeout_s", settings.executor_shutdown_drain_timeout_s,

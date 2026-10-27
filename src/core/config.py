@@ -259,6 +259,10 @@ class Settings:
         # ───────── Coordinator ─────────
         self.coordinator_host: str = _get("coordinator", "host", "0.0.0.0")
         self.coordinator_port: int = int(_get("coordinator", "port", 8088))
+        # HTTP 서버(uvicorn)가 유휴 keep-alive 연결을 닫기까지 기다리는 시간(초)이다. 클라이언트(httpx)의
+        # 유휴 연결 만료(5초)보다 길어야 한다. 같으면 클라이언트가 재사용하려는 순간 서버가 연결을 닫아
+        # "Server disconnected without sending a response" 가 난다(루프가 바쁠수록 잦다).
+        self.coordinator_keep_alive_s: int = int(_get("coordinator", "keep_alive_s", 30))
         # executor 를 remote(HTTP 디스패치)로 쓸지 local(in-process 직접 실행)로 쓸지 고른다.
         # 로컬 검증용으로 환경변수 COORDINATOR_EXECUTOR_MODE 로 즉시 바꿀 수 있다.
         self.executor_mode: str = (
@@ -398,6 +402,8 @@ class Settings:
 
         # ───────── Executor ─────────
         self.executor_host: str = _get("executor", "host", "0.0.0.0")
+        # uvicorn 의 유휴 keep-alive 유지 시간(초). coordinator_keep_alive_s 와 같은 이유로 httpx 의 5초보다 길게 둔다.
+        self.executor_keep_alive_s: int = int(_get("executor", "keep_alive_s", 30))
         # 멀티 coordinator 용 self-report 스위치다. 켜면 executor 가 자기 상태를 공유 DB 에 직접 기록한다.
         self.executor_self_report: bool = _to_bool(
             os.getenv("EXECUTOR_SELF_REPORT") or _get("executor", "self_report", False)

@@ -68,6 +68,12 @@ def main() -> None:
         port=port,
         workers=1,  # 인메모리 Task 저장소를 쓰므로 인스턴스마다 단일 워커로 돈다
         log_config=None,
+        # 유휴 keep-alive 연결을 닫기까지의 시간이다. uvicorn 기본 5초는 coordinator httpx 의 유휴 연결
+        # 만료(5초)와 같아서, coordinator 가 연결을 재사용하는 순간 이쪽이 닫는 경쟁이 생긴다. 적재 스레드와
+        # GIL 을 다퉈 루프가 늦게 깨면 들어온 요청을 읽기 전에 keep-alive 타이머가 먼저 연결을 닫고,
+        # coordinator 에는 "Server disconnected without sending a response" 로 보인다. 서버 쪽을 더 길게
+        # 두면 클라이언트가 항상 먼저 연결을 버리므로 경쟁이 없다.
+        timeout_keep_alive=settings.executor_keep_alive_s,
         # uvloop 를 쓰지 않고 순수 파이썬 asyncio 루프로 고정한다. 커스텀 쿼리 함수
         # (query.func.module)가 nest_asyncio 처럼 루프를 패치하는 라이브러리를 쓸 수 있는데,
         # Cython 으로 구현된 uvloop 루프는 패치할 수 없어 "can't patch loop of type

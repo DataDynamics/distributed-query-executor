@@ -69,6 +69,7 @@ logging:
 coordinator:
   host: ${coordinator.host:0.0.0.0}                       # 바인드 주소
   port: ${coordinator.port:8088}                          # 수신 포트
+  keep_alive_s: ${coordinator.keep_alive_s:30}            # 유휴 keep-alive 연결 유지(초). 클라이언트(httpx 5초)보다 길어야 끊김 경쟁이 없다
   executor_mode: ${coordinator.executor_mode:remote}      # remote(HTTP 디스패치) | local(in-process 직접 실행)
   id: ${coordinator.id:}                                  # 멀티 coordinator 식별자(미지정 시 coordinator-<랜덤숫자>)
   executors: ${coordinator.executors:}                    # executor 베이스 URL 목록(쉼표 구분)
@@ -127,6 +128,7 @@ history:
 # ───────── Executor ─────────
 executor:
   host: ${executor.host:0.0.0.0}                          # 바인드 주소(포트는 EXECUTOR_PORT 환경변수)
+  keep_alive_s: ${executor.keep_alive_s:30}               # 유휴 keep-alive 연결 유지(초). coordinator 의 httpx(5초)보다 길어야 끊김 경쟁이 없다
   self_report: ${executor.self_report:false}             # 상태를 공유 DB에 self-report 할지(멀티 coordinator)
   advertise_url: ${executor.advertise_url:}              # self-report 에 기록할 자기 base URL(HA URL 키 부하 뷰). coordinator.executors 의 URL 과 일치
   gp_hostname: ${executor.gp_hostname:}                  # local_stage: 이 executor 의 GP 세그먼트 호스트명(gp_segment_configuration.hostname 과 일치, file:// URI 조립용)

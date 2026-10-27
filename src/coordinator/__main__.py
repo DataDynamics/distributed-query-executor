@@ -48,6 +48,9 @@ def main() -> None:
         port=settings.coordinator_port,
         workers=1,  # 인메모리 Job 저장소를 쓰므로 단일 워커로 돈다
         log_config=None,  # 로깅은 core.logging 이 구성한다
+        # 유휴 keep-alive 연결 유지 시간이다. 클라이언트(httpx 기본 5초)보다 길게 두어, 클라이언트가 연결을
+        # 재사용하는 순간 서버가 닫아 "Server disconnected without sending a response" 가 나는 경쟁을 없앤다.
+        timeout_keep_alive=settings.coordinator_keep_alive_s,
     )
 
 

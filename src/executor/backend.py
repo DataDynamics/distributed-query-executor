@@ -257,6 +257,8 @@ class _GreenplumPool:
     재사용 안전성(중요): stage_insert 는 세션 전용 ``CREATE TEMP TABLE`` 을 쓰므로, 연결을
     그대로 재사용하면 이전 task 의 TEMP 가 남아 다음 ``CREATE TEMP TABLE`` 이 충돌한다.
     그래서 **반납 시 ``DISCARD ALL`` 로 세션을 초기화**(TEMP 테이블·GUC·준비문 등 제거)한다.
+    DISCARD ALL 이 서버의 준비문을 지워도 psycopg 의 준비문 캐시는 남으므로, 연결은 자동 prepare 를
+    끈 채로 연다(``prepare_threshold=None``, ``_default_connect`` 참고).
     초기화에 실패한 연결(드라이버/엔진 미지원·끊김 등)은 재사용하지 않고 닫아 버린다(안전 폴백).
 
     blocking psycopg 호출은 executor 가 ``to_thread`` 로 감싸 실행하므로, 스레드 안전한
@@ -275,7 +277,13 @@ class _GreenplumPool:
     def _default_connect(self):
         import psycopg  # 드라이버를 선택 설치하므로 지연 임포트한다
 
-        return psycopg.connect(self._dsn)
+        # psycopg 3 는 같은 쿼리를 한 연결에서 prepare_threshold(기본 5)번 넘게 실행하면 서버에
+        # prepared statement(_pg3_N)로 올려 두고 이름을 캐시한다. 그런데 반납할 때 실행하는 DISCARD ALL
+        # 은 서버의 prepared statement 를 모두 지우고, psycopg 는 DROP·ROLLBACK 결과에서만 캐시를 비우므로
+        # DISCARD ALL 뒤에는 지워진 이름을 그대로 부른다. 그러면 다음 task 의 반복 쿼리와 DISCARD ALL
+        # 자신이 'prepared statement "_pg3_N" does not exist' 로 실패해 task 가 깨지거나 연결이 폐기된다.
+        # 연결을 재사용하는 이 풀에서는 자동 prepare 를 끈다(적재 SQL 은 문장마다 다르므로 손해가 없다).
+        return psycopg.connect(self._dsn, prepare_threshold=None)
 
     def _reset(self, conn) -> bool:
         """반납된 연결의 세션 상태를 깨끗이 비운다. 성공하면 True 를 돌려주며 재사용할 수 있다는 뜻이다."""

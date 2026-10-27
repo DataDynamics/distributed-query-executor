@@ -202,7 +202,11 @@ Impala 로 폴백하지 않고 명확히 실패시킨다.
 `MockBackend` 가 있다. 소스 접속은 `_source_connect`·`_open_source_cursor`·`_source_execute` 에
 모여 있고, 스트리밍과 적재 로직은 이와 무관하게 공유한다. 요청별 `impala_query_options` 는 SET
 으로 병합된다. GP 연결은 표준 라이브러리 기반 `_GreenplumPool` 로 재사용하되 반납할 때
-`DISCARD ALL` 로 세션을 초기화해, stage_insert 의 TEMP 테이블이 다음 task 와 충돌하지 않게 한다.
+`DISCARD ALL` 로 세션을 초기화해, stage_insert 의 TEMP 테이블이 다음 task 와 충돌하지 않게 한다. DISCARD ALL 은
+서버의 prepared statement 도 지우지만 psycopg 는 그 캐시를 비우지 않으므로, 풀 연결은 반드시
+`prepare_threshold=None` 으로 연다(켜 두면 반복 쿼리가 `prepared statement "_pg3_N" does not exist` 로 깨진다).
+coordinator·executor 의 uvicorn `timeout_keep_alive`(`*.keep_alive_s`, 기본 30초)는 httpx 의 유휴 연결
+만료(5초)보다 길어야 한다(같으면 `Server disconnected without sending a response` 경쟁이 난다).
 
 `exec_mode` 는 다섯 가지다. `copy` 는 psycopg COPY 로 바로 넣고, `statement` 는 받은 INSERT 를
 그대로 실행하며, `stage_insert` 는 TEMP 테이블을 거친다. `local_stage` 와 `s3_stage` 는 둘 다

@@ -133,3 +133,18 @@ def test_close_closes_idle_connections():
         pass
     pool.close()
     assert created[0].closed is True
+
+
+def test_기본_연결은_자동_prepare_를_끈다(monkeypatch):
+    """반납 시 DISCARD ALL 이 서버 준비문을 지우므로, psycopg 의 준비문 캐시가 남지 않게 자동 prepare 를 끈다.
+
+    켜 두면 같은 쿼리(DISCARD ALL 자신 포함)가 5번 넘게 실행된 뒤 'prepared statement "_pg3_N" does
+    not exist' 로 실패한다.
+    """
+    psycopg = pytest.importorskip("psycopg")
+    calls = []
+    monkeypatch.setattr(psycopg, "connect", lambda *a, **kw: calls.append((a, kw)) or FakeConn())
+    pool = _GreenplumPool("postgresql://gp/db", maxsize=1)
+    with pool.connection():
+        pass
+    assert calls == [(("postgresql://gp/db",), {"prepare_threshold": None})]
