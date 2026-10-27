@@ -601,12 +601,20 @@ def create_app(
 
         active 는 실제 실행 중(READING/WRITING), queued 는 대기 중(QUEUED) task 수,
         max 는 동시 실행 상한(0 이면 무제한). self-report 와 /metrics·/info 가 공유한다.
+
+        호출자가 모두 이벤트 루프 밖의 스레드라는 점이 중요하다(동기 엔드포인트는 스레드 풀,
+        self-report 는 ``to_thread``). 그동안 이벤트 루프는 ``/tasks``·``/query-run`` 접수로
+        ``tasks`` 에 새 항목을 넣으므로, 제너레이터로 dict 를 직접 순회하면 GIL 이 순회 도중에
+        넘어가 ``dictionary changed size during iteration`` 이 나고 /metrics 가 500 이 된다
+        (coordinator 모니터가 executor 를 다운으로 본다). C 수준에서 한 번에 끝나는
+        ``list(tasks.values())`` 로 먼저 스냅샷을 떠서 센다.
         """
+        snapshot = list(tasks.values())
         active = sum(
-            1 for t in tasks.values()
+            1 for t in snapshot
             if t.status in (TaskStatus.READING, TaskStatus.WRITING)
         )
-        queued = sum(1 for t in tasks.values() if t.status == TaskStatus.QUEUED)
+        queued = sum(1 for t in snapshot if t.status == TaskStatus.QUEUED)
         return active, queued, (_max or 0)
 
     @app.get("/metrics", tags=["Monitoring"], summary="시스템 메트릭(CPU/메모리/디스크) + 동시 처리")
@@ -896,7 +904,8 @@ def create_app(
         def get_info():
             """버전/식별자/가동시간/상태별 task 집계 등 인스턴스 메타 정보를 반환한다."""
             by_status: dict[str, int] = {}
-            for t in tasks.values():
+            # 스레드 풀에서 도는 동기 엔드포인트라 _task_counts 와 같은 이유로 스냅샷을 순회한다.
+            for t in list(tasks.values()):
                 by_status[t.status.value] = by_status.get(t.status.value, 0) + 1
             active, queued, mx = _task_counts()
             return format_at_fields({

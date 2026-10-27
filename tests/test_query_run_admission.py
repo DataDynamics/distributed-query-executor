@@ -198,3 +198,43 @@ async def test_요청_헤더가_없어도_job_id_는_요청_식별자다(monkeyp
         r = await c.post("/query-run", json={"sql": "SELECT 1", "datasource": "impala"})
     t = next(iter(app.state.tasks.values()))
     assert t.job_id == f"req-{r.headers['X-Request-ID']}"
+
+
+class _GrowingTask:
+    """status 를 읽는 순간 ``tasks`` 에 새 항목을 끼워 넣는 가짜 task 다.
+
+    /metrics·/info·self-report 는 이벤트 루프 밖 스레드에서 task 를 세고, 그사이 이벤트 루프는
+    /query-run 접수로 ``tasks`` 에 항목을 더한다. 그 끼어듦을 순회 도중에 결정적으로 재현한다.
+    """
+
+    def __init__(self, tasks: dict):
+        self._tasks = tasks
+        self._n = 0
+
+    @property
+    def status(self):
+        from executor.models import TaskStatus
+
+        self._n += 1
+        self._tasks[f"grown-{id(self)}-{self._n}"] = _DoneTask()
+        return TaskStatus.READING
+
+
+class _DoneTask:
+    @property
+    def status(self):
+        from executor.models import TaskStatus
+
+        return TaskStatus.DONE
+
+
+async def test_task_집계는_순회_중_task_가_추가돼도_실패하지_않는다():
+    """집계 도중 tasks 가 커져도 /metrics·/info 가 500(dictionary changed size) 이 되지 않는다."""
+    app = create_executor_app(task_history=_RecordingHistory())
+    app.state.tasks["growing"] = _GrowingTask(app.state.tasks)
+    async with _client(app) as c:
+        r = await c.get("/metrics")
+        assert r.status_code == 200, r.text
+        assert r.json()["tasks"]["active"] == 1
+        r = await c.get("/info")
+        assert r.status_code == 200, r.text
