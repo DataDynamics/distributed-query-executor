@@ -245,6 +245,7 @@ const API_OPS_LINKS = [
   {path:'/config', name:'설정', desc:'현재 설정(비밀값은 가려짐)'},
   {path:'/cluster', name:'클러스터 상태', desc:'coordinator 와 executor 들의 자원·상태'},
   {path:'/sync/status', name:'파일 동기화 상태', desc:'동기화 버전과 executor 별 상태'},
+  {path:'/load-tests', name:'부하 테스트 기록', desc:'bin/load-test 가 남긴 기록 파일 목록(<log.dir>/test_results)'},
 ];
 // 클립보드 복사. http(비보안 컨텍스트)에서는 navigator.clipboard 가 없으므로 textarea 로 대신한다.
 function copyText(text, btn){

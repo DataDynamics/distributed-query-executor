@@ -277,6 +277,7 @@ DASHBOARD_HTML = """<!doctype html>
   <button data-tab="ds">데이터소스</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
+  <button data-tab="lt">부하 테스트</button>
   <button data-tab="api">API·링크</button>
 </div>
 <main>
@@ -322,6 +323,7 @@ DASHBOARD_HTML = """<!doctype html>
   </section>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
+  <section class="panel" id="p-lt"></section>
   <section class="panel" id="p-api"></section>
 </main>
 <div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
@@ -759,9 +761,45 @@ async function loadApi(){
   $("#p-api").innerHTML = renderApiLinks(spec) +
     `<div class="subhd">Executor 주소 <span class="mut">${ex.length}대 · 브라우저에서 직접 연다</span></div>` + table(cols, ex);
 }
+// 부하 테스트 탭: bin/load-test 가 테스트마다 남긴 기록 파일(<log.dir>/test_results/*.txt) 목록이다.
+// 목록에는 파일 머리의 개요만 오고, "보기" 는 결과 JSON 절을 뺀 본문을 팝업으로, "원본" 은 파일 전체를 새 탭으로 연다.
+// 이 coordinator 호스트에서 돌린 테스트만 보인다(다른 호스트에서 돌리면 그 호스트의 로그 디렉터리에 남는다).
+const fmtSize = n => n >= 1048576 ? (n/1048576).toFixed(1)+"MB" : n >= 1024 ? (n/1024).toFixed(1)+"KB" : n+"B";
+async function loadLt(){
+  const d = await getJSON("/load-tests?limit=200");
+  if(!d.exists || !d.total){
+    $("#p-lt").innerHTML = `<p class="mut">아직 부하 테스트 기록이 없습니다. <code>bin/load-test run ...</code> 을 이 호스트에서 `+
+      `실행하면 테스트마다 <code>${esc(d.dir)}</code> 에 기록 파일이 생깁니다.</p>`;
+    return;
+  }
+  const exitCell = r => r.exit_code===null||r.exit_code===undefined ? fmt(r.exit)
+    : `<span class="${r.exit_code===0?'ok':'bad'}" title="${esc(r.exit||'')}">● ${esc(r.exit_code)}</span>`;
+  const href = (r, full) => `/load-tests/${encodeURIComponent(r.name)}${full?'':'?full=false'}`;
+  const cols = [
+    {t:"시작", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
+    {t:"run_id", f:r=>`<code>${fmt(r.run_id)}</code>`},
+    {t:"종료", f:exitCell},
+    {t:"부하 시간", f:r=>fmt(r.load_time)},
+    {t:"대상", f:r=>`<code>${fmt(r.target)}</code>`},
+    {t:"시나리오", f:r=>`<div class="desc">${fmt(r.scenario)}</div>`},
+    {t:"결과", f:r=>`<div class="desc">${fmt(r.headline)}</div>`},
+    {t:"크기", f:r=>fmtSize(r.size||0)},
+    {t:"파일", f:r=>`<span class="lnk" onclick="showLt('${esc(r.name)}')">보기</span> · `+
+        `<a class="lnk" href="${href(r,true)}" target="_blank" rel="noopener">원본</a>`},
+    {t:"명령", f:r=>r.command ? copyBtn(r.command) : fmt(null)},
+  ];
+  $("#p-lt").innerHTML = `<div class="subhd">부하 테스트 기록 <span class="mut">${d.total}개 · ${esc(d.dir)}`+
+    `${d.total>d.rows.length?` · 최근 ${d.rows.length}개만 표시`:''}</span></div>` + table(cols, d.rows);
+}
+async function showLt(name){
+  try{
+    const r = await fetch(`/load-tests/${encodeURIComponent(name)}?full=false`);
+    showTextModal(name, r.ok ? await r.text() : `불러오기 실패: ${r.status} ${await r.text()}`);
+  }catch(e){ showTextModal(name, '불러오기 실패: ' + e); }
+}
 initHeaderLinks();
 initDashboard({jobs:loadJobs, hist:loadHist, exec:loadExec, tpl:loadTpl, qe:loadQe, ds:loadDs,
-               conf:loadConf, info:loadInfo, api:loadApi}, "jobs");
+               conf:loadConf, info:loadInfo, lt:loadLt, api:loadApi}, "jobs");
 </script>
 </body>
 </html>"""

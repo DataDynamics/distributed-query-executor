@@ -270,6 +270,7 @@ POST /jobs
 | `GET /metrics/prometheus` | Prometheus 텍스트 형식 지표(`prometheus.enabled`, §19.2) |
 | `GET /prometheus/targets` | executor 목록(`http_sd_configs` 형식, §19.2) |
 | `GET /sync/status`·`POST /sync/now` | 파일 동기화 상태 / 즉시 한 번 맞추기(§20) |
+| `GET /load-tests`·`/load-tests/{name}` | 부하 테스트 기록 파일 목록 / 본문(`<log.dir>/test_results`, 읽기 전용) |
 
 이 밖에 템플릿 실행(`/templates`, `POST /query-execute`)은 §18을 참고한다.
 
@@ -355,7 +356,7 @@ coordinator가 여러 대면 어느 executor에게 일을 줄지를 각자 정�
 가시성은 메트릭·대시보드·로깅 세 가지로 제공한다.
 
 - **시스템 메트릭**: 두 서비스 모두 `/metrics`(CPU/메모리/디스크 + 동시 처리)를 낸다. coordinator `HealthMonitor`가 executor를 폴링해 `/executors`·`/cluster`로 제공하고, `monitor.db_dsn` 설정 시 `executor_health_metrics`에 기록한다.
-- **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query(job 표 + query-run 처리중 표) / 실행 이력(job 이력 + query-run 이력) / Executor / 템플릿 / 쿼리 실행 / 데이터소스 / 환경설정 / 그외 정보 / API·링크(§19.4).
+- **coordinator 대시보드(`/`)**: 인라인 HTML(빌드 불필요), 3초 폴링. 탭 — 처리중인 Query(job 표 + query-run 처리중 표) / 실행 이력(job 이력 + query-run 이력) / Executor / 템플릿 / 쿼리 실행 / 데이터소스 / 환경설정 / 그외 정보 / 부하 테스트(`bin/load-test` 기록 파일 목록) / API·링크(§19.4).
 - **executor self-view 대시보드(`/`)**: remote 모드의 각 executor가 자기 task/메트릭/이력을 노출한다. local 모드에선 executor 프로세스가 없으므로 coordinator 화면만 보인다.
 - **성능 지표 로그·Prometheus**: 튜닝 지표는 `*-perf.log` 에 주기적으로 남기고 같은 값을 `/metrics/prometheus` 로도 내보낸다(§19).
 - **로깅**: `/data1/distributed-query-executor/logs`에 일 단위 롤링. 모든 로그에 `[job_id][task_id]` 컨텍스트를 자동 주입하고, **WARNING 이상은 `*-warn.log`로 분리**(로거 이름 포함 강화 포맷)해 운영 중 문제만 빠르게 추적한다.

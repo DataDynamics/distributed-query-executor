@@ -347,7 +347,7 @@ curl -s localhost:8088/jobs/$JOB/status
 
 브라우저로 상태를 보려면 coordinator 의 `/` 에 접속합니다. 빌드 도구 없이 FastAPI 가 서빙하는 단일
 HTML 화면이 3초마다 JSON API 를 폴링해 처리중 Query / 실행 이력 / Executor 상황 / 템플릿 / 쿼리 실행 /
-데이터소스 / 환경설정(비밀값 마스킹) / 정보 / API·링크 탭을 보여 주고, task 별 phase 타임라인(QUEUE_WAIT → STREAM_COPY → INSERT → COMMIT 등)
+데이터소스 / 환경설정(비밀값 마스킹) / 정보 / 부하 테스트(기록 파일) / API·링크 탭을 보여 주고, task 별 phase 타임라인(QUEUE_WAIT → STREAM_COPY → INSERT → COMMIT 등)
 으로 단계별 소요·처리량과 병목(읽기/쓰기 대기)을 진단할 수 있습니다. `dashboard.enabled=false` 로
 `/`·`/config`·`/info` 를 끌 수 있습니다.
 

@@ -413,6 +413,9 @@ VU 별 곡선(`ascii_chart`)은 VU 수준이 둘 이상일 때만 성립하므�
 `timeline_chart` 가 따로 그린다(열 묶기·이동평균·VU 줄·오류 표시). 포화 분석을 못 그리면 `_saturation_skipped` 가 이유를 남긴다.
 테스트가 끝날 때마다 `resultfile.py` 가 `<log.dir>/test_results/YYYYMMDD-HHMMSS.txt` 에 명령(`_INVOKED_ARGV`)·합친
 파라미터·본문·요약·결과 JSON 을 비밀값을 가려 남긴다(`--result-dir`·`--no-result-file`). 쓰기 실패는 종료 코드를 바꾸지 않는다.
+coordinator 대시보드의 "부하 테스트" 탭은 `coordinator/load_results.py` 로 그 디렉터리를 읽기만 한다(`GET /load-tests`·
+`/load-tests/{name}`). 목록은 파일 앞 4KB 의 머리만 읽고, 이름은 `YYYYMMDD-HHMMSS[-N].txt` 모양만 받아 경로 조작을 막는다.
+머리 형식을 바꾸면 `parse_head` 도 함께 고친다(`tests/test_load_results_dashboard.py` 가 실제 기록 도구로 만든 파일로 검증한다).
 검증은 `tests/test_load_tool.py`, 사용법은 `src/tools/load/README.md`에 있다.
 
 **`core/version.py`** 의 `__version__`이 버전의 단일 출처다. `pyproject.toml`도 이 값을 읽는다.

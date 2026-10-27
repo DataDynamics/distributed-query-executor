@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 import httpx
 
@@ -45,6 +45,7 @@ from core import s3_stage
 from core.timeutil import format_at_fields, now_dt
 from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
+from . import load_results
 from .dashboard import DASHBOARD_HTML, masked_config
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
@@ -1887,6 +1888,26 @@ def create_app(
         def dashboard():
             # 단일 페이지 모니터링 대시보드 HTML 을 정적 문자열 그대로 내보낸다.
             return HTMLResponse(DASHBOARD_HTML)
+
+        @app.get("/load-tests", tags=["Monitoring"], summary="부하 테스트 기록 파일 목록(<log.dir>/test_results)")
+        async def list_load_tests(limit: int = 100, offset: int = 0):
+            # 파일 머리만 읽지만 디스크 I/O 라 루프에서 돌리지 않는다.
+            limit = max(1, min(int(limit), 1000))
+            return await asyncio.to_thread(load_results.list_results, load_results.results_dir(settings),
+                                           limit, max(0, int(offset)))
+
+        @app.get("/load-tests/{name}", tags=["Monitoring"], summary="부하 테스트 기록 파일 본문(text/plain)",
+                 response_class=PlainTextResponse)
+        async def get_load_test(name: str, full: bool = True):
+            # full=false 는 결과 JSON 절을 뺀 앞부분이다(대시보드 팝업용). 원본은 full=true(기본).
+            try:
+                text = await asyncio.to_thread(load_results.read_result, load_results.results_dir(settings),
+                                               name, full=full)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail=f"기록 파일이 없습니다: {name}")
+            return PlainTextResponse(text, media_type="text/plain; charset=utf-8")
 
         @app.get("/config", tags=["Monitoring"], summary="환경설정(비밀값 마스킹)")
         def get_config():
