@@ -218,3 +218,100 @@ function initDashboard(l, defaultTab){
   refresh();
   setInterval(()=>{ if(!document.hidden) refresh(); }, 3000);
 }
+
+// ---- API·링크 탭 ----
+// 이 서버가 노출하는 URL 을 한곳에 모은다. 엔드포인트 목록은 /openapi.json 에서 읽으므로 라우트를
+// 더하거나 빼도 이 화면은 손대지 않아도 되고, 꺼져 있어 등록되지 않은 기능(Prometheus 등)은 저절로
+// 빠진다. 스키마는 기동 중에 바뀌지 않으므로 한 번만 받아 두고 3초 자동 갱신 때 다시 받지 않는다.
+let _openapi = null;
+async function loadOpenapi(){
+  if(!_openapi){ _openapi = await getJSON('/openapi.json'); }
+  return _openapi;
+}
+const absUrl = p => location.origin + p;
+// 스키마에 없어도 항상 있는 문서 경로다(include_in_schema=False 로 등록된다).
+const API_DOC_LINKS = [
+  {path:'/docs', name:'Swagger UI', desc:'API 를 브라우저에서 바로 호출해 볼 수 있는 문서'},
+  {path:'/redoc', name:'ReDoc', desc:'읽기 좋은 형태의 API 문서'},
+  {path:'/openapi.json', name:'OpenAPI 스키마', desc:'API 명세(JSON). 클라이언트 생성기나 다른 도구에 넣는다'},
+];
+// 스키마에 경로가 있을 때만 보여 주는 운영용 바로가기다.
+const API_OPS_LINKS = [
+  {path:'/metrics/prometheus', name:'Prometheus 지표', desc:'Prometheus 가 긁어 가는 텍스트 형식 지표(scrape 대상 URL)'},
+  {path:'/prometheus/targets', name:'Prometheus 대상 목록', desc:'executor 목록(http_sd_configs 의 url 로 지정)'},
+  {path:'/metrics', name:'메트릭(JSON)', desc:'대시보드·헬스 모니터가 읽는 자원·동시 처리 지표'},
+  {path:'/health', name:'헬스 체크', desc:'liveness 프로브용'},
+  {path:'/info', name:'기타 정보', desc:'버전·기동 시각 등 런타임 요약'},
+  {path:'/config', name:'설정', desc:'현재 설정(비밀값은 가려짐)'},
+  {path:'/cluster', name:'클러스터 상태', desc:'coordinator 와 executor 들의 자원·상태'},
+  {path:'/sync/status', name:'파일 동기화 상태', desc:'동기화 버전과 executor 별 상태'},
+];
+// 클립보드 복사. http(비보안 컨텍스트)에서는 navigator.clipboard 가 없으므로 textarea 로 대신한다.
+function copyText(text, btn){
+  const done = () => { if(btn){ const o = btn.textContent; btn.textContent = '복사됨'; setTimeout(()=>btn.textContent=o, 1200); } };
+  if(navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(text).then(done, ()=>alert(text));
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); done(); }catch(_e){ alert(text); }
+  document.body.removeChild(ta);
+}
+function copyBtn(text){
+  return `<button class="btn" data-copy="${esc(text)}" onclick="copyText(this.dataset.copy,this)">복사</button>`;
+}
+function urlLink(u){ return `<a class="lnk" href="${esc(u)}" target="_blank" rel="noopener"><code>${esc(u)}</code></a>`; }
+// 바로가기 행: 문서 링크 전부 + 스키마에 실제로 있는 운영 링크.
+function apiQuickLinks(spec){
+  const paths = (spec && spec.paths) || {};
+  return API_DOC_LINKS.concat(API_OPS_LINKS.filter(l => paths[l.path] && paths[l.path].get));
+}
+// Swagger UI 의 해당 엔드포인트로 바로 가는 주소(deepLinking: #/<태그>/<operationId>).
+function swaggerHref(tag, op){
+  return op.operationId ? `/docs#/${encodeURIComponent(tag)}/${encodeURIComponent(op.operationId)}` : '/docs';
+}
+// 스키마의 모든 엔드포인트를 태그 순으로 펼친다. 경로 변수가 없는 GET 은 바로 열 수 있게 링크로 둔다.
+function apiEndpoints(spec){
+  const rows = [];
+  for(const [path, item] of Object.entries((spec && spec.paths) || {})){
+    for(const [method, op] of Object.entries(item)){
+      if(!['get','post','put','patch','delete'].includes(method)) continue;
+      const tag = (op.tags && op.tags[0]) || '기타';
+      rows.push({tag, method: method.toUpperCase(), path, op});
+    }
+  }
+  return rows.sort((a,b)=> a.tag.localeCompare(b.tag) || a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
+}
+function renderApiLinks(spec){
+  const quick = apiQuickLinks(spec);
+  const qcols = [
+    {t:'이름', f:r=>`<b>${esc(r.name)}</b>`},
+    {t:'URL', cls:'col-url', f:r=>urlLink(absUrl(r.path))},
+    {t:'', f:r=>copyBtn(absUrl(r.path))},
+    {t:'설명', f:r=>`<div class="desc">${esc(r.desc)}</div>`},
+  ];
+  const eps = apiEndpoints(spec);
+  const ecols = [
+    {t:'분류', f:r=>`<span class="sec">${esc(r.tag)}</span>`},
+    {t:'메서드', f:r=>`<span class="pill m-${esc(r.method)}">${esc(r.method)}</span>`},
+    {t:'경로', cls:'col-url', f:r=> (r.method==='GET' && !r.path.includes('{'))
+        ? urlLink(r.path) : `<code>${esc(r.path)}</code>`},
+    {t:'설명', f:r=>`<div class="desc">${fmt(r.op.summary||'')}</div>`},
+    {t:'문서', f:r=>`<a class="lnk" href="${swaggerHref(r.tag, r.op)}" target="_blank" rel="noopener">Swagger</a>`},
+  ];
+  const ver = spec && spec.info ? ` <span class="mut">${esc(spec.info.title||'')} v${esc(spec.info.version||'')}</span>` : '';
+  return `<div class="subhd">바로가기${ver}</div>` + table(qcols, quick) +
+         `<div class="subhd">전체 엔드포인트 <span class="mut">${eps.length}개 · /openapi.json 기준</span></div>` + table(ecols, eps);
+}
+// 헤더 오른쪽의 문서·지표 바로가기. Prometheus 는 켜져 있을 때만 붙는다.
+async function initHeaderLinks(){
+  const el = $('#hdr-links'); if(!el) return;
+  let links = [['/docs','Swagger'],['/redoc','ReDoc']];
+  try{
+    const spec = await loadOpenapi();
+    if(spec.paths && spec.paths['/metrics/prometheus']) links.push(['/metrics/prometheus','Prometheus']);
+  }catch(_e){ /* 스키마를 못 읽어도 문서 링크는 둔다 */ }
+  el.innerHTML = links.map(([p,t])=>`<a class="lnk" href="${p}" target="_blank" rel="noopener">${t}</a>`).join(' · ');
+}

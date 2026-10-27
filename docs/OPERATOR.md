@@ -42,8 +42,12 @@ curl -s localhost:8088/executors      # coordinator 가 보유한 executor 헬�
 ```
 
 브라우저를 쓸 수 있으면 `http://<coordinator>:8088/` 의 대시보드가 같은 내용을 보여 준다. remote
-모드라면 각 executor 도 `http://<host>:8087/` 처럼 자기 화면을 준다. 터미널만 있다면 읽기 전용
-모니터를 띄운다.
+모드라면 각 executor 도 `http://<host>:8087/` 처럼 자기 화면을 준다. 두 대시보드의 "API·링크" 탭에는
+Swagger UI·ReDoc·OpenAPI 스키마, Prometheus scrape 주소(`/metrics/prometheus`)와 http_sd 주소
+(`/prometheus/targets`), 헬스·메트릭·동기화 상태 같은 운영용 주소가 복사 버튼과 함께 모여 있고, 그 아래에 이 서버의
+전체 엔드포인트가 Swagger 의 해당 항목 링크와 함께 나온다. coordinator 화면에는 executor 마다 대시보드·문서·
+Prometheus 주소도 나오므로 Prometheus 설정을 채울 때 여기서 복사하면 된다. 헤더 오른쪽의 Swagger·ReDoc·
+Prometheus 링크는 어느 탭에서나 보인다. 터미널만 있다면 읽기 전용 모니터를 띄운다.
 
 ```bash
 bin/dashboard-tui.sh                                  # 설정에서 coordinator 주소를 유추한다

@@ -335,7 +335,8 @@ curl -s localhost:8088/jobs/$JOB/status
 ```
 
 두 서비스 모두 FastAPI 라 `/docs`(Swagger UI)·`/redoc`·`/openapi.json` 로 API 를 대화형으로 탐색할
-수 있습니다(에어갭 대응으로 정적 에셋 내장). 클라이언트 연동 상세는
+수 있습니다(에어갭 대응으로 정적 에셋 내장). 대시보드의 "API·링크" 탭에 이 주소들과 Prometheus 지표 주소,
+전체 엔드포인트 목록이 모여 있습니다. 클라이언트 연동 상세는
 [`docs/INTEGRATION.md`](docs/INTEGRATION.md) 를 참고하세요.
 
 ## 모니터링

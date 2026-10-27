@@ -265,7 +265,8 @@ DASHBOARD_HTML = """<!doctype html>
 <header>
   <h1>🛰 Query Coordinator 모니터링</h1>
   <span class="meta" id="hdr"></span>
-  <span class="meta" id="upd" style="margin-left:auto"></span>
+  <span class="meta hdr-links" id="hdr-links" style="margin-left:auto"></span>
+  <span class="meta" id="upd"></span>
 </header>
 <div class="tabs">
   <button data-tab="jobs" class="active">처리중인 Query</button>
@@ -276,6 +277,7 @@ DASHBOARD_HTML = """<!doctype html>
   <button data-tab="ds">데이터소스</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
+  <button data-tab="api">API·링크</button>
 </div>
 <main>
   <section class="panel active" id="p-jobs"></section>
@@ -320,6 +322,7 @@ DASHBOARD_HTML = """<!doctype html>
   </section>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
+  <section class="panel" id="p-api"></section>
 </main>
 <div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
   <div class="modal-box">
@@ -737,8 +740,28 @@ async function loadInfo(){
 }
 getJSON("/info").then(d=>{ $("#hdr").textContent =
   `id=${d.coordinator_id} · mode=${d.executor_mode} · store=${d.store_backend} · select=${d.executor_select} · v${d.version}`; });
+// API·링크 탭: 이 coordinator 의 API 와 문서 링크(공용 renderApiLinks) 아래에 executor 마다 열 수 있는
+// 주소를 붙인다. executor 주소는 브라우저가 직접 여는 것이라 그 호스트에 닿는 망에서만 열린다.
+async function loadApi(){
+  const spec = await loadOpenapi();
+  let ex = [];
+  try{ ex = (await getJSON("/cluster")).executors || []; }catch(_e){ ex = []; }
+  const base = r => String(r.executor_url||"").replace(/[/]+$/,"");
+  const go = (r,p,t) => `<a class="lnk" href="${esc(base(r)+p)}" target="_blank" rel="noopener">${t}</a>`;
+  const cols = [
+    {t:"Executor", f:r=>`<code>${fmt(r.executor_id||r.executor_url)}</code>`},
+    {t:"상태", f:r=>r.healthy?'<span class="ok">● UP</span>':'<span class="bad">● DOWN</span>'},
+    {t:"대시보드", f:r=>go(r,"/","열기")},
+    {t:"문서", f:r=>go(r,"/docs","Swagger")+" · "+go(r,"/redoc","ReDoc")},
+    {t:"Prometheus 지표", cls:"col-url", f:r=>`${go(r,"/metrics/prometheus",`<code>${esc(base(r))}/metrics/prometheus</code>`)} ${copyBtn(base(r)+"/metrics/prometheus")}`},
+    {t:"기타", f:r=>go(r,"/metrics","메트릭")+" · "+go(r,"/health","헬스")+" · "+go(r,"/sync/status","동기화")},
+  ];
+  $("#p-api").innerHTML = renderApiLinks(spec) +
+    `<div class="subhd">Executor 주소 <span class="mut">${ex.length}대 · 브라우저에서 직접 연다</span></div>` + table(cols, ex);
+}
+initHeaderLinks();
 initDashboard({jobs:loadJobs, hist:loadHist, exec:loadExec, tpl:loadTpl, qe:loadQe, ds:loadDs,
-               conf:loadConf, info:loadInfo}, "jobs");
+               conf:loadConf, info:loadInfo, api:loadApi}, "jobs");
 </script>
 </body>
 </html>"""

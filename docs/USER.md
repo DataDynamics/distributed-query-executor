@@ -662,4 +662,5 @@ coordinator 를 여러 대 두고 로드밸런서 뒤에 놓았는데 상태 저
 `GET /health` 와 `GET /cluster` 를 쓴다.
 
 모든 API 를 직접 호출해 보려면 `http://<coordinator>:8088/docs` 의 Swagger UI 를 연다. 브라우저로
-`http://<coordinator>:8088/` 에 접속하면 작업 진행 상황을 보여 주는 대시보드가 나온다.
+`http://<coordinator>:8088/` 에 접속하면 작업 진행 상황을 보여 주는 대시보드가 나오고, 그 "API·링크" 탭에서
+Swagger UI·ReDoc 과 전체 엔드포인트 목록을 바로 열 수 있다.

@@ -187,7 +187,8 @@ DASHBOARD_HTML = """<!doctype html>
 <header>
   <h1>🛰 Query Executor 모니터링</h1>
   <span class="meta" id="hdr"></span>
-  <span class="meta" id="upd" style="margin-left:auto"></span>
+  <span class="meta hdr-links" id="hdr-links" style="margin-left:auto"></span>
+  <span class="meta" id="upd"></span>
 </header>
 <div class="tabs">
   <button data-tab="tasks" class="active">처리중인 Task</button>
@@ -195,6 +196,7 @@ DASHBOARD_HTML = """<!doctype html>
   <button data-tab="ds">데이터소스</button>
   <button data-tab="conf">환경설정</button>
   <button data-tab="info">그외 정보</button>
+  <button data-tab="api">API·링크</button>
 </div>
 <main>
   <section class="panel active" id="p-tasks"></section>
@@ -224,6 +226,7 @@ DASHBOARD_HTML = """<!doctype html>
   </section>
   <section class="panel" id="p-conf"></section>
   <section class="panel" id="p-info"></section>
+  <section class="panel" id="p-api"></section>
 </main>
 <div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
   <div class="modal-box">
@@ -414,7 +417,10 @@ async function loadInfo(){
 }
 getJSON("/info").then(d=>{ $("#hdr").textContent =
   `id=${d.executor_id} · max=${d.max_concurrent_tasks} · self_report=${d.self_report} · v${d.version}`; });
-initDashboard({tasks:loadTasks, hist:loadHist, ds:loadDs, conf:loadConf, info:loadInfo}, "tasks");
+// API·링크 탭: 이 executor 의 API·문서·지표 주소(공용 renderApiLinks)다.
+async function loadApi(){ $("#p-api").innerHTML = renderApiLinks(await loadOpenapi()); }
+initHeaderLinks();
+initDashboard({tasks:loadTasks, hist:loadHist, ds:loadDs, conf:loadConf, info:loadInfo, api:loadApi}, "tasks");
 </script>
 </body>
 </html>"""

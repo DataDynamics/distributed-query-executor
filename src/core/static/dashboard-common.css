@@ -103,3 +103,8 @@ td.col-err { text-align:left; white-space:normal; word-break:break-word;
 /* 한 패널 안에서 표를 둘 이상 쌓을 때 쓰는 소제목(예: 처리중인 job 아래의 query-run 표) */
 .subhd{margin:16px 0 6px;font-size:13px;font-weight:600;color:var(--fg,inherit)}
 .subhd .mut{font-weight:400;margin-left:6px}
+
+/* API·링크 탭: URL 은 왼쪽 정렬로 읽기 좋게, 메서드는 색으로 구분한다 */
+td.col-url { text-align:left; }
+.m-GET{color:var(--ok);} .m-POST{color:var(--acc);} .m-PUT,.m-PATCH{color:var(--warn);} .m-DELETE{color:var(--bad);}
+.hdr-links a { font-size:12px; }

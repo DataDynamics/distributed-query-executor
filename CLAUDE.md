@@ -472,7 +472,9 @@ sqlglot 의 `hive`/`trino`/`postgres`). 문서나 모듈에서 처음 나올 때
 스타일과 JS 헬퍼(포맷터·표·타임라인·모달·페이저·탭 배선·esc 이스케이프)는
 `src/core/static/dashboard-common.css`/`dashboard-common.js` 에 있고 `/assets` 로 서빙된다. 공통
 룩앤필과 동작은 이 두 파일만 고치고 페이지 문자열에 복사본을 되살리지 않는다
-(`tests/test_offline_assets.py` 가 회귀를 막는다). 서버가 준 임의 문자열을 innerHTML 로 뿌릴 때는
+(`tests/test_offline_assets.py` 가 회귀를 막는다). "API·링크" 탭(`renderApiLinks`)은 `/openapi.json` 에서
+엔드포인트를 읽으므로 라우트를 더해도 따로 고칠 것이 없고, 고정 바로가기(`API_DOC_LINKS`·`API_OPS_LINKS`)는
+`tests/test_dashboard_api_links.py` 가 실제로 열리는지 확인한다. 서버가 준 임의 문자열을 innerHTML 로 뿌릴 때는
 반드시 `esc()`/`fmt()` 를 거친다.
 
 **에어갭 환경이 전제이므로 웹 에셋은 모두 내장한다.** 런타임에 외부 CDN 이나 폰트로 나가면 안
