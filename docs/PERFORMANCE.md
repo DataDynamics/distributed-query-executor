@@ -203,6 +203,8 @@ coordinator 가 task 진행을 확인하고(폴링), 응답이 없을 때 얼마
 | `executor.self_report` | false | executor 가 자기 상태를 공유 DB 에 직접 기록 |
 | `executor.status_interval_s` | 10 | self-report(heartbeat) 주기 |
 | `executor.shutdown_drain_timeout_s` | 25 | SIGTERM 시 진행 중 task 완료를 기다리는 최대 시간(graceful drain) |
+| `executor.task_retention_s` | 3600 | 종료 task 를 인메모리에 남겨 두는 시간(초). `0` 이면 시간 기준을 끈다 |
+| `executor.max_finished_tasks` | 1000 | 인메모리에 남기는 종료 task 개수 상한. `0` 이면 개수 기준을 끈다 |
 
 `shutdown_drain_timeout_s` 의 graceful drain 은 종료 신호(SIGTERM)를 받았을 때 곧바로 멈추지 않고
 진행 중이던 task 가 끝날 때까지 잠시 기다리는 "부드러운 마무리"를 뜻합니다.

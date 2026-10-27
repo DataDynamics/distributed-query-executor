@@ -417,6 +417,14 @@ class Settings:
         self.executor_max_concurrent_tasks: int = int(
             _get("executor", "max_concurrent_tasks", 8)
         )
+        # 인메모리 tasks 에 종료 task 를 남겨 두는 시간(초)과 개수 상한이다. 둘 다 0 이면 그 기준을 끈다.
+        # 지운 task 는 /tasks·대시보드 처리중 목록에서 사라지지만 task_history 이력에는 남는다.
+        self.executor_task_retention_s: float = float(
+            _get("executor", "task_retention_s", 3600)
+        )
+        self.executor_max_finished_tasks: int = int(
+            _get("executor", "max_finished_tasks", 1000)
+        )
         # SIGTERM 을 받았을 때 진행 중인 task 를 강제로 끊지 않고 완료를 기다리는 최대 시간(초)이다.
         self.executor_shutdown_drain_timeout_s: float = float(
             _get("executor", "shutdown_drain_timeout_s", 25)

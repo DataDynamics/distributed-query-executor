@@ -98,6 +98,8 @@ INT_BOUNDS: dict[str, tuple[int, int, int]] = {
     "coordinator.max_pending_jobs": (0, 100000, 10),        # 0=대기 큐 없음
     "coordinator.max_dispatch_concurrency": (1, 4096, 4),   # 0 이면 디스패치가 멈춘다
     "executor.max_concurrent_tasks": (0, 1024, 1),          # 0=무제한
+    "executor.task_retention_s": (0, 604800, 600),          # 0=시간 기준 끔
+    "executor.max_finished_tasks": (0, 1000000, 100),       # 0=개수 기준 끔
     "greenplum.pool_max": (0, 1024, 1),                     # 0=max_concurrent_tasks 와 동일
     "copy.batch_size": (1, 1000000, 1000),
     "copy.queue_size": (1, 1024, 1),

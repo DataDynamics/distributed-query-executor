@@ -133,6 +133,60 @@ _PROGRESS_LOG_EVERY = 100_000
 
 # "활성"(처리 중)으로 볼 task 상태다. 처리중 Task 탭 집계의 기준이 된다.
 _ACTIVE_STATUSES = {TaskStatus.QUEUED, TaskStatus.READING, TaskStatus.WRITING}
+_FINISHED_STATUSES = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
+
+# 종료 직후의 task 는 보관 개수 상한을 넘어도 지우지 않는 최소 보관 시간(초)이다. coordinator 는
+# 종료 상태를 한 번 더 폴링해야 결과를 확정하고, 접수 응답을 못 받은 POST /tasks 를 재시도하면
+# task_requests 로 재생해야 하므로, 그 사이에 지우면 404 폴링 실패나 같은 task 의 중복 실행이 된다.
+_MIN_FINISHED_RETAIN_S = 60.0
+
+
+def _finished_age_s(task, now) -> Optional[float]:
+    """종료된 task 가 끝난 지 몇 초 지났는지 돌려준다. 진행 중이거나 종료 시각을 모르면 None 이다."""
+    if task.status not in _FINISHED_STATUSES or not task.finished_at:
+        return None
+    try:
+        return (now - datetime.fromisoformat(task.finished_at)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _prune_finished_tasks(
+    tasks: dict, task_requests: dict, *, now, retention_s: float, max_finished: int,
+) -> list[str]:
+    """인메모리 ``tasks`` 에서 오래된 종료 task 를 지우고 지운 task_id 목록을 돌려준다.
+
+    executor 는 이관 task 와 query-run 을 모두 ``tasks`` 에 쌓는데, 지우지 않으면 query-execute 가
+    올 때마다 늘어나 메모리가 끝없이 자란다. 오래된 실행 기록은 task_history 에 남아 있으므로
+    인메모리에는 최근 것만 두면 된다. 두 기준을 함께 적용한다. 끝난 지 ``retention_s`` 초가 지난
+    task 는 지우고(0 이면 이 기준을 끈다), 그래도 종료 task 가 ``max_finished`` 개를 넘으면 오래
+    끝난 것부터 지운다(0 이면 끈다). 어느 기준이든 진행 중인 task 와 끝난 지
+    ``_MIN_FINISHED_RETAIN_S`` 초가 안 된 task 는 건드리지 않는다.
+
+    이벤트 루프 스레드에서만 부르므로 다른 변경과 겹치지 않는다. 스레드에서 도는 집계는
+    ``list(tasks.values())`` 스냅샷으로 세므로 여기서 항목이 빠져도 안전하다.
+    """
+    finished = []
+    for tid, t in list(tasks.items()):
+        age = _finished_age_s(t, now)
+        if age is not None and age >= _MIN_FINISHED_RETAIN_S:
+            finished.append((age, tid))
+    victims = set()
+    if retention_s and retention_s > 0:
+        victims.update(tid for age, tid in finished if age >= retention_s)
+    if max_finished and max_finished > 0:
+        total_finished = sum(1 for t in tasks.values() if t.status in _FINISHED_STATUSES)
+        excess = total_finished - len(victims) - max_finished
+        if excess > 0:
+            # 오래 끝난 것부터 지운다. 이미 보관 시간으로 지울 task 는 건너뛴다.
+            remaining = sorted(
+                ((age, tid) for age, tid in finished if tid not in victims), reverse=True,
+            )
+            victims.update(tid for _, tid in remaining[:excess])
+    for tid in victims:
+        tasks.pop(tid, None)
+        task_requests.pop(tid, None)
+    return sorted(victims)
 
 
 def _build_backend() -> Backend:
@@ -227,6 +281,16 @@ def create_app(
     # 종료 드레이닝 상태를 {"on": bool} 형태로 노출한다. 테스트와 디버깅에서 참조한다.
     app.state.drain = drain
     app.state.inflight = inflight
+
+    def _prune() -> None:
+        """새 task 를 넣기 직전에 오래된 종료 task 를 정리한다. 정리 기준은 _prune_finished_tasks 에 있다."""
+        removed = _prune_finished_tasks(
+            tasks, task_requests, now=now_dt(),
+            retention_s=settings.executor_task_retention_s,
+            max_finished=settings.executor_max_finished_tasks,
+        )
+        if removed:
+            logger.debug("종료 task %d개 인메모리 정리", len(removed))
 
     async def _run_with_ctx(task: Task) -> None:
         """admission 세마포어와 로그 컨텍스트로 task 실행을 감싸는 래퍼다.
@@ -428,6 +492,7 @@ def create_app(
         )
         # 접수 시각부터 슬롯 확보까지의 대기(QUEUE_WAIT) 단계를 연다. _run 진입 시 닫힌다.
         task.on_stage("QUEUE_WAIT", "start")
+        _prune()
         tasks[task.task_id] = task
         task_requests[task.task_id] = request_body
 
@@ -719,6 +784,7 @@ def create_app(
             )
         task = _new_query_task(req)
         task.on_stage("QUEUE_WAIT", "start")
+        _prune()
         tasks[task.task_id] = task
         # 요청 처리 코루틴 자체를 inflight 에 넣어 드레이닝이 이 실행의 완료도 기다리게 한다.
         me = asyncio.current_task()

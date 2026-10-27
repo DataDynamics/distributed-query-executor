@@ -47,6 +47,10 @@ def masked_config(settings) -> list[dict]:
          "이 executor 가 동시에 실행하는 task 수(0=무제한)"),
         ("executor", "shutdown_drain_timeout_s", settings.executor_shutdown_drain_timeout_s,
          "종료(SIGTERM) 시 진행 중 task 완료를 기다리는 최대 시간(초)"),
+        ("executor", "task_retention_s", settings.executor_task_retention_s,
+         "종료 task 를 인메모리에 남겨 두는 시간(초, 0=시간 기준 끔)"),
+        ("executor", "max_finished_tasks", settings.executor_max_finished_tasks,
+         "인메모리에 남기는 종료 task 개수 상한(0=개수 기준 끔)"),
         ("executor", "gp_hostname",
          getattr(settings, "executor_gp_hostname", "") or "(미설정→hostname 사용)",
          "local_stage: 이 executor 의 GP 세그먼트 호스트명(file:// URI 조립). "

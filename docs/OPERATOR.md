@@ -613,6 +613,14 @@ executor 는 SIGTERM 을 받으면 진행 중인 task 가 끝나기를 기다렸
 평소 task 하나가 걸리는 시간보다 넉넉히 잡아 두고, systemd 로 돌린다면 `TimeoutStopSec` 이 이보다
 길어야 뜻이 있다.
 
+executor 는 처리한 task(이관 task 와 query-execute 가 위임한 query-run 모두)를 메모리에 들고 있다가
+새 task 를 받을 때 오래된 것을 지운다. 끝난 지 `executor.task_retention_s`(기본 3600초)가 지난 task 와,
+끝난 task 가 `executor.max_finished_tasks`(기본 1000개)를 넘을 때 오래 끝난 것부터 지운다. 끝난 지
+60초가 안 된 task 는 coordinator 가 아직 결과를 확인하는 중일 수 있어 기준과 무관하게 남긴다. 지운
+task 는 `/tasks` 와 대시보드 처리중 목록에서 빠지지만 task_history 이력에는 그대로 남으므로, 오래된
+실행은 이력 탭에서 찾는다. 두 값을 0 으로 두면 그 기준이 꺼지는데, query-execute 가 잦은 환경에서 둘 다
+끄면 executor 메모리가 계속 자라므로 끄지 않는다.
+
 기동할 때 콘솔과 로그에 찍히는 배너에는 실제로 읽은 설정 파일의 절대 경로가 나온다. 설정을 바꿨는데
 반영이 안 된 것 같으면 여기부터 본다. 엉뚱한 디렉터리를 읽고 있는 경우가 많다.
 

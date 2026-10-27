@@ -131,6 +131,8 @@ executor:
   status_interval_s: ${executor.status_interval_s:10}    # self-report 주기(초)
   max_concurrent_tasks: ${executor.max_concurrent_tasks:8}   # executor 1대가 동시에 실행하는 task 수(0=무제한)
   shutdown_drain_timeout_s: ${executor.shutdown_drain_timeout_s:25}  # 종료(SIGTERM) 시 진행 중 task 완료를 기다리는 최대 시간(초)
+  task_retention_s: ${executor.task_retention_s:3600}     # 종료 task 를 인메모리에 남겨 두는 시간(초, 0=시간 기준 끔)
+  max_finished_tasks: ${executor.max_finished_tasks:1000} # 인메모리에 남기는 종료 task 개수 상한(0=개수 기준 끔)
   source:
     type: ${source.type:impala}                   # 소스 엔진: impala 전용(하위 호환용 키)
   impala:

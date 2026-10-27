@@ -67,7 +67,7 @@ Impala의 큰 `SELECT` 한 건을 여러 executor에게 나눠 병렬로 읽히�
 |---|---|
 | **Task API** | `POST /tasks`(수신·실행 시작), `GET /tasks`·`/tasks/{id}`(상태), `/cancel`, `/metrics`(`app.py`) |
 | **Backend** | `ImpalaToGreenplumBackend`(impyla read → psycopg COPY/INSERT) + `MockBackend`. copy 모드는 COPY 전 **컬럼 사전검증(preflight)** 으로 불일치 조기 실패(`backend.py`) |
-| **Task Store** | task 상태(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED) + 누적 `rows_written`(인메모리 dict) |
+| **Task Store** | task 상태(QUEUED→READING→WRITING→DONE/FAILED/CANCELLED) + 누적 `rows_written`(인메모리 dict). 새 task 접수 시 `executor.task_retention_s`·`max_finished_tasks` 기준으로 오래된 종료 task 를 정리(끝난 지 60초 미만은 보존) |
 | **TaskHistory** | task 단위 상태 전이 이력 PostgreSQL 기록·조회(`history.py`) |
 | **StatusReporter** | 자기 상태(CPU/메모리/동시 task)를 공유 DB에 self-report(`status.py`) |
 | **동시 task 상한** | `executor.max_concurrent_tasks` 세마포어(admission control) |

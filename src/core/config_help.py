@@ -285,6 +285,17 @@ FIELD_HELP: dict[str, str] = {
         "끝난 task 는 살아남고 넘긴 task 는 잘리므로, 평소 task 하나가 걸리는 시간보다 넉넉히 잡되 "
         "systemd 의 TimeoutStopSec 보다는 짧아야 뜻이 있다."
     ),
+    "executor.task_retention_s": (
+        "끝난 task 를 executor 메모리에 남겨 두는 시간이다. 이 시간이 지난 task 는 새 task 를 받을 때 "
+        "지워져 /tasks 와 대시보드 처리중 목록에서 빠지지만 task_history 이력에는 그대로 남는다. "
+        "query-execute 가 잦은 환경에서 0(끔)으로 두면 메모리가 계속 자라므로 끄지 않는다. 끝난 지 "
+        "60초가 안 된 task 는 coordinator 가 아직 결과를 확인하는 중일 수 있어 기준과 무관하게 남긴다."
+    ),
+    "executor.max_finished_tasks": (
+        "executor 메모리에 남겨 두는 끝난 task 의 개수 상한이다. 넘으면 오래 끝난 것부터 지운다. "
+        "보관 시간만으로는 짧은 시간에 몰린 query-execute 를 막지 못하므로 함께 둔다. 대시보드에서 "
+        "최근 task 를 더 보고 싶으면 늘리되, 오래된 기록은 이력 탭에서 보는 것이 맞다."
+    ),
     "coordinator.poll_interval_s": (
         "디스패치한 task 의 상태를 얼마나 자주 물어볼지 정한다. 짧으면 진행률이 매끄럽지만 task 가 "
         "많을수록 executor 를 그만큼 자주 두드리고, 길면 종료 감지가 그만큼 늦어진다."
