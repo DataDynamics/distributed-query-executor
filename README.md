@@ -107,6 +107,7 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 | `bin/s3-ops` | S3 업로드·다운로드·복사·이동·삭제·목록·내용 확인 | `boto3` |
 | `bin/load-test` | coordinator API 부하 테스트(ramp-up, async 폴링·sync 응답 완료 판정, 처리량과 서버 CPU·메모리 요약, 대화형 `wizard`) | `httpx`(기본 포함) |
 | `bin/perf-report` | 성능 지표 로그(`*-perf.log`)의 시간대별 요약과 병목 의심 구간·조정 방향 | 없음 |
+| `bin/dirsync.py` | SSH 없이 HTTP 로 배포 디렉터리를 원본 서버 기준으로 동기화(server/client, 서버는 읽기 전용) | 없음(파일 하나, 표준 라이브러리) |
 
 ```bash
 bin/gp-shell                                     # 설정대로 접속

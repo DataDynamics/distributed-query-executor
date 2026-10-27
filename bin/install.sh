@@ -95,10 +95,11 @@ fi
 
 # 런처 스크립트는 소스 트리의 bin/ 이 rsync 로 이미 $APP_HOME/bin 에 놓였다.
 # 서비스 런처는 .sh 로 끝나지만 운영자용 CLI 도구(gp-shell·impala-shell·s3-ops·load-test·perf-report)는
-# 손으로 자주 치는 명령이라 확장자를 붙이지 않았다. 둘 다 실행 권한을 준다.
+# 손으로 자주 치는 명령이라 확장자를 붙이지 않았다. 둘 다 실행 권한을 준다. dirsync.py 는 다른 호스트로
+# 파일 하나만 복사해 쓰는 독립 스크립트라 .py 를 붙였다.
 echo "==> 런처 스크립트 실행 권한 -> $BIN_DIR"
 chmod +x "$BIN_DIR"/*.sh
-chmod +x "$BIN_DIR"/gp-shell "$BIN_DIR"/impala-shell "$BIN_DIR"/s3-ops "$BIN_DIR"/load-test "$BIN_DIR"/perf-report
+chmod +x "$BIN_DIR"/gp-shell "$BIN_DIR"/impala-shell "$BIN_DIR"/s3-ops "$BIN_DIR"/load-test "$BIN_DIR"/perf-report "$BIN_DIR"/dirsync.py
 # systemd 유닛과 설치 스크립트는 bin/systemd/ 에 따로 모아 두었다(선택 설치).
 chmod +x "$BIN_DIR"/systemd/*.sh
 

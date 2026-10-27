@@ -347,6 +347,16 @@ Executor 상세는 coordinator 프록시를 거치며, 설정 목록의 index로
 - **`bin/load-test`** 는 coordinator API 부하 테스트 도구다(`tools/load/`, `run`·`plan`·`wizard`).
 - **`bin/perf-report`** 는 성능 지표 로그를 시간대별로 묶고 병목 의심 구간과 조정 방향을 출력한다
   (`tools/perf_report.py`, `--bucket`·`--since`·`--until`·`--source`·`--keys`).
+- **`bin/dirsync.py`** 는 SSH 가 막힌 환경에서 배포 트리를 맞추는 동기화 도구다. 원본 호스트에서 `server`
+  를 띄우고 대상 호스트에서 `client` 가 붙어 서버 기준으로 미러한다(계획 표시 → y/n → 진행 표시).
+
+`dirsync.py` 는 다른 도구와 달리 `src/` 패키지가 아니라 **파일 하나짜리 독립 스크립트**다. 저장소가 없는
+호스트에 이 파일만 복사해 쓰므로 `core` 등을 import 하지 않고 표준 라이브러리만 쓰며 파이썬 3.9 문법을
+지킨다. 서버는 원본을 절대 바꾸지 않아야 하므로 서버 쪽(`TreeSource`·`_Handler`)에는 쓰기 호출을 두지
+않고 GET 외의 메서드는 405 로 거절한다. 쓰기는 클라이언트의 `Applier` 에만 있다. 제외 규칙은 서버가 목록에
+실어 보내 클라이언트가 합쳐 쓰므로, 제외된 경로는 클라이언트에서 복사도 삭제도 되지 않는다. 서버가 응답
+머리와 본문을 따로 쓰므로 `TCP_NODELAY` 를 켜지 않으면 파일마다 지연 ACK 만큼(약 40ms) 멈춘다. 검증은
+`tests/test_dirsync.py` 이고 서버 트리가 전후로 같음을 스냅샷으로 확인한다.
 
 **`tools/appconfig.py`** 는 공용 설정을 CLI의 `impala`·`greenplum`·`s3`·`sql` 섹션으로
 변환한다. 값은 명령행 > 설정 > 기본값 순이다. `--config-dir`로 위치를 바꾸고
