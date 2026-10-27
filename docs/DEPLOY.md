@@ -249,7 +249,7 @@ executor.status_interval_s=10
 
 **공유 Job 저장소**(`store.backend=postgres`)를 켜면 작업 상태가 `jobs` 테이블에 JSONB 로 저장되어 어느 coordinator 로 조회·취소해도 똑같이 동작하고, 취소는 플래그 공유를 통해 다른 coordinator 에까지 미친다. 이력은 **2계층**으로 나뉜다 — 작업 시작·종료(`run()`)는 coordinator 가 `job_history` 에, 각 task 의 상태 변화는 executor 가 `executor_id` 를 포함해 `task_history` 에 남긴다(작업 제출 시 `username` 을 넘기면 두 테이블에 사용자가 기록되어 대시보드 "사용자" 컬럼에 나타난다). task 이력은 executor 가 직접 쓰므로 **executor 호스트에도 PG 자격증명이 필요**하다. **생존 확인**을 위해 `self_report=true` 로 두면 각 executor 가 `executor_status` 에 heartbeat 를 주기적으로 upsert 하고, coordinator 는 그 행 `updated_at` 의 신선도로 살아 있는지 판단한다. 끝으로 admission 한도(`max_concurrent_jobs`·`max_pending_jobs`)는 **coordinator 인스턴스마다 따로(인메모리)** 적용되므로, 여러 대를 띄우면 전체 한도는 인스턴스 수만큼 곱해진다.
 
-⚠️ **앱은 스키마를 자동 생성하지 않는다.** 서비스 기동 **전에** 통합 스키마 한 파일로 전체 테이블(jobs/job_history/task_history/executor_status/executor_health_metrics)을 먼저 만든다(안 하면 "relation does not exist"로 실패):
+⚠️ **앱은 스키마를 자동 생성하지 않는다.** 서비스 기동 **전에** 통합 스키마 한 파일로 전체 테이블(jobs/job_history/task_history/executor_status/executor_reservation/coordinator_status/executor_health_metrics)을 먼저 만든다(안 하면 "relation does not exist"로 실패):
 
 ```bash
 PG="postgresql://user:pass@pg-host:5432/queryexec"

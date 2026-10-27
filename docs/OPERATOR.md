@@ -754,6 +754,111 @@ psql "$PG" -f /data1/distributed-query-executor/config/postgresql.sql
 다만 heartbeat 와 예약은 잦은 단일 행 갱신이라 MPP 와 잘 맞지 않으므로, 성능이 중요하면 메타
 저장소는 일반 PostgreSQL 에 두고 WarehousePG 는 데이터 적재 대상으로만 쓰는 편이 낫다.
 
+### 메타 저장소를 WarehousePG 에서 PostgreSQL 로 옮기기
+
+WarehousePG 에 둔 메타 저장소는 부하가 몰리면 느려지고 서로 막힌다. 작업 저장, self-report,
+예약은 모두 한 행짜리 `INSERT ... ON CONFLICT DO UPDATE` 인데, MPP 는 이런 문장 하나에도 세그먼트
+배분과 분산 커밋을 거친다. global deadlock detector 가 꺼져 있으면 UPDATE 가 테이블 전체를 잠가
+같은 테이블의 저장이 한 줄로 서기도 한다. 관리 화면에서 INSERT 가 락을 기다리는 모습이 자주 보이면
+이 경우다. 게다가 WarehousePG 에는 멱등 키의 UNIQUE 인덱스를 걸 수 없어 중복 제출 방지가 최선
+노력에 그친다. 일반 PostgreSQL 로 옮기면 이 문제들이 함께 사라진다. 코드는 바꿀 것이 없고 DSN 만
+바꾸면 된다.
+
+먼저 무엇이 어디로 가는지 알아 둔다. 메타 테이블 일곱 개는 모두 `history.db_dsn` 하나를 쓰고
+(공유 작업 저장소인 `jobs` 도 DSN 을 따로 두지 않는다), `executor_health_metrics` 만
+`monitor.db_dsn` 을 쓴다. `history.db_dsn` 이 비어 있으면 `monitor.db_dsn` 을 대신 쓴다. 따라서 두
+값을 새 PostgreSQL 로 바꾸면 메타 저장소 전체가 옮겨 가고, 데이터 적재 대상인 `greenplum.dsn` 만
+WarehousePG 에 남는다.
+
+**준비할 것은 세 가지다.** 첫째, PostgreSQL 에 DB 와 계정을 만든다. 슈퍼유저로 `postgres` DB 에
+접속해 아래를 실행한다. 이름과 암호는 예시이며, 바꾸면 DSN 도 같은 값으로 맞춘다. 앱 사용자를 DB
+소유자로 두고 다음 단계의 스키마도 그 사용자로 만들면, 테이블 소유자가 앱 사용자가 되어 따로 GRANT 할
+것이 없다. 같은 문장이 `postgresql.sql` 맨 앞의 주석에도 있고, 점검용 읽기 전용 사용자를 만드는
+방법도 거기에 적혀 있다.
+
+```sql
+CREATE ROLE queryexec_app LOGIN PASSWORD 'change_me';
+CREATE DATABASE queryexec OWNER queryexec_app ENCODING 'UTF8' TEMPLATE template0;
+REVOKE CONNECT ON DATABASE queryexec FROM PUBLIC;
+GRANT CONNECT ON DATABASE queryexec TO queryexec_app;
+```
+
+둘째, `pg_hba.conf` 와
+방화벽에서 coordinator 호스트뿐 아니라 **모든 executor 호스트**의 접속을 허용한다. executor 가
+`task_history` 와 `executor_status` 를 직접 쓰기 때문에, 이것을 빠뜨리면 이력과 self-report 만
+조용히 실패한다. 셋째, `max_connections` 를 확인한다. 앱은 호출마다 연결을 열고 닫으므로 동시 연결
+수는 동시에 진행 중인 호출 수와 같다. coordinator 한 대는 store 전용 스레드 풀 8개에 기본 스레드
+풀(`min(32, CPU+4)`) 몫을 더한 만큼, executor 한 대는 동시 task 수에 self-report 하나를 더한 만큼까지
+연다. 이 합에 운영자 접속 몫을 넉넉히 얹는다.
+
+**1. 스키마를 만든다.** 서비스를 멈추기 전에 미리 해 둘 수 있다. 앞에서 만든 앱 사용자로 접속하고,
+오류가 나면 바로 멈추도록 `ON_ERROR_STOP` 을 켠다. 여러 번 실행해도 안전하다.
+
+```bash
+PG="postgresql://queryexec_app:change_me@pg-host:5432/queryexec"
+psql "$PG" -v ON_ERROR_STOP=1 -f /data1/distributed-query-executor/config/postgresql.sql
+```
+
+**2. 진행 중인 작업이 없을 때 서비스를 멈춘다.** 실행 중인 job 의 상태는 옛 저장소에 남으므로
+옮기는 도중에 돌던 job 은 새 저장소에서 이어지지 않는다. 신규 제출을 막고 대시보드나
+`GET /cluster` 의 `jobs.active` 가 0 이 된 것을 확인한 뒤 coordinator 와 executor 를 모두 멈춘다.
+
+**3. 기존 데이터를 옮긴다(선택).** 이력을 새 대시보드에서 계속 보고 싶거나, 예전 job 을 같은 멱등
+키로 다시 냈을 때 재생되기를 바란다면 옮긴다. 필요 없으면 이 단계를 건너뛰고 새로 시작해도 된다.
+`executor_status`·`executor_reservation`·`coordinator_status` 는 서비스가 뜨면서 다시 채우므로 옮기지
+않는다.
+
+옮기기 전에 옛 `jobs` 에 같은 멱등 키를 가진 행이 둘 이상 있는지 확인한다. WarehousePG 에서는
+막아 줄 UNIQUE 가 없었으므로 그런 행이 있을 수 있고, 있으면 PostgreSQL 의 UNIQUE 인덱스에 걸려 복사가
+통째로 실패한다. 아래 조회가 행을 돌려주면 키마다 최신 행 하나만 남기고 지운 뒤 옮긴다.
+
+```bash
+WHPG="postgresql://user:pass@whpg-master:5432/queryexec"
+psql "$WHPG" -c "SELECT data->>'idempotency_key' AS k, count(*) FROM public.jobs
+                 WHERE data->>'idempotency_key' IS NOT NULL GROUP BY 1 HAVING count(*) > 1;"
+```
+
+복사는 새 DB 의 컬럼 목록을 기준으로 옛 DB 에서 같은 이름의 컬럼을 뽑아 넣는다. 두 DB 의 컬럼 순서가
+업그레이드 이력에 따라 다를 수 있어서, 순서에 기대지 않고 이름으로 맞추려는 것이다. 이력 세 테이블은
+`id` 까지 복사하므로, 끝난 뒤 시퀀스를 최댓값 뒤로 맞춰야 다음 기록이 PK 충돌로 실패하지 않는다.
+
+```bash
+set -euo pipefail
+for t in jobs job_history task_history executor_health_metrics; do
+  cols=$(psql "$PG" -Atc "SELECT string_agg(column_name, ',' ORDER BY ordinal_position)
+                          FROM information_schema.columns
+                          WHERE table_schema='public' AND table_name='$t'")
+  psql "$WHPG" -v ON_ERROR_STOP=1 -c "\copy (SELECT $cols FROM public.$t) TO STDOUT" \
+    | psql "$PG" -v ON_ERROR_STOP=1 -c "\copy public.$t ($cols) FROM STDIN"
+done
+for t in job_history task_history executor_health_metrics; do
+  psql "$PG" -v ON_ERROR_STOP=1 -Atc "SELECT setval(pg_get_serial_sequence('public.$t', 'id'),
+                       COALESCE((SELECT max(id) FROM public.$t), 0) + 1, false)"
+done
+psql "$PG" -c "ANALYZE"
+```
+
+복사가 끝나면 테이블마다 양쪽의 `count(*)` 를 비교한다. `db.schema` 를 `public` 이 아닌 값으로
+쓰고 있다면 위 명령의 `public` 을 그 스키마로 바꾼다.
+
+**4. 설정을 바꾼다.** `history.db_dsn` 과 `monitor.db_dsn` 을 새 PostgreSQL 로 바꾸되, coordinator
+호스트와 **모든 executor 호스트**의 `config.properties` 를 함께 고친다. executor 쪽을 빠뜨리면 이력과
+self-report 가 옛 DB 로 계속 간다. `store.backend` 등 다른 값은 그대로 둔다.
+
+**5. 띄우고 확인한다.** executor 를 먼저 띄우고 coordinator 를 띄운다. 대시보드의 설정 표에서 두
+DSN 이 새 주소로 보이는지 확인하고, 작업 하나를 내서 끝까지 도는지 본다. 그다음 `*-warn.log` 에
+`이력 기록 실패`, `executor self-report 실패`, `메트릭 PostgreSQL 기록 실패`,
+`coordinator heartbeat 실패`, `relation does not exist` 가 없는지 확인한다. 하나라도 있으면 그 호스트의
+DSN·접속 허용·스키마 적용을 다시 본다. 마지막으로 새 DB 에서 행이 늘어나는지 직접 본다.
+
+```bash
+psql "$PG" -c "SELECT status, count(*) FROM public.jobs GROUP BY 1;"
+psql "$PG" -c "SELECT executor_id, updated_at FROM public.executor_status ORDER BY 1;"
+```
+
+**되돌릴 때**는 두 DSN 을 옛 값으로 돌리고 다시 띄우면 된다. 다만 PostgreSQL 에서 쌓인 이력과 작업은
+옛 DB 에 없으므로, 그동안의 기록이 필요하면 위 복사 절차를 반대 방향으로 실행한다.
+
 단일 coordinator 라면 기본값 그대로 두면 되고, 이력만 남기고 싶으면 `history.db_dsn` 만 설정해도
 된다. 참고로 admission 한도는 coordinator 인스턴스마다 따로 적용되므로, 여러 대를 띄우면 전체 한도가
 그 수만큼 곱해진다는 점을 감안해 값을 나눠 잡는다.

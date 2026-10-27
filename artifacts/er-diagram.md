@@ -58,8 +58,8 @@ ER 다이어그램이라는 말이 낯설 수 있다. 데이터베이스에 어�
 
 ## 물리 ER — PostgreSQL 메타 저장소
 
-`config/postgresql.sql` 이라는 파일이 만드는 일곱 개의 표다. 앱도 기동할 때 표가 없으면 알아서
-만들지만, 권한을 좁혀 두거나 미리 만들어 두고 싶으면 이 파일을 서비스 시작 전에 실행한다.
+`config/postgresql.sql` 이라는 파일이 만드는 일곱 개의 표다. 앱은 표를 만들지 않으므로 서비스를
+시작하기 전에 이 파일을 먼저 실행해야 한다. 빠뜨리면 첫 기록에서 "relation does not exist" 로 실패한다.
 
 ![물리 ER — PostgreSQL 메타 저장소](images/er-physical.svg)
 

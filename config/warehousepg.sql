@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS public.task_history (
 )
 DISTRIBUTED BY (job_id);
 
--- 구버전 테이블 보강(앱도 자동 수행). 이미 있으면 무시된다.
+-- 구버전 테이블 보강. 앱은 컬럼을 추가하지 않으므로 업그레이드 때 이 스크립트를 다시 실행한다.
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS started_at  TIMESTAMP;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS sub_query   TEXT;

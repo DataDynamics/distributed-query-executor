@@ -1,10 +1,12 @@
 -- ============================================================================
 -- Distributed Query Executor — PostgreSQL 통합 스키마
 -- ============================================================================
--- 앱은 각 테이블을 CREATE TABLE IF NOT EXISTS 로 자동 생성하지만, 사전 생성이나
--- 권한 관리를 원할 때 이 스크립트 하나로 전체 스키마를 만들 수 있다.
+-- 앱은 테이블을 만들거나 고치지 않는다. 서비스를 띄우기 전에 이 스크립트로 전체 스키마를 먼저
+-- 만들어야 하며, 빠뜨리면 첫 기록에서 "relation does not exist" 로 실패한다. 모든 문장이
+-- IF NOT EXISTS 라 이미 만든 DB 에 다시 실행해도 안전하다(업그레이드 때 새 컬럼·인덱스만 더해진다).
 --
--- 적용:  psql "postgresql://user:pass@pg-host:5432/queryexec" -f postgresql.sql
+-- 적용:  아래 0) 으로 DB 와 사용자를 만든 뒤, 그 사용자로 접속해 이 파일을 실행한다.
+--   psql "postgresql://queryexec_app:change_me@pg-host:5432/queryexec" -v ON_ERROR_STOP=1 -f postgresql.sql
 --
 -- 스키마: 모든 메타 테이블은 public 스키마로 명시 한정한다. 앱 설정 db.schema(기본 public)와
 --   반드시 일치해야 한다 — 앱 런타임 SQL 도 db.schema 로 테이블명을 한정하기 때문이다.
@@ -17,13 +19,54 @@
 --     ALTER TABLE <t> ALTER COLUMN <col> TYPE TIMESTAMP USING (<col> AT TIME ZONE 'Asia/Seoul');
 --
 -- 테이블별 사용 DSN/설정:
---   jobs                    : store.backend=postgres (멀티 coordinator 공유 Job 저장소)
---   job_history             : history.db_dsn         (coordinator, job 단위 실행 이력)
---   task_history            : history.db_dsn         (executor, task 단위 실행 이력)
---   executor_status         : history.db_dsn         (executor.self_report=true 상태)
---   executor_health_metrics : monitor.db_dsn         (coordinator 헬스/메트릭 기록)
--- 보통 history.db_dsn 하나에 jobs/job_history/task_history/executor_status 를 함께 둔다.
+--   jobs                    : history.db_dsn (store.backend=postgres 일 때, 공유 Job 저장소)
+--   job_history             : history.db_dsn (coordinator, job 단위 실행 이력)
+--   task_history            : history.db_dsn (executor, task 단위 실행 이력)
+--   executor_status         : history.db_dsn (executor.self_report=true 일 때 상태)
+--   executor_reservation    : history.db_dsn (coordinator.executor_reservation=true 일 때 예약)
+--   coordinator_status      : history.db_dsn (store.backend=postgres 일 때 coordinator 생존 신호)
+--   executor_health_metrics : monitor.db_dsn (coordinator 헬스/메트릭 기록)
+-- jobs 저장소는 DSN 을 따로 두지 않고 history.db_dsn 을 그대로 쓴다. history.db_dsn 이 비어
+-- 있으면 monitor.db_dsn 을 대신 쓰므로, 두 값을 같은 DB 로 두면 일곱 테이블이 한곳에 모인다.
+-- executor 도 task_history·executor_status 를 직접 쓰므로 executor 호스트에서 이 DB 에 닿아야
+-- 한다(pg_hba.conf·방화벽).
+--
+-- 다른 DB(예: WarehousePG)의 기존 행을 옮겨 올 때 id 를 함께 복사했다면, 복사가 끝난 뒤 시퀀스를
+-- 최댓값 뒤로 맞춰야 다음 INSERT 가 PK 충돌로 실패하지 않는다(세 테이블 모두):
+--   SELECT setval(pg_get_serial_sequence('public.job_history', 'id'),
+--                 COALESCE((SELECT max(id) FROM public.job_history), 0) + 1, false);
 -- ============================================================================
+
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 0) DB·사용자 생성 — 최초 한 번, 슈퍼유저로 postgres DB 에 접속해 실행한다
+--    CREATE DATABASE 는 트랜잭션 안에서도, 만들 DB 에 접속한 상태에서도 실행할 수 없으므로
+--    이 파일 본문과 함께 돌지 않게 주석으로 두었다. 아래 줄의 앞 '-- ' 를 지우고 실행한다.
+--      psql "postgresql://postgres@pg-host:5432/postgres" -v ON_ERROR_STOP=1
+--    이름(queryexec, queryexec_app)과 암호는 예시다. 바꾸면 history.db_dsn·monitor.db_dsn 도
+--    같은 값으로 맞춘다. 앱 사용자가 DB 를 소유하고 이 파일도 그 사용자로 실행하므로, 테이블과
+--    시퀀스의 소유자가 앱 사용자가 되어 따로 GRANT 할 것이 없다(PostgreSQL 15 이상은 public
+--    스키마에 쓰는 권한이 DB 소유자에게만 있어, DB 소유자로 두는 편이 가장 단순하다).
+-- ─────────────────────────────────────────────────────────────────────────
+-- CREATE ROLE queryexec_app LOGIN PASSWORD 'change_me';
+-- CREATE DATABASE queryexec OWNER queryexec_app ENCODING 'UTF8' TEMPLATE template0;
+-- REVOKE CONNECT ON DATABASE queryexec FROM PUBLIC;
+-- GRANT CONNECT ON DATABASE queryexec TO queryexec_app;
+--
+-- db.schema 를 public 이 아닌 값(예: dqe)으로 쓸 때는 queryexec DB 에 접속해 스키마를 만들고,
+-- 이 파일의 public. 을 그 스키마로 바꿔 실행한다.
+--   \c queryexec
+--   CREATE SCHEMA IF NOT EXISTS dqe AUTHORIZATION queryexec_app;
+--
+-- 대시보드 조회나 점검용 읽기 전용 사용자가 필요하면, 이 파일을 실행한 뒤 슈퍼유저로 queryexec DB 에
+-- 접속해 만든다(앱 사용자에게는 롤을 만들 권한이 없다). 마지막 줄 덕분에 나중에 업그레이드로 생기는
+-- 테이블에도 읽기 권한이 자동으로 붙는다.
+--   psql "postgresql://postgres@pg-host:5432/queryexec" -v ON_ERROR_STOP=1
+--   CREATE ROLE queryexec_ro LOGIN PASSWORD 'change_me_ro';
+--   GRANT CONNECT ON DATABASE queryexec TO queryexec_ro;
+--   GRANT USAGE ON SCHEMA public TO queryexec_ro;
+--   GRANT SELECT ON ALL TABLES IN SCHEMA public TO queryexec_ro;
+--   ALTER DEFAULT PRIVILEGES FOR ROLE queryexec_app IN SCHEMA public GRANT SELECT ON TABLES TO queryexec_ro;
 
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -72,7 +115,11 @@ CREATE TABLE IF NOT EXISTS public.job_history (
     original_sql       TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_job_history_job_id ON public.job_history (job_id);
+-- (job_id, recorded_at DESC) 는 대시보드 이력 조회의 DISTINCT ON (job_id) ... ORDER BY job_id,
+-- recorded_at DESC 와 순서가 같아 정렬 없이 인덱스 순서로 job 별 최신 행을 고르게 한다. job_id
+-- 하나로 찾는 조회도 이 인덱스의 앞부분으로 처리된다.
+CREATE INDEX IF NOT EXISTS idx_job_history_job_recorded
+    ON public.job_history (job_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_job_history_recorded_at ON public.job_history (recorded_at);
 
 
@@ -106,7 +153,7 @@ CREATE TABLE IF NOT EXISTS public.task_history (
     phases        JSONB         -- 세부 단계 타임라인(각 단계 시작/종료/소요/행수/지표)
 );
 
--- 구버전 테이블 보강(앱도 자동 수행). 이미 있으면 무시된다.
+-- 구버전 테이블 보강. 앱은 컬럼을 추가하지 않으므로 업그레이드 때 이 스크립트를 다시 실행한다.
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS started_at  TIMESTAMP;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP;
 ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS sub_query   TEXT;
@@ -124,6 +171,11 @@ ALTER TABLE public.task_history ADD COLUMN IF NOT EXISTS phases           JSONB;
 CREATE INDEX IF NOT EXISTS idx_task_history_job_id ON public.task_history (job_id);
 CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON public.task_history (task_id);
 CREATE INDEX IF NOT EXISTS idx_task_history_recorded_at ON public.task_history (recorded_at);
+-- coordinator 의 query-run 이력 조회(WHERE exec_mode = 'query_run')만 보는 부분 인덱스다.
+-- 이관 task 행은 담지 않아 작게 유지된다.
+CREATE INDEX IF NOT EXISTS idx_task_history_query_run
+    ON public.task_history (task_id, recorded_at DESC)
+    WHERE exec_mode = 'query_run';
 
 
 -- ─────────────────────────────────────────────────────────────────────────
