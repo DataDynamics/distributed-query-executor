@@ -193,16 +193,29 @@ def _s3_section(settings) -> Dict[str, Any]:
     }
 
 
+def _trino_section(settings) -> Dict[str, Any]:
+    """query-execute 의 커스텀 실행 함수(``query.func.module``)와 그 설정(``query.func.config.*``)이다.
+
+    trino 셸은 Trino 에 직접 붙지 않고 executor 와 같은 실행 함수를 같은 설정으로 부르므로, 접속 정보를
+    따로 두지 않고 이 두 값을 그대로 넘긴다.
+    """
+    return {
+        "module": settings.query_func_module or None,
+        "config": dict(settings.query_func_config or {}) or None,
+    }
+
+
 def _sql_section(_settings) -> Dict[str, Any]:
     """``.sql`` 템플릿 디렉터리. 설정 항목이 없어 저장소의 ``sql/`` 을 쓴다."""
     return {"dir": None}
 
 
-#: 섹션 이름에서 변환 함수를 찾는 표. 도구가 요구하는 섹션은 이 넷뿐이다.
+#: 섹션 이름에서 변환 함수를 찾는 표다.
 _SECTIONS = {
     "impala": _impala_section,
     "greenplum": _greenplum_section,
     "s3": _s3_section,
+    "trino": _trino_section,
     "sql": _sql_section,
 }
 

@@ -536,8 +536,16 @@ grep "$JOB_ID" $L/query-coordinator-server.log $L/query-executor-server-*.log | 
 
 ```bash
 bin/impala-shell        # 소스 쪽 확인
+bin/trino-shell         # 소스가 Trino(datasource=trino)라면 — query-execute 와 같은 실행 함수로 실행한다
 bin/gp-shell            # 대상 쪽 확인 — 테이블이 있는지, 권한이 있는지
 ```
+
+`bin/trino-shell` 은 Trino 접속을 따로 두지 않고 query-execute 가 쓰는 커스텀 실행 함수(`query.func.module`,
+기본 `customs.query_funcs.trino_runner:run`)를 그대로 불러 쿼리를 실행한다. 그래서 대시보드 미리보기와 똑같은
+경로로 확인할 수 있다. 접속 값은 `query.func.config.*` 를 읽고 `--host`·`--catalog`·`--schema`·
+`--set 키=값` 으로 일부만 덮어쓴다. 셸 안에서 `USE 카탈로그.스키마` 로 대상을 바꾸고 `\dt`·`\d 테이블` 로
+목록과 구조를 본다. 실행 함수가 매번 새로 접속하므로 `SET SESSION` 은 유지되지 않아 거절하며, 결과는
+`--max-rows`(0 이면 제한 없음)에서 자르고 잘렸으면 알린다. `-q "SELECT ..." -o out.csv` 로 배치 실행도 된다.
 
 `s3_stage` 를 쓴다면 중간 산출물이 남아 있는지도 확인한다.
 
@@ -699,6 +707,103 @@ y 로 답하면 끝난 항목이 한 줄씩 쌓이고, 맨 아래 줄에 전체 
 
 서버는 기본으로 9900 포트를 쓴다. 방화벽이 있으면 동기화하는 동안만 대상 호스트 주소에 그 포트를 연다.
 종료 코드는 0(완료 또는 바꿀 것 없음), 1(일부 실패), 2(시작 전 중단·취소)다.
+
+---
+
+## 커스텀 코드를 executor 로 자동 배포하기(`sync.*`)
+
+`customs/` 의 커스텀 함수나 템플릿처럼 자주 고치는 파일은 coordinator 에서 고치면 모든 executor 에 알아서
+퍼지도록 할 수 있다. coordinator 가 지정한 경로를 감시하다가 파일이 바뀌면 묶음(번들)을 만들어 모든 executor
+에 보내고, 모두 받을 준비가 되면 한꺼번에 새 버전으로 바꾼다. 기본으로 켜져 있지 않고 동기화할 대상도
+없으므로, 쓰려면 경로와 파일명 패턴을 직접 적는다.
+
+```properties
+# coordinator 와 모든 executor 호스트의 config.properties 에 똑같이 둔다
+sync.enabled=true
+sync.paths=customs
+sync.patterns=*.py,*.yml,*.yaml,*.json,*.sql
+sync.exclude=__pycache__,*.pyc
+```
+
+`sync.paths` 는 앱 홈(`/data1/distributed-query-executor`) 기준 상대 경로이고 쉼표로 여러 개 적는다.
+`sync.patterns` 는 그 아래에서 동기화할 파일 이름 패턴이며, 패턴에 맞지 않는 파일은 번들에 들어가지 않는다.
+`sync.exclude` 는 뺄 이름 패턴이다. **executor 쪽에도 같은 값을 둬야 한다.** executor 는 `sync.enabled=true`
+가 아니면 번들을 받지 않고, 받은 번들에 `sync.paths` 밖의 파일이 있으면 거절한다. 설정을 바꾼 뒤에는
+coordinator 와 executor 를 재기동한다.
+
+### 어떻게 한 번에 바뀌는가
+
+쿼리가 도는 중에 파일이 하나씩 바뀌면 반은 옛 코드, 반은 새 코드로 도는 순간이 생긴다. 이를 막으려고 전환은
+네 단계로 진행한다.
+
+1. **감시와 확인** — coordinator 는 `sync.interval_s`(기본 5초)마다 대상 파일을 훑어 내용의 해시로 버전을
+   정한다. 수정 시각만 바뀐 것은 변경으로 보지 않는다. 바뀐 내용이 `sync.settle_s`(기본 3초) 동안 그대로여야
+   배포를 시작하므로 편집하는 도중의 파일은 나가지 않는다. 파이썬 파일은 문법 검사를 먼저 하고, 오류가 있으면
+   배포하지 않고 WARNING 을 남긴다.
+2. **준비(prepare)** — 모든 executor 에 번들을 보낸다. executor 는 새 버전을 별도 디렉터리에 풀고, 설정된 커스텀
+   함수(`query.func.module`·`query.func.fetch_module` 중 동기화 경로 안의 것, 또는 `sync.verify_modules`)를 별도
+   프로세스에서 import 해 본다(`sync.verify_import`). 이 단계에서는 현재 버전을 건드리지 않는다. **한 대라도
+   실패하면 모두 취소**하고 `sync.retry_backoff_s`(기본 60초) 뒤에 다시 시도한다. 일부만 바뀌는 일은 없다.
+3. **비우기(drain)** — 모두 준비되면 새 job 의 실행 시작을 잠시 막고(요청은 받아서 PENDING 으로 둔다) 실행 중인
+   job 이 끝나기를 `sync.drain_timeout_s`(기본 600초)까지 기다린다. 한 job 의 task 가 두 버전에 걸치지 않게
+   하려는 것이다. 시간을 넘기면 그대로 전환하고, 남은 job 의 나머지 task 는 새 버전으로 돈다는 WARNING 을 남긴다.
+4. **전환(commit)** — 모든 executor 를 새 버전으로 바꾸고 job 실행을 다시 연다.
+
+executor 쪽 전환은 심링크 하나를 바꾸는 것이라 원자적이다. 처음 전환할 때 동기화 경로가 심링크로 바뀐다.
+
+```
+/data1/distributed-query-executor/customs  ->  .sync/current/customs
+/data1/distributed-query-executor/.sync/current  ->  releases/<버전>
+/data1/distributed-query-executor/.sync/releases/<버전>/customs/...
+```
+
+원래 있던 실제 디렉터리는 `.sync/displaced/<시각>/` 으로 옮겨 두므로 잃어버리지 않는다. 옛 버전은
+`sync.keep_releases`(기본 3)개까지 남는다. 전환 순간에 이미 돌고 있던 task 는 옛 코드로 끝까지 돌고, 그 뒤에
+시작하는 task 부터 새 코드를 쓴다. **executor 를 재기동할 필요는 없다.**
+
+### 따라잡기와 디스패치 제외
+
+전환할 때 내려가 있던 executor 나 전환에 실패한 executor 는 버전이 어긋난다. coordinator 는 그런 executor 를
+디스패치 후보에서 빼고(`/jobs` 와 `/query-execute` 모두), 다시 응답하면 그 한 대에만 준비·전환을 해서
+따라잡게 한다. 이때는 drain 하지 않는다. 따라잡으면 다시 후보가 된다. task 요청에는 전환된 버전이 실리고
+executor 는 자기 버전과 다르면 409(`BUNDLE_VERSION_MISMATCH`)로 거절하므로, coordinator 가 아직 알아채지
+못한 사이 버전이 어긋난 executor 에도 task 가 들어가지 않고 다음 executor 로 넘어간다. 맞는 executor 가
+하나도 없으면 task 는 그 이유를 담은 메시지와 함께 FAILED 가 된다.
+
+coordinator 를 처음 띄웠을 때 모든 executor 가 같은 버전이면 그 버전을 전환된 버전으로 받아들이고, 원본과
+다르면 위 네 단계로 맞춘다.
+
+### 상태 보기와 즉시 실행
+
+```bash
+curl -s http://<coordinator>:8088/sync/status | jq          # 원본·전환 버전, executor 별 버전·오류
+curl -s -X POST http://<coordinator>:8088/sync/now | jq     # settle 대기 없이 지금 한 번 맞춘다
+curl -s http://<executor>:8001/sync/status | jq             # executor 의 현재 버전·보관 버전·마지막 오류
+```
+
+coordinator 의 응답에서 `source_version` 은 지금 파일의 버전, `active_version` 은 전환을 마친 버전,
+`pending_version` 은 settle 을 기다리거나 재시도를 기다리는 버전이다. `draining=true` 이면 지금 drain 중이라
+새 job 이 PENDING 에 머문다. executor 마다 `in_sync`·`reachable`·`last_error` 가 나오므로 어긋난 executor 와
+그 이유를 바로 알 수 있다. `source_errors` 에는 문법 오류처럼 배포를 막은 이유가 담긴다. 같은 값이 성능 지표
+로그에도 `sync.*` 로 남는다.
+
+### 주의할 점
+
+- **executor 에서 동기화 경로의 파일을 직접 고치지 않는다.** 고친 파일은 다음 전환 때 coordinator 의 내용으로
+  바뀐다. 고칠 때는 항상 원본 coordinator 에서 고친다.
+- **coordinator 가 여러 대면 원본 한 대만 `sync.push=true`** 로 두고 나머지는 `sync.push=false` 로 둔다.
+  두 대가 서로 다른 내용을 밀면 executor 가 번갈아 바뀐다. `push=false` 인 coordinator 는 감시도 배포도 하지
+  않는다.
+- coordinator 와 같은 호스트에서 같은 앱 홈을 쓰는 executor(한 서버에 함께 띄운 경우)는 이미 같은 파일을
+  보고 있으므로 파일은 건드리지 않고 불러 둔 모듈만 비운다. 이런 executor 는 상태에 `shared=true` 로 나온다.
+- 번들은 풀었을 때 `sync.max_bundle_mb`(기본 100MB)를 넘으면 거절된다. 큰 데이터 파일은 동기화 대상에
+  넣지 않는다.
+- 동기화되는 것은 파일뿐이다. `config.properties` 처럼 호스트마다 다른 파일은 대상에 넣지 않으며, 설정을 바꾸려면
+  여전히 재기동해야 한다. 코드 전체를 맞추는 것은 `bin/dirsync.py` 의 몫이다.
+- 동기화를 켠 executor 에 `bin/dirsync.py` 를 돌릴 때는 `--exclude-dir .sync` 와 동기화 경로(예: `customs`)를
+  함께 뺀다. 빼지 않으면 dirsync 가 심링크를 실제 디렉터리로 바꿔 놓고, 다음 전환 때 그 디렉터리가
+  `.sync/displaced/` 로 옮겨진다.
+- 인증은 없다. executor 의 `/sync/*` 는 coordinator 와 운영자만 닿는 망에 둔다.
 
 ---
 

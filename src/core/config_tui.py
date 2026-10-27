@@ -110,6 +110,11 @@ INT_BOUNDS: dict[str, tuple[int, int, int]] = {
     "copy.batch_size": (1, 1000000, 1000),
     "copy.queue_size": (1, 1024, 1),
     "stage.max_files_per_host": (0, 4096, 1),               # 0=세그먼트 수만큼 자동
+    "sync.interval_s": (1, 3600, 1),
+    "sync.settle_s": (0, 600, 1),
+    "sync.drain_timeout_s": (0, 86400, 60),                 # 0=기다리지 않고 곧바로 전환
+    "sync.retry_backoff_s": (1, 3600, 10),
+    "sync.keep_releases": (1, 100, 1),
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

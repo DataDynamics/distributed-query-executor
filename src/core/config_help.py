@@ -218,6 +218,36 @@ FIELD_HELP: dict[str, str] = {
         "executor 목록을 http_sd_configs 형식으로 준다. 메모리 값만 읽어 scrape 부담이 없으니, Prometheus 를 쓰지 "
         "않거나 이 경로를 외부에 열고 싶지 않을 때만 끈다."
     ),
+    "sync.enabled": (
+        "coordinator 의 지정 파일을 executor 로 자동 동기화한다. coordinator 에서는 sync.paths 아래 sync.patterns 에 "
+        "맞는 파일을 감시하다가 바뀌면 모든 executor 에 보내고, executor 에서는 그 수신을 허용한다. 모든 executor 가 "
+        "받아 검증해야 전환하고, 실행 중인 job 이 끝나기를 기다렸다가 한 번에 바꾼다. 양쪽 모두 켜야 동작한다."
+    ),
+    "sync.push": (
+        "이 coordinator 가 원본으로서 감시·배포하는지다. coordinator 가 여러 대면 원본으로 삼을 한 대만 true 로 두고 "
+        "나머지는 false 로 둔다. 여러 대가 서로 다른 내용을 배포하면 버전이 왔다 갔다 한다."
+    ),
+    "sync.paths": (
+        "동기화할 경로(앱 홈 기준 상대 경로, 쉼표로 여러 개)다. 예: customs. executor 에서는 같은 상대 경로가 "
+        ".sync/current 를 가리키는 심링크로 바뀌어 한 번에 전환된다. 이 경로는 coordinator 가 소유하므로 executor "
+        "에서 따로 고친 파일은 다음 전환 때 사라진다. 호스트마다 다른 config 는 넣지 않는다."
+    ),
+    "sync.patterns": (
+        "sync.paths 아래에서 동기화할 파일명 패턴(fnmatch, 쉼표)이다. 예: *.py,*.yml. '/' 를 넣으면 상대 경로 전체에 "
+        "맞춘다. 패턴에 맞지 않는 파일은 executor 로 가지 않는다."
+    ),
+    "sync.exclude": (
+        "동기화에서 뺄 이름 패턴(쉼표)이다. 디렉터리 이름에 맞으면 그 아래 전부를 뺀다. 기본은 __pycache__ 와 *.pyc 다."
+    ),
+    "sync.drain_timeout_s": (
+        "새 버전으로 바꾸기 전에 실행 중인 job 이 끝나기를 기다리는 상한(초)이다. 기다리는 동안 새 job 은 PENDING "
+        "으로 대기한다. 넘기면 그대로 바꾸고, 진행 중이던 job 의 남은 task 는 새 버전으로 돈다."
+    ),
+    "sync.verify_import": (
+        "executor 가 전환하기 전에 별도 파이썬 프로세스에서 새 파일로 커스텀 함수를 import 해 본다. 빠진 의존성이나 "
+        "import 오류가 있으면 아무 executor 도 바꾸지 않는다. 시험할 대상은 sync.verify_modules, 비우면 동기화 경로 "
+        "안에 있는 query.func.module·fetch_module 이다."
+    ),
     "log.loop_stall_ms": (
         "이벤트 루프가 이 시간 넘게 응답하지 않으면 그 순간 루프 스레드가 실행 중인 코드 위치(스택)를 "
         "WARNING 으로 남긴다. coordinator 와 executor 는 단일 워커라 루프가 멈추면 헬스 체크와 폴링이 "

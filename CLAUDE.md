@@ -54,7 +54,7 @@ src/
   core/        # 공용: 설정 로더/설정/로깅/메트릭 (coordinator·executor 공유)
   coordinator/ # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/    # FastAPI: 소스 읽기 → Greenplum 적재(backend), task 상태 노출
-  tools/       # 운영자용 CLI(gp-shell·impala-shell·s3-ops·load-test). 서비스와 별개로 사람이 직접 쓴다
+  tools/       # 운영자용 CLI(gp-shell·impala-shell·trino-shell·s3-ops·load-test). 서비스와 별개로 사람이 직접 쓴다
 bin/           # 런처·설치 스크립트 + 운영자 CLI 래퍼(/data1 배포 트리와 공용)
   systemd/     # systemd 유닛(coordinator.service·executor@.service) + install-systemd.sh
 config/        # config.properties + config.yml 기본값 + 스키마(postgresql.sql / warehousepg.sql)
@@ -237,6 +237,26 @@ coordinator 는 이를 `GET /query-runs`(모든 executor 의 `/tasks` 를 모아
 `GET /query-runs/history`(`QueryRunHistoryRepository` 가 task_history 를 `exec_mode='query_run'` 으로
 읽음)로 대시보드 처리중·이력 탭에 보여 준다.
 
+### 파일 자동 동기화(`sync.*`)
+
+원본 coordinator(`sync.push=true`)가 `sync.paths` 아래 `sync.patterns` 에 맞는 파일을 감시하다가 바뀌면 모든
+executor 에 번들을 보내 2단계로 바꾼다. 순수 로직(스캔·내용 해시 버전·결정적 tar·안전한 풀기)은 `core/bundle.py`,
+coordinator 의 감시·prepare/drain/commit·따라잡기는 `coordinator/sync.py` 의 `BundleSyncer`, executor 의 수신과
+전환은 `executor/sync.py` 의 `BundleStore` 다. 버전은 파일 경로·sha256·권한의 해시라 수정 시각만 바뀐 것은
+변경이 아니다. executor 는 `<홈>/<경로> -> .sync/current/<경로>`, `.sync/current -> releases/<버전>` 구조로
+두고 `current` 심링크를 `os.replace` 해 원자적으로 바꾼다. 하나라도 prepare 에 실패하면 모두 abort 한다.
+
+drain 은 `JobAdmission.pause()/resume()/wait_idle()` 로 새 job 의 실행 시작만 막는다(요청 수용은 그대로라
+PENDING 에 쌓인다). 전환된 버전과 다른 executor 는 디스패처의 `bundle_gate`(`_gate_order`)와 query-execute 의
+`_pick_executor_order` 에서 빠지고, task 에 실린 `bundle_version` 이 다르면 executor 가 409
+`BUNDLE_VERSION_MISMATCH` 로 거절해 다음 후보로 넘어간다.
+
+**모듈은 `importlib.reload` 하지 않는다.** reload 는 같은 모듈 객체의 globals 를 덮어써 실행 중인 함수를 깨뜨리므로
+commit 은 동기화 경로의 모듈을 `sys.modules` 에서 빼기만 한다(`purge_modules`). 커스텀 함수를 import 하는 곳은
+`sync.IMPORT_LOCK` 을 잡고, 함수를 캐시하는 곳은 `register_cache_clearer` 로 비우는 함수를 등록해야 한다(현재
+`executor/app.py` 의 `_query_func_cache` 와 `backend.py` 의 `_dotted_cache`). coordinator 와 같은 호스트·같은
+앱 홈의 executor 는 공유 모드라 파일을 건드리지 않는다. 검증은 `tests/test_sync.py` 다.
+
 ### 로깅
 
 **`core/logging.py`** 는 일별 로그 보관, `[job_id][task_id]` 컨텍스트와 WARNING 전용 파일을
@@ -342,6 +362,8 @@ Executor 상세는 coordinator 프록시를 거치며, 설정 목록의 index로
 
 - **`bin/gp-shell`** 은 Greenplum 대화형 SQL 셸이다(`tools/gp_query.py --interactive`).
 - **`bin/impala-shell`** 은 Impala 대화형 SQL 셸이다(`tools/impala_query.py --interactive`).
+- **`bin/trino-shell`** 은 커스텀 실행 함수(`query.func.module`, 기본 `trino_runner:run`)로 Trino 쿼리를 실행하는
+  셸이다(`tools/trino_query.py`). 드라이버에 직접 붙지 않고 query-execute 와 같은 함수를 부른다.
 - **`bin/s3-ops`** 는 S3 객체를 올리고 내리고 지운다(`ls`·`upload`·`download`·`head`·`cp`·`mv`·
   `rm`·`rmdir`·`exists`·`mkdir`·`buckets`).
 - **`bin/load-test`** 는 coordinator API 부하 테스트 도구다(`tools/load/`, `run`·`plan`·`wizard`).

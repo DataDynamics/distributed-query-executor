@@ -85,9 +85,9 @@ src/
   core/          # 공용: 설정 로더/설정/로깅/HTTP 로깅/메트릭 (coordinator·executor 공유)
   coordinator/   # FastAPI: 검증(parser) → 분할(splitter) → admission → 디스패치 → 상태 추적
   executor/      # FastAPI: Impala 읽기 → Greenplum 적재(backend), task 상태 노출
-  tools/         # 운영자용 CLI(gp-shell·impala-shell·s3-ops·load-test·perf-report)
+  tools/         # 운영자용 CLI(gp-shell·impala-shell·trino-shell·s3-ops·load-test·perf-report)
 bin/             # 런처·설치 스크립트(install·start/stop/restart/status·env·check-prereqs·*-tui)
-                 #  + 운영자 CLI 래퍼(gp-shell·impala-shell·s3-ops·load-test·perf-report)
+                 #  + 운영자 CLI 래퍼(gp-shell·impala-shell·trino-shell·s3-ops·load-test·perf-report)
 config/          # config.properties + config.yml 기본값 + templates/ + 스키마(*.sql)
 templates/       # 쿼리 템플릿(<template_id>/manifest.yml + *.sql.j2)
 customs/         # 사이트 커스텀 코드(customs.query_funcs.* — 커스텀 쿼리 함수)
@@ -104,6 +104,7 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 |---|---|---|
 | `bin/gp-shell` | Greenplum 대화형 SQL 셸(`psql` 처럼 붙어서 주고받음) | `psycopg`(기본 포함) |
 | `bin/impala-shell` | Impala 대화형 SQL 셸(`beeline` 처럼) | `impyla` |
+| `bin/trino-shell` | 커스텀 실행 함수(`query.func.module`, 기본 `trino_runner`)로 Trino 쿼리를 실행하는 대화형 셸 | 실행 함수가 쓰는 것(`trino` 등) |
 | `bin/s3-ops` | S3 업로드·다운로드·복사·이동·삭제·목록·내용 확인 | `boto3` |
 | `bin/load-test` | coordinator API 부하 테스트(ramp-up, async 폴링·sync 응답 완료 판정, 처리량과 서버 CPU·메모리 요약, 대화형 `wizard`) | `httpx`(기본 포함) |
 | `bin/perf-report` | 성능 지표 로그(`*-perf.log`)의 시간대별 요약과 병목 의심 구간·조정 방향 | 없음 |
@@ -113,6 +114,7 @@ tests/           # pytest (검증/라이프사이클/admission/대시보드)
 bin/gp-shell                                     # 설정대로 접속
 bin/gp-shell --host other-gp.example.com         # 개별 값만 덮어쓰기
 echo "SELECT 1;" | bin/gp-shell                  # 파이프로 넘겨도 됩니다
+bin/trino-shell --catalog hive --schema sales   # query.func.config.* 의 값 일부만 덮어쓰기
 
 bin/s3-ops ls s3://dw-stage/dqe-stage/ --summary
 bin/s3-ops head s3://dw-stage/dqe-stage/job_abc123/t_0.csv -n 3

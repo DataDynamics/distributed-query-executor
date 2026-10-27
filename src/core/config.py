@@ -261,6 +261,27 @@ class Settings:
         # 꺼 두어도 루프 지연·기본 스레드 풀 계측은 exporter 를 위해 계속 돈다.
         self.prometheus_enabled: bool = _to_bool(_get("prometheus", "enabled", True))
 
+        # ── 파일 동기화(coordinator → executor) ──
+        # coordinator 가 앱 홈 기준 sync.paths 아래에서 sync.patterns 에 맞는 파일을 감시하다가 바뀌면 모든
+        # executor 에 2단계(prepare → commit)로 배포한다. executor 는 같은 키로 수신을 허용한다. 기본 대상은
+        # 없으므로 paths 와 patterns 를 모두 적어야 동작한다.
+        self.sync_enabled: bool = _to_bool(_get("sync", "enabled", False))
+        # coordinator 가 감시·배포하는지 여부다. 여러 coordinator 중 원본 한 대만 true 로 둔다.
+        self.sync_push: bool = _to_bool(_get("sync", "push", True))
+        self.sync_paths: list[str] = _csv_list(_get("sync", "paths", ""))
+        self.sync_patterns: list[str] = _csv_list(_get("sync", "patterns", ""))
+        self.sync_exclude: list[str] = _csv_list(_get("sync", "exclude", "__pycache__,*.pyc"))
+        self.sync_base_dir: str = str(_get("sync", "base_dir", "") or "")
+        self.sync_interval_s: float = float(_get("sync", "interval_s", 5))
+        self.sync_settle_s: float = float(_get("sync", "settle_s", 3))
+        self.sync_drain_timeout_s: float = float(_get("sync", "drain_timeout_s", 600))
+        self.sync_retry_backoff_s: float = float(_get("sync", "retry_backoff_s", 60))
+        self.sync_keep_releases: int = int(_get("sync", "keep_releases", 3))
+        self.sync_verify_import: bool = _to_bool(_get("sync", "verify_import", True))
+        self.sync_verify_modules: list[str] = _csv_list(_get("sync", "verify_modules", ""))
+        self.sync_verify_timeout_s: float = float(_get("sync", "verify_timeout_s", 60))
+        self.sync_max_bundle_mb: float = float(_get("sync", "max_bundle_mb", 100))
+
         self.config_dir: Path = _CONFIG_DIR
         self.config_yaml_path: Path = _yaml_path
         self.config_properties_path: Path = _properties_path

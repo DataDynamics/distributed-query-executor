@@ -75,6 +75,15 @@ def _http_error_kind(exc: Exception) -> str:
     return "other"
 
 
+def _is_bundle_mismatch(response) -> bool:
+    """executor 가 동기화 버전 불일치로 거절한 409 인지 본다."""
+    try:
+        detail = response.json().get("detail")
+    except Exception:
+        return False
+    return isinstance(detail, dict) and detail.get("code") == "BUNDLE_VERSION_MISMATCH"
+
+
 def _src_kw(job: Job) -> dict:
     """백엔드 호출에 실을 소스 엔진 인자(커스텀 소스일 때만).
 
@@ -157,6 +166,40 @@ class JobAdmission:
         self._inflight = 0
         # 실행 슬롯을 실제로 잡고 있는 job 수다. 대기 수는 inflight 에서 이 값을 뺀 것이다(성능 지표용).
         self._running = 0
+        # 새 job 의 실행 시작을 잠시 막는 관문이다. 파일 동기화가 버전을 바꾸기 직전에 닫고, 실행 중인 job 이
+        # 모두 끝나면 바꾼 뒤 연다(drain). 닫혀 있는 동안 새 job 은 PENDING 으로 기다린다. 이벤트 루프 안에서
+        # 처음 쓸 때 만든다(루프 밖에서 생성된 Event 를 다른 루프에서 쓰지 않게).
+        self._gate: Optional[asyncio.Event] = None
+        self._paused_by: Optional[str] = None
+
+    def _gate_event(self) -> asyncio.Event:
+        if self._gate is None:
+            self._gate = asyncio.Event()
+            self._gate.set()
+        return self._gate
+
+    @property
+    def paused(self) -> bool:
+        return self._gate is not None and not self._gate.is_set()
+
+    def pause(self, reason: str = "") -> None:
+        """새 job 이 실행 슬롯에 들어가지 못하게 막는다. 이미 실행 중인 job 은 계속 돈다."""
+        self._gate_event().clear()
+        self._paused_by = reason or "paused"
+
+    def resume(self) -> None:
+        self._gate_event().set()
+        self._paused_by = None
+
+    async def wait_idle(self, timeout: float) -> bool:
+        """실행 중인 job 이 0 이 될 때까지 기다린다. timeout 안에 비면 True 다."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+        while self._running > 0:
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(0.2)
+        return True
 
     def perf_gauges(self) -> dict:
         """성능 지표 로그에 남길 실행·대기 수와 각 한도다(0 은 무제한)."""
@@ -214,19 +257,29 @@ class JobAdmission:
         자동 반납한다. 대기하는 동안 job 은 호출측에서 PENDING 상태로 노출된다.
         무제한 모드(_sem is None)에서는 대기 없이 즉시 통과한다.
         """
+        gate = self._gate_event()
         if self._sem is None:
+            await gate.wait()
             self._running += 1
             try:
                 yield
             finally:
                 self._running -= 1
             return
-        async with self._sem:
-            self._running += 1
-            try:
-                yield
-            finally:
-                self._running -= 1
+        while True:
+            await gate.wait()
+            await self._sem.acquire()
+            # 슬롯을 기다리는 사이 관문이 닫혔으면(동기화 drain) 슬롯을 돌려주고 다시 기다린다. 그러지 않으면
+            # drain 중에 새 job 이 실행에 들어가 버전 전환이 끝없이 밀린다.
+            if gate.is_set():
+                break
+            self._sem.release()
+        self._running += 1
+        try:
+            yield
+        finally:
+            self._running -= 1
+            self._sem.release()
 
 
 class _DispatcherBase:
@@ -252,6 +305,9 @@ class _DispatcherBase:
         self.history = history or JobHistoryRepository(settings)
         self.store = store
         self.admission = JobAdmission(settings)
+        # 파일 동기화(coordinator/sync.py)가 붙이는 버전 관문이다. 붙어 있으면 전환된 버전과 다른 executor 를
+        # 디스패치 후보에서 빼고, task 에 그 버전을 실어 executor 가 다르면 거절하게 한다. 없으면(기본) 무관하다.
+        self.bundle_gate = None
         # 헬스/부하 기반 executor 선택(선택). 둘 다 주입되면 failover 순서를 헬스 기반으로
         # 정한다. 미주입(기본)이면 기존 정적 순서를 그대로 쓴다.
         self.load_view = load_view
@@ -863,6 +919,9 @@ class HttpDispatcher(_DispatcherBase):
         - 미주입(기본)이면 배정 executor 를 먼저, 나머지를 설정 순서대로 붙인다.
         짧은 connect 타임아웃 덕분에 죽은 후보는 빠르게 건너뛴다.
         """
+        return self._gate_order(self._base_order(task))
+
+    def _base_order(self, task: Task) -> list[str]:
         primary = task.executor_url
         if not self.settings.task_failover:
             return [primary] if primary else []
@@ -878,6 +937,16 @@ class HttpDispatcher(_DispatcherBase):
             if url and url not in order:
                 order.append(url)
         return order or [primary]
+
+    def _gate_order(self, order: list[str]) -> list[str]:
+        """동기화 버전이 맞지 않는 executor 를 뺀다. 모두 빠지면 빈 목록이라 task 가 이유와 함께 실패한다."""
+        gate = self.bundle_gate
+        if gate is None or not gate.enforcing:
+            return order
+        kept = [u for u in order if gate.eligible(u)]
+        if len(kept) < len(order):
+            logger.debug("동기화 버전이 다른 executor 제외: %s", [u for u in order if u not in kept])
+        return kept
 
     async def _run_task(self, client: httpx.AsyncClient, job: Job, task: Task) -> None:
         # 디스패치 동시성 세마포어로 한 번에 떠 있는 task 수를 제한한다.
@@ -920,6 +989,13 @@ class HttpDispatcher(_DispatcherBase):
         """
         order = self._failover_order(task)
         last_err: Exception | None = None
+        if not order and self.bundle_gate is not None and self.bundle_gate.enforcing:
+            task.status = TaskStatus.FAILED
+            task.error = (f"동기화 버전({self.bundle_gate.active_version})으로 전환된 executor 가 없다 — "
+                          "GET /sync/status 로 executor 별 상태를 확인하라")
+            logger.warning("task %s %s", task.task_id, task.error)
+            await self._save(job)
+            return
 
         for idx, url in enumerate(order):
             # 1) 시작 단계에서는 같은 executor 에 1 + task_max_retries 회까지 시도한다.
@@ -948,6 +1024,11 @@ class HttpDispatcher(_DispatcherBase):
                     perf.inc(f"dispatch.start_errors.{_http_error_kind(exc)}")
                     if isinstance(exc, httpx.HTTPStatusError):
                         status = exc.response.status_code
+                        if status == 409 and _is_bundle_mismatch(exc.response):
+                            # 동기화 버전이 다른 executor 다(전환 직후이거나 따라잡는 중). 접수하지 않았음이
+                            # 확실하므로 같은 executor 를 다시 두드리지 않고 다음 후보로 넘어간다.
+                            logger.info("task %s executor %s 동기화 버전 불일치 → 다음 후보", task.task_id, url)
+                            break
                         if 400 <= status < 500 and status != 429:
                             task.status = TaskStatus.FAILED
                             await self._save(job)
@@ -1042,6 +1123,11 @@ class HttpDispatcher(_DispatcherBase):
                 "csv_options": (
                     stage_sql.resolve_csv_options(job, self.settings)
                     if job.exec_mode in ("local_stage", "s3_stage") else None
+                ),
+                # 동기화가 켜져 있으면 전환된 버전을 싣는다. executor 는 자기 버전과 다르면 409 로 거절한다.
+                "bundle_version": (
+                    self.bundle_gate.active_version
+                    if self.bundle_gate is not None and self.bundle_gate.enforcing else None
                 ),
             },
         )

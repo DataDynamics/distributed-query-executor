@@ -55,6 +55,7 @@ from core.loopwatch import start_loop_watchdog
 from core.metaio import run_meta_io
 from core.perf import endpoint_key, perf, start_perf_reporter
 from core.prometheus import http_sd_targets, install_prometheus
+from .sync import build_syncer
 from .job_store import (
     JobStore, build_job_store, count_jobs_by_status, reconcile_interrupted_jobs, run_store_io, save_job,
 )
@@ -597,6 +598,8 @@ def create_app(
             else HttpDispatcher(settings, store=store, load_view=load_view,
                                 selector=selector, reservations=reservations)
         )
+    # 파일 동기화: 원본 coordinator 면 지정 파일을 감시해 executor 에 배포하고 디스패처에 버전 관문을 붙인다.
+    syncer = build_syncer(settings, runner)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -621,9 +624,13 @@ def create_app(
             cleaner.start()
         # 성능 지표 로그: 기본 스레드 풀을 계측용으로 바꾸고 interval_s 마다 *-perf.log 에 지표 한 줄을 남긴다.
         perf_reporter = start_perf_reporter("coordinator", settings)
+        if syncer is not None:
+            syncer.start()
         try:
             yield
         finally:
+            if syncer is not None:
+                await syncer.stop()
             if perf_reporter is not None:
                 await perf_reporter.stop()
             if cleaner is not None:
@@ -710,6 +717,22 @@ def create_app(
     app.state.load_view = load_view
     app.state.assign_counts = assign_counts
     app.state.template_engine = template_engine
+    app.state.syncer = syncer
+
+    @app.get("/sync/status", tags=["Monitoring"], summary="파일 동기화 상태(원본·전환 버전, executor 별 버전)")
+    def sync_status():
+        if syncer is None:
+            reason = ("sync.enabled=false" if not settings.sync_enabled else
+                      "sync.push=false(원본 coordinator 아님)" if not settings.sync_push else
+                      "sync.paths·sync.patterns 미설정 또는 executor 없음")
+            return {"enabled": False, "reason": reason}
+        return syncer.status()
+
+    @app.post("/sync/now", tags=["Monitoring"], summary="파일 동기화를 지금 한 번 수행(settle 대기 없이)")
+    async def sync_now():
+        if syncer is None:
+            raise HTTPException(status_code=409, detail="파일 동기화가 켜져 있지 않다(GET /sync/status 참고)")
+        return await syncer.run_once(force=True)
 
     @app.exception_handler(QueryValidationError)
     async def _validation_handler(request: Request, exc: QueryValidationError):
@@ -1684,6 +1707,9 @@ def create_app(
         순서를 반환한다. 클라이언트는 어떤 executor 가 뽑히는지 알 필요가 없다.
         """
         cand = [u for u in settings.executors if u]
+        # 파일 동기화 버전이 다른 executor 는 커스텀 실행 함수가 다를 수 있으므로 뺀다.
+        if syncer is not None and syncer.enforcing:
+            cand = [u for u in cand if syncer.eligible(u)]
         if not cand:
             return []
         if selector is not None and load_view is not None:

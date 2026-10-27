@@ -25,10 +25,11 @@ import re
 import socket
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import unquote
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from core.config import is_custom_source, settings
@@ -47,6 +48,7 @@ from core.perf import (
 from core.timeutil import format_at_fields, now_dt, now_iso
 from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
+from . import sync as sync_mod
 from .backend import Backend, build_backend, build_impala_dsn
 from .dashboard import DASHBOARD_HTML, masked_config
 from .history import TaskHistoryRepository, _executor_id
@@ -69,6 +71,12 @@ def _load_query_func(dotted: str):
     fn = _query_func_cache.get(dotted)
     if fn is not None:
         return fn
+    # 파일 동기화가 모듈을 바꾸는 순간과 겹치지 않게 import 를 동기화 락 안에서 한다.
+    with sync_mod.IMPORT_LOCK:
+        return _load_query_func_locked(dotted)
+
+
+def _load_query_func_locked(dotted: str):
     import importlib
 
     mod_path, sep, attr = dotted.partition(":")
@@ -85,6 +93,10 @@ def _load_query_func(dotted: str):
         raise ValueError(f"커스텀 실행 함수가 호출 가능하지 않습니다: {dotted}")
     _query_func_cache[dotted] = fn
     return fn
+
+
+# 파일 동기화가 커스텀 모듈을 바꾸면 캐시한 함수도 버려야 새 버전이 불린다.
+sync_mod.register_cache_clearer(_query_func_cache.clear)
 
 
 def _validate_cleanup_job_id(job_id: str) -> None:
@@ -226,6 +238,8 @@ def create_app(
     _max = settings.executor_max_concurrent_tasks
     sem = asyncio.Semaphore(_max) if _max and _max > 0 else None
     reporter = ExecutorStatusReporter(settings, tasks_provider=lambda: _task_counts())
+    # coordinator 가 보내는 파일 동기화 번들을 받는 저장소다(sync.enabled 가 꺼져 있으면 받지 않는다).
+    bundle_store = sync_mod.BundleStore(settings)
     # 진행 중인 백그라운드 task(코루틴) 집합이며, graceful drain 이 이들을 기다린다.
     inflight: set = set()
     # SIGTERM 을 받았을 때 신규 접수를 막는 드레이닝 플래그다. 클로저에서 함께 바꾸려고 dict 로 뒀다.
@@ -531,6 +545,15 @@ def create_app(
                 })
             existing = tasks[req.task_id]
             return {"task_id": existing.task_id, "status": existing.status.value}
+        # 동기화 버전이 coordinator 가 전환한 버전과 다르면 받지 않는다. 한 job 의 task 가 서로 다른 커스텀
+        # 코드로 돌지 않게 하려는 것이며, coordinator 는 이 409 를 보고 다른 executor 로 넘긴다.
+        if req.bundle_version and bundle_store.enabled and not bundle_store.shared:
+            mine = await asyncio.to_thread(bundle_store.version)
+            if mine != req.bundle_version:
+                raise HTTPException(status_code=409, detail={
+                    "code": "BUNDLE_VERSION_MISMATCH",
+                    "message": f"동기화 버전이 다르다(요청 {req.bundle_version}, executor {mine})",
+                })
         # 드레이닝 중에는 신규 task 를 받지 않는다. coordinator 가 다른 executor 로 failover 하거나
         # 재시도하도록 503 으로 거부한다.
         if drain["on"]:
@@ -575,6 +598,41 @@ def create_app(
         bg.add_done_callback(inflight.discard)
         logger.info("task %s 접수 (job=%s)", task.task_id, task.job_id)
         return {"task_id": task.task_id, "status": task.status.value}
+
+    # ───────── 파일 동기화 수신(coordinator 가 2단계로 호출한다) ─────────
+
+    async def _sync_call(fn, *args):
+        try:
+            return await asyncio.to_thread(fn, *args)
+        except sync_mod.SyncDisabled as exc:
+            raise HTTPException(status_code=409, detail={"code": "SYNC_DISABLED", "message": str(exc)})
+        except (sync_mod.BundleError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail={"code": "BUNDLE_INVALID", "message": str(exc)})
+        except Exception as exc:
+            logger.exception("동기화 처리 실패")
+            raise HTTPException(status_code=500, detail={"code": "SYNC_FAILED", "message": str(exc)})
+
+    @app.get("/sync/status", tags=["Sync"], summary="파일 동기화 상태(현재 버전·보관 버전·마지막 오류)")
+    async def sync_status():
+        return await asyncio.to_thread(bundle_store.status)
+
+    @app.post("/sync/prepare", tags=["Sync"], summary="동기화 번들 준비(풀고 검증만, 전환하지 않음)")
+    async def sync_prepare(request: Request):
+        data = await request.body()
+        h = request.headers
+        # 원본 호스트·경로는 coordinator 가 URL 인코딩해 보낸다(헤더는 ASCII 만 실을 수 있다).
+        return await _sync_call(bundle_store.prepare, data, h.get("X-Bundle-Version", ""),
+                                unquote(h.get("X-Source-Host", "")), unquote(h.get("X-Source-Base", "")))
+
+    @app.post("/sync/commit", tags=["Sync"], summary="준비한 버전으로 전환")
+    async def sync_commit(body: dict):
+        return await _sync_call(bundle_store.commit, str(body.get("version") or ""))
+
+    @app.post("/sync/abort", tags=["Sync"], summary="준비한 버전 폐기")
+    async def sync_abort(body: dict):
+        return await _sync_call(bundle_store.abort, str(body.get("version") or ""))
+
+    app.state.bundle_store = bundle_store
 
     @app.get("/tasks", tags=["Tasks"], summary="태스크 목록(현재 executor 보유분)")
     def list_tasks(status: Optional[str] = None, limit: int = 0):

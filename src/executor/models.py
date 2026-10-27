@@ -205,6 +205,9 @@ class CreateTaskRequest(BaseModel):
     # local_stage 는 로컬 CSV 경로, s3_stage 는 S3 객체 키를 out_path 로 받는다(coordinator 확정).
     out_path: Optional[str] = None
     csv_options: Optional[dict] = None
+    # 파일 동기화가 켜진 coordinator 가 전환된 버전을 싣는다. 이 executor 의 버전과 다르면 409 로 거절해
+    # 한 job 이 서로 다른 커스텀 코드로 도는 일을 막는다. 미지정이면 검사하지 않는다(구버전 coordinator 호환).
+    bundle_version: Optional[str] = None
 
 
 class DatasourceQueryRequest(BaseModel):

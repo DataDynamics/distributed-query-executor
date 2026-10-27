@@ -19,7 +19,7 @@
 |---|---|
 | `bin/start-coordinator.sh` / `stop-…` / `restart-…` / `status-…` | **coordinator 만** 제어(nohup + PID) |
 | `bin/start-executor.sh` / `stop-…` / `restart-…` / `status-…` | **executor 만** 제어(포트 인자 선택, 생략 시 전체) |
-| `bin/gp-shell` / `impala-shell` / `s3-ops` | 운영자용 CLI(SQL 셸, S3 조작) |
+| `bin/gp-shell` / `impala-shell` / `trino-shell` / `s3-ops` | 운영자용 CLI(SQL 셸, S3 조작) |
 | `bin/systemd/` | systemd 유닛(`coordinator.service`·`executor@.service`)과 `install-systemd.sh` |
 | `bin/check-prereqs.sh` | **사전 점검**: OS 패키지(rpm) + 파이썬 휠(.venv) 설치 여부 확인(설치는 안 함) |
 | `bin/env.sh` | 런처 공통 환경 + 헬퍼 함수(경로·포트) |

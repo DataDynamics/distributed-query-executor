@@ -26,9 +26,18 @@ GP_DATASOURCE = "greenplum"
 logger = logging.getLogger(__name__)
 
 
-# dotted path 로 로드한 호출가능 객체를 캐시한다. 커스텀 함수는 프로세스가 사는 동안 고정이므로
-# task 마다 importlib 를 다시 돌릴 필요가 없다.
+# dotted path 로 로드한 호출가능 객체를 캐시한다. task 마다 importlib 를 다시 돌릴 필요가 없다. 파일
+# 동기화가 커스텀 모듈을 새 버전으로 바꾸면 이 캐시도 비워 다음 task 부터 새 함수를 쓴다.
 _dotted_cache: dict = {}
+
+
+def _register_sync_cache() -> None:
+    from .sync import register_cache_clearer
+
+    register_cache_clearer(_dotted_cache.clear)
+
+
+_register_sync_cache()
 
 
 def load_dotted(dotted: str):
@@ -36,6 +45,14 @@ def load_dotted(dotted: str):
     fn = _dotted_cache.get(dotted)
     if fn is not None:
         return fn
+    # 파일 동기화가 모듈을 바꾸는 순간과 겹치지 않게 import 를 동기화 락 안에서 한다.
+    from .sync import IMPORT_LOCK
+
+    with IMPORT_LOCK:
+        return _load_dotted_locked(dotted)
+
+
+def _load_dotted_locked(dotted: str):
     import importlib
 
     mod_path, sep, attr = dotted.partition(":")

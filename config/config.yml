@@ -78,6 +78,27 @@ logging:
 prometheus:
   enabled: ${prometheus.enabled:true}             # exporter 사용 여부
 
+# ───────── 파일 동기화(coordinator → executor) ─────────
+# coordinator 가 앱 홈 기준 paths 아래에서 patterns 에 맞는 파일을 감시하다가 바뀌면 모든 executor 에
+# 2단계(prepare → commit)로 배포하고, 실행 중인 job 이 끝나기를 기다렸다가(drain) 한 번에 바꾼다.
+# executor 는 같은 enabled 로 수신을 허용한다. 기본 대상은 없다(paths·patterns 를 모두 적어야 동작).
+sync:
+  enabled: ${sync.enabled:false}                  # 동기화 사용(coordinator: 감시·배포, executor: 수신)
+  push: ${sync.push:true}                         # coordinator 가 감시·배포하는지(원본 coordinator 한 대만 true)
+  paths: ${sync.paths:}                           # 앱 홈 기준 상대 경로(쉼표). 예: customs
+  patterns: ${sync.patterns:}                     # 포함할 파일명 패턴(쉼표, fnmatch). 예: *.py,*.yml
+  exclude: ${sync.exclude:__pycache__,*.pyc}      # 뺄 이름 패턴(쉼표)
+  base_dir: ${sync.base_dir:}                     # 앱 홈(비우면 설치 위치 = src 의 상위)
+  interval_s: ${sync.interval_s:5}                # 변경 감시·executor 상태 확인 주기(초)
+  settle_s: ${sync.settle_s:3}                    # 바뀐 뒤 이만큼 그대로여야 배포(편집 중 파일 방지, 초)
+  drain_timeout_s: ${sync.drain_timeout_s:600}    # 전환 전 실행 중 job 이 끝나기를 기다리는 상한(초)
+  retry_backoff_s: ${sync.retry_backoff_s:60}     # 준비 실패 뒤 다시 시도하기까지(초)
+  keep_releases: ${sync.keep_releases:3}          # executor 가 남길 버전 수(현재 포함)
+  verify_import: ${sync.verify_import:true}       # executor 가 전환 전 별도 프로세스로 import 를 시험
+  verify_modules: ${sync.verify_modules:}         # 시험할 모듈(module:func, 쉼표). 비우면 동기화 경로 안의 query.func.* 설정
+  verify_timeout_s: ${sync.verify_timeout_s:60}   # import 시험 상한(초)
+  max_bundle_mb: ${sync.max_bundle_mb:100}        # 번들(풀었을 때) 크기 상한(MB)
+
 # ───────── Coordinator ─────────
 coordinator:
   host: ${coordinator.host:0.0.0.0}                       # 바인드 주소
