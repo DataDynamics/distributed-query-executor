@@ -26,7 +26,7 @@ from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from core.phases import phase_of, record_stage
+from core.phases import phase_of, record_stage, relabel_phases
 from core.timeutil import now_iso as _now_iso  # KST 기준 naive ISO 시각을 만든다
 
 logger = logging.getLogger(__name__)
@@ -352,8 +352,13 @@ class Job:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "retry_of": self.retry_of,
-            "tasks": [t.summary() for t in self.tasks],
+            "tasks": [self._task_view(t.summary()) for t in self.tasks],
         }
+
+    def _task_view(self, summary: dict) -> dict:
+        """task 요약의 단계 라벨을 이 job 의 소스 엔진으로 바로잡는다(Trino 로 읽어도 Impala 로 보이지 않게)."""
+        summary["phases"] = relabel_phases(summary.get("phases"), self.datasource)
+        return summary
 
     def to_record(self) -> dict:
         """SqlJobStore(공유 저장소)에 영속하기 위한 전체 직렬화 dict를 반환한다.

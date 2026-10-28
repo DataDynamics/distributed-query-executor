@@ -165,6 +165,29 @@ class JobHistoryRepository:
         ]
         return {"enabled": True, "rows": out, "total": total, "limit": limit, "offset": offset}
 
+    def latest(self, job_id: str) -> dict | None:
+        """job 하나의 가장 최근 이력 행을 돌려준다. 없거나 이력이 꺼져 있으면 None 이다.
+
+        job 저장소에서 사라진 종료 job(인메모리 저장소의 재기동, 보관 기간 정리)의 구간 분석을 이력으로
+        복원할 때 쓴다. ``(job_id, recorded_at DESC)`` 인덱스의 앞부분으로 찾는다.
+        """
+        if not self.enabled:
+            return None
+        with meta_connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT job_id, status, created_at, started_at, finished_at, total_tasks "
+                    f"FROM {self.table} WHERE job_id = %s ORDER BY recorded_at DESC LIMIT 1",
+                    (job_id,),
+                )
+                r = cur.fetchone()
+            conn.commit()
+        if r is None:
+            return None
+        iso = lambda v: v.isoformat() if v is not None else None  # noqa: E731
+        return {"job_id": r[0], "status": r[1], "created_at": iso(r[2]),
+                "started_at": iso(r[3]), "finished_at": iso(r[4]), "total_tasks": r[5]}
+
     def _write(self, job) -> None:
         """job 스냅샷 한 건을 동기 psycopg 로 INSERT 한다(워커 스레드에서 호출됨).
 
@@ -281,3 +304,35 @@ class QueryRunHistoryRepository:
             for r in rows
         ]
         return {"enabled": True, "rows": out, "total": total, "limit": limit, "offset": offset}
+
+
+class TaskHistoryReader:
+    """executor 들이 task_history 에 남긴 이관 task 행을 job 단위로 읽는 조회 전용 저장소다.
+
+    job 저장소에 job 이 남아 있지 않을 때 구간 분석(``/jobs/{job_id}/breakdown``)이 task 의 단계 기록을 여기서
+    복원한다. 한 task 에 상태 전이마다 행이 쌓이므로 task_id 별 최신 한 행만 고른다. DSN 이 없으면 비활성이다.
+    """
+
+    def __init__(self, settings):
+        self.dsn: str = getattr(settings, "history_db_dsn", "") or ""
+        self.table: str = getattr(settings, "task_history_table", "task_history")
+        self.enabled: bool = bool(self.dsn)
+
+    def tasks_of(self, job_id: str) -> list[dict]:
+        """job 의 task 별 최신 행(task_id·상태·executor·exec_mode·단계 기록)을 돌려준다."""
+        if not self.enabled:
+            return []
+        with meta_connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT ON (task_id) task_id, status, executor_id, exec_mode, phases "
+                    f"FROM {self.table} WHERE job_id = %s AND exec_mode IS DISTINCT FROM 'query_run' "
+                    "ORDER BY task_id, recorded_at DESC",
+                    (job_id,),
+                )
+                rows = cur.fetchall()
+            conn.commit()
+        return [
+            {"task_id": r[0], "status": r[1], "executor_url": r[2], "exec_mode": r[3], "phases": r[4] or []}
+            for r in rows
+        ]

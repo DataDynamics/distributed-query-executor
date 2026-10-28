@@ -498,6 +498,20 @@ executor 상세에서 task 가 `READING` 에 오래 머물면 소스 쪽이고 `
 대시보드나 `GET /executors/{idx}/metrics` 로 볼 수 있고, 로그의 SQL 기록에서 `datasource` 를 봐도
 같은 판단을 할 수 있다.
 
+### job 하나를 구간으로 쪼개 보기
+
+task 를 하나씩 열어 보기 전에 job 전체가 어디서 시간을 썼는지부터 본다. coordinator 대시보드의 이력 탭에서
+"구간 분석"을 누르거나(처리 중 탭의 "타임라인"도 같은 화면이다) `GET /jobs/{job_id}/breakdown` 을 부르면
+두 가지 표가 나온다. 첫째 표는 job 의 벽시계 시간을 실행 슬롯 대기, 디스패치 대기, task 실행, 마감(스테이징
+모드면 Phase 2 적재·정리) 네 구간으로 나눈 것이다. 슬롯 대기가 길면 `coordinator.max_concurrent_jobs` 가,
+디스패치 대기가 길면 `coordinator.max_dispatch_concurrency` 가 부족하다는 뜻이다. 둘째 표는 task 단계별 평균
+소요로, 같은 이름 단계를 task 안에서 합친 뒤 그 단계를 거친 task 수로 평균을 낸 것이며 가장 평균이 큰 단계를
+빨갛게 표시한다. 최대값과 가장 느린 task 도 함께 나오므로 평균과 최대가 크게 벌어지면 특정 executor 나
+파티션이 느린 것이다. 저장소에서 사라진 종료 job 은 `job_history`·`task_history` 로 복원해 보여 준다.
+
+소스 조회 단계(`IMPALA_SUBMIT`)의 표시명은 job 의 `datasource` 를 따른다. Trino 로 읽은 job 은 "Trino 조회
+제출" 로 보이며, 단계 이름 자체는 하위 호환을 위해 `IMPALA_SUBMIT` 그대로다.
+
 ### task 하나를 네 갈래로 쪼개 보기
 
 더 정확히 짚으려면 대시보드의 단계 타임라인과 `task_history` 테이블이 wall-clock time 을 네 갈래로
@@ -1228,7 +1242,7 @@ log.perf.job_summary=true     # job·task 가 끝날 때마다 요약 한 줄 �
 | `copy.read_starve_ms`, `copy.read_wait_ms` | 소스(Impala 등)를 기다린 시간 | 크면 소스가 병목이다. 소스 쪽 자원과 `impala_query_options` 를 본다 |
 | `copy.write_wait_ms`, `copy.finalize_wait_ms` | GP 에 쓰고 반영을 기다린 시간 | 크면 GP 가 병목이다. 대상 테이블 분산키와 GP 부하를 본다 |
 | `loop.lag_ms`, `loop.stalls` | 이벤트 루프가 예정보다 늦게 돈 시간과 멈춘 횟수 | 수십 ms 를 넘으면 블로킹 호출이 있다. 경고 로그의 `이벤트 루프가` 스택을 본다 |
-| `pool.default.*` | 적재 본체(executor)·Phase 2 INSERT(coordinator)가 쓰는 스레드 풀의 사용·큐·대기(`wait_ms`)·실행(`run_ms`) | `queued` 와 `wait_ms` 가 크면 동시 적재 수가 풀 크기(min(32, CPU+4))를 넘는다 |
+| `pool.default.*` | 적재 본체(executor)·Phase 2 INSERT(coordinator)가 쓰는 스레드 풀의 사용·큐·대기(`wait_ms`)·실행(`run_ms`) | `queued` 와 `wait_ms` 가 크면 동시 적재 수가 풀 크기를 넘는다. 풀 크기는 기동 로그 `기본 스레드 풀 크기=` 에 남으며 asyncio 기본 min(32, CPU+4) 와 설정 동시성+8(executor 는 `executor.max_concurrent_tasks`, coordinator 는 `coordinator.max_concurrent_jobs`, local 모드면 `max_dispatch_concurrency` 를 더한다) 중 큰 값이다 |
 | `pool.store.*`, `pool.meta.*`, `meta_db.*` | job 저장, 이력·heartbeat 기록 풀과 메타 DB 연결 시간·실패 | `run_ms` 가 크면 메타 DB 가 느리고, `wait_ms` 가 크면 호출이 몰린다 |
 | `pool.anyio.*` | 대시보드·조회 API 가 쓰는 스레드 | `busy` 가 `max` 에 붙으면 조회가 밀린다 |
 | `jobs_done.*`, `tasks_done.*`, `rows_written`, `rows_read` | 구간 처리량 | 튜닝 전후 비교의 기준이다 |

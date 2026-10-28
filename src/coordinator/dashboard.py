@@ -359,23 +359,58 @@ function phaseSummary(s){
   if(!keys.length) return '<span class="mut">-</span>';
   return keys.map(k=>`<span class="phdot">${PHASE_LABELS[k]||esc(k)} ${s[k]}</span>`).join(' ');
 }
-// job 상세 모달: /jobs/{id} 를 받아 task 별 단계 타임라인을 세로로 쌓아 보여준다.
+// 구간 막대표: rows 의 ms 를 가장 큰 값 기준 상대 막대로 그리고, hot 인 행(가장 오래 걸린 것)을 강조한다.
+function breakdownTable(head, rows){
+  const max = Math.max(1, ...rows.map(r=>r.ms||0));
+  return '<table class="tl"><thead><tr>'+head.map(t=>`<th>${t}</th>`).join('')+'</tr></thead><tbody>'+
+    rows.map(r=>{
+      const pct = r.ms!==null&&r.ms!==undefined ? Math.max(2, Math.round(r.ms/max*100)) : 0;
+      return `<tr class="${r.hot?'hot':''}"><td>${fmt(r.label)}${r.hot?' ◀ 최장':''}</td>`+
+        `<td><span class="gtrack"><i class="${r.hot?'hot':''}" style="width:${pct}%"></i></span></td>`+
+        r.cells.map(c=>`<td>${c}</td>`).join('')+'</tr>';
+    }).join('')+'</tbody></table>';
+}
+// job 구간 분석: 벽시계 구간(슬롯 대기·디스패치 대기·task 실행·마감)과 task 단계별 평균 소요를 그린다.
+function renderBreakdown(b){
+  const segs = (b.segments||[]).map(s=>({label:s.label, ms:s.ms, hot:s.key===b.longest_segment,
+    cells:[fmtDur(s.ms), `<span class="mut">${esc(s.note)}</span>`]}));
+  const phs = (b.phases||[]).map(p=>({label:p.label, ms:p.avg_ms, hot:p.name===b.longest_phase,
+    cells:[fmtDur(p.avg_ms), `${p.share_pct}%`, fmtDur(p.max_ms), fmtDur(p.min_ms),
+           fmtNum(p.n), `<code>${fmt(p.slowest_task)}</code>`]}));
+  const longest = (b.phases||[]).find(p=>p.name===b.longest_phase);
+  return `<div class="subhd">job 구간<span class="mut">전체 ${fmtDur(b.total_ms)}</span></div>`+
+    breakdownTable(['구간','비교','소요','설명'], segs)+
+    `<div class="subhd">task 단계별 평균 소요<span class="mut">task ${fmtNum(b.task_count)}개 · `+
+      `task 평균 ${fmtDur(b.task_avg_ms)} · 최대 ${fmtDur(b.task_max_ms)}</span></div>`+
+    (phs.length ? breakdownTable(['단계','비교','평균','비중','최대','최소','task 수','가장 느린 task'], phs)
+                : '<p class="mut">단계 기록이 없습니다.</p>')+
+    (longest ? `<p>가장 오래 걸린 단계는 <b>${esc(longest.label)}</b> 이며 task 평균 ${fmtDur(longest.avg_ms)}`+
+      `(평균 처리 시간의 ${longest.share_pct}%)입니다.</p>` : '');
+}
+// job 상세 모달: /jobs/{id}/breakdown 을 받아 구간 분석을 위에, task 별 단계 타임라인을 아래에 쌓는다.
+// 저장소에서 사라진 종료 job 도 이력 테이블로 복원해 같은 화면을 보여 준다.
 async function showJobPhases(id){
-  showPhasesModal(id + ' · task별 단계 진행/소요', '<p class="mut">불러오는 중…</p>');
+  showPhasesModal(id + ' · 구간 분석 / task별 단계', '<p class="mut">불러오는 중…</p>');
   try{
-    const d = await getJSON(`/jobs/${id}`);
+    const r = await fetch(`/jobs/${encodeURIComponent(id)}/breakdown`);
+    if(!r.ok){ $("#pmodal-body").innerHTML = `<span class="err">불러오기 실패: ${r.status}</span>`; return; }
+    const d = await r.json();
     const tasks = d.tasks||[];
-    if(!tasks.length){ $("#pmodal-body").innerHTML = '<p class="mut">task 가 없습니다.</p>'; return; }
-    $("#pmodal-body").innerHTML = tasks.map(t=>
+    const fromHist = d.source==='history'
+      ? '<p class="mut">저장소에 없는 job 이라 이력 테이블(job_history·task_history)에서 복원했습니다.</p>' : '';
+    $("#pmodal-body").innerHTML = fromHist + renderBreakdown(d) +
+      `<div class="subhd">task별 단계<span class="mut">${fmtNum(tasks.length)}개</span></div>` +
+      (tasks.length ? tasks.map(t=>
       `<div class="tkhd"><code>${fmt(t.task_id)}</code> ${pill(t.status)} · `+
       `<span class="mut">executor</span> ${fmt(t.executor_url)}`+
-      (t.attempt>1?` · <span class="mut">시도 ${t.attempt}회</span>`:'')+` · `+
-      `읽은 ${fmtNum(t.rows_read)} / 적재 ${fmtNum(t.rows_written)} · `+
-      `조회완료 ${fmtDate(t.impala_done_at)} · `+
-      `<a class="lnk" onclick="showTaskSql('${id}','${t.task_id}');return false">SQL</a></div>`+
+      (t.attempt>1?` · <span class="mut">시도 ${t.attempt}회</span>`:'')+
+      (t.rows_read!==undefined?` · 읽은 ${fmtNum(t.rows_read)} / 적재 ${fmtNum(t.rows_written)}`:'')+
+      (t.impala_done_at!==undefined?` · 조회완료 ${fmtDate(t.impala_done_at)}`:'')+
+      (d.source==='store'?` · <a class="lnk" onclick="showTaskSql('${id}','${t.task_id}');return false">SQL</a>`:'')+
+      `</div>`+
       (t.error?`<div class="err" style="margin:0 0 6px">${esc(t.error)}</div>`:'')+
       renderPhases(t.phases)
-    ).join('');
+    ).join('') : '<p class="mut">task 가 없습니다.</p>');
   }catch(e){ $("#pmodal-body").innerHTML = `<span class="err">불러오기 실패: ${esc(e)}</span>`; }
 }
 const jobPhaseLink = id => `<a class="lnk" onclick="showJobPhases('${id}');return false">타임라인</a>`;
@@ -494,6 +529,7 @@ async function loadHist(){
     {t:"작업 ID", f:r=>jobLink(r.job_id)},
     {t:"사용자", k:"username"},
     {t:"상태", f:r=>pill(r.status)},
+    {t:"구간", f:r=>`<a class="lnk" onclick="showJobPhases('${esc(r.job_id)}');return false">구간 분석</a>`},
     {t:"대상 테이블", k:"target_table"},
     {t:"완료/전체", f:r=>`${fmt(r.completed_tasks)}/${fmt(r.total_tasks)}`},
     {t:"적재 행수", f:r=>fmtNum(r.total_rows_written)},

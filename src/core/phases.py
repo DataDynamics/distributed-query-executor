@@ -30,7 +30,7 @@ from core.timeutil import now_iso
 PHASE_LABELS: dict[str, str] = {
     "QUEUE_WAIT": "대기(슬롯)",       # 접수부터 실행 슬롯을 확보할 때까지 기다리는 구간이다
     "SOURCE_QUERY": "소스 조회(결과 반환)",  # query_run 이 소스에 SELECT 를 실행해 상위 N행을 받는 구간이다
-    "IMPALA_SUBMIT": "Impala 조회 제출",  # execute() 를 제출하고 커서의 description 이 준비될 때까지다
+    "IMPALA_SUBMIT": "Impala 조회 제출",  # execute() 를 제출하고 커서의 description 이 준비될 때까지다(라벨은 phase_label 이 소스에 맞춘다)
     "STAGING_DDL": "staging 생성",     # CREATE TEMP TABLE (stage_insert)
     "PREFLIGHT": "컬럼 검증",          # copy 모드에서 COPY 전에 대상 컬럼을 사전검증한다
     "DELETE": "파티션 선삭제",         # copy 모드의 overwrite_partitions 가 파티션을 먼저 지운다
@@ -44,6 +44,41 @@ PHASE_LABELS: dict[str, str] = {
 }
 
 
+# 소스 조회 단계(IMPALA_SUBMIT)의 라벨에 붙일 엔진 표시명이다. 단계 이름은 하위 호환 때문에 IMPALA_SUBMIT 그대로
+# 두지만, Trino 같은 커스텀 소스로 읽은 task 까지 "Impala 조회 제출" 로 보이면 어디서 시간이 걸렸는지 오해하게
+# 되므로 라벨만 실제 엔진 이름으로 바꾼다. 빈 값·impala·source 는 impyla 커서 경로라 Impala 다
+# (core.config.is_custom_source 와 같은 기준). 목록에 없는 이름은 설정된 이름을 그대로 보여 준다.
+_SOURCE_NAMES: dict[str, str] = {"": "Impala", "impala": "Impala", "source": "Impala", "trino": "Trino"}
+
+
+def source_name(datasource) -> str:
+    """datasource 값을 화면에 보일 엔진 이름으로 바꾼다."""
+    key = str(datasource or "").strip().lower()
+    return _SOURCE_NAMES.get(key, str(datasource).strip())
+
+
+def phase_label(name: str, datasource=None) -> str:
+    """단계 이름의 표시 라벨이다. 소스 조회 단계는 datasource 에 맞춰 엔진 이름을 붙인다."""
+    if name == "IMPALA_SUBMIT":
+        return f"{source_name(datasource)} 조회 제출"
+    return PHASE_LABELS.get(name, name)
+
+
+def relabel_phases(phases: list, datasource) -> list:
+    """단계 레코드들의 라벨을 datasource 기준으로 다시 붙인 사본을 돌려준다.
+
+    executor 가 예전 버전이었거나 local 모드처럼 라벨을 붙일 때 소스를 몰랐던 기록도, coordinator 가 job 의
+    datasource 로 보여 줄 때 바로잡기 위해 쓴다. 원본 리스트는 바꾸지 않는다.
+    """
+    out = []
+    for p in phases or []:
+        q = dict(p)
+        if q.get("name") == "IMPALA_SUBMIT":
+            q["label"] = phase_label("IMPALA_SUBMIT", datasource)
+        out.append(q)
+    return out
+
+
 def _dur_ms(start_iso: str, end_iso: str) -> int | None:
     """두 naive ISO 시각 문자열의 간격을 밀리초 정수로 돌려준다. 파싱에 실패하면 None 이다."""
     try:
@@ -53,7 +88,7 @@ def _dur_ms(start_iso: str, end_iso: str) -> int | None:
         return None
 
 
-def record_stage(phases: list, name: str, event: str, meta: dict | None = None):
+def record_stage(phases: list, name: str, event: str, meta: dict | None = None, datasource=None):
     """``phases`` 리스트에 단계 시작(start)/종료(end)를 기록한다.
 
     - start: 새 단계 dict 를 append 하고 started_at 을 지금으로 찍는다.
@@ -62,11 +97,12 @@ def record_stage(phases: list, name: str, event: str, meta: dict | None = None):
       나머지는 extra 로 넣는다. 종료된 단계의 rows(있으면)를 반환한다(호출자 편의).
 
     같은 이름 단계가 다시 시작될 수 있으므로(재시도 등) '열려 있는 마지막' 것을 닫는다.
+    ``datasource`` 는 소스 조회 단계의 라벨에 실제 엔진 이름을 붙이는 데 쓴다(``phase_label``).
     """
     if event == "start":
         phases.append({
             "name": name,
-            "label": PHASE_LABELS.get(name, name),
+            "label": phase_label(name, datasource),
             "started_at": now_iso(),
             "finished_at": None,
             "duration_ms": None,

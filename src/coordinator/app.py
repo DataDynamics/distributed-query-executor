@@ -47,11 +47,12 @@ from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
 from . import load_results
 from .dashboard import DASHBOARD_HTML, masked_config
+from .breakdown import job_breakdown
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .executor_status import ExecutorStatusRepository
 from .ha import CoordinatorHeartbeat, reconcile_orphaned_jobs
-from .history import JobHistoryRepository, QueryRunHistoryRepository
+from .history import JobHistoryRepository, QueryRunHistoryRepository, TaskHistoryReader
 from core.loopwatch import start_loop_watchdog
 from core.metaio import run_meta_io
 from core.perf import endpoint_key, perf, start_perf_reporter
@@ -1116,6 +1117,33 @@ def create_app(
         return format_at_fields(job.status_view())
 
     @app.get(
+        "/jobs/{job_id}/breakdown",
+        tags=["Monitoring"],
+        summary="작업 구간 분석(구간별 소요·단계별 task 평균)",
+        description="job 의 벽시계 시간을 슬롯 대기·디스패치 대기·task 실행·마감 구간으로 나누고, task 단계별 "
+        "평균·최대 소요와 가장 오래 걸린 구간을 돌려준다. 저장소에 job 이 없으면 이력 테이블로 복원한다.",
+    )
+    def get_job_breakdown(job_id: str):
+        job = store.get(job_id)
+        if job is not None:
+            view = {**job.status_view(), "exec_mode": job.exec_mode, "datasource": job.datasource}
+            out = job_breakdown(view)
+            out["tasks"] = view["tasks"]
+            out["source"] = "store"
+            return format_at_fields(out)
+        # 저장소에서 사라진 종료 job 이다(인메모리 저장소 재기동·보관 정리). 이력의 job 행과 task 행으로 복원한다.
+        head = history_reader.latest(job_id)
+        if head is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        tasks = task_history_reader.tasks_of(job_id)
+        modes = {t.get("exec_mode") for t in tasks if t.get("exec_mode")}
+        view = {**head, "exec_mode": modes.pop() if len(modes) == 1 else None, "tasks": tasks}
+        out = job_breakdown(view)
+        out["tasks"] = tasks
+        out["source"] = "history"
+        return format_at_fields(out)
+
+    @app.get(
         "/jobs/{job_id}/status",
         tags=["Jobs"],
         summary="작업 진행 상태(진행률) 조회",
@@ -1510,6 +1538,7 @@ def create_app(
 
     history_reader = JobHistoryRepository(settings)
     query_run_history = QueryRunHistoryRepository(settings)
+    task_history_reader = TaskHistoryReader(settings)
 
     @app.get(
         "/query-runs",

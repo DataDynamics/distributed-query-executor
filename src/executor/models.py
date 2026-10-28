@@ -117,7 +117,7 @@ class Task:
         GIL 하에서 원자적이라 기존 on_progress(rows_written 갱신)와 동일하게 안전하다.
         STREAM_COPY 종료 시의 rows 는 곧 Impala 조회 건수이므로 rows_read 로도 반영한다.
         """
-        rows = record_stage(self.phases, name, event, meta)
+        rows = record_stage(self.phases, name, event, meta, datasource=self.datasource)
         if event == "start":
             self.current_phase = name
             # 상세 추적(DEBUG): 단계 시작. [job][task] 는 로그 컨텍스트가 자동 주입한다.
