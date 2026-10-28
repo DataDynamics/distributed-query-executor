@@ -150,11 +150,50 @@ async def test_리포터는_주기마다_한_줄을_쓰고_루프_지연을_잰�
     assert rec.fields["loop.lag_ms.max"] >= 150
 
 
-def test_꺼져_있으면_리포터를_띄우지_않는다():
+async def test_꺼져_있으면_리포터를_띄우지_않는다():
     class S:
         log_perf_enabled = False
 
     assert perfmod.start_perf_reporter("executor", S()) is None
+
+
+def test_기본_풀은_설정한_동시성보다_작아지지_않는다(monkeypatch):
+    # 4코어면 asyncio 기본은 8 이라, 세마포어 24 를 줘도 8개만 돌던 문제를 막는다.
+    monkeypatch.setattr(perfmod.os, "cpu_count", lambda: 4)
+
+    class E:
+        executor_max_concurrent_tasks = 24
+
+    class C:
+        max_concurrent_jobs = 24
+        max_dispatch_concurrency = 32
+        executor_mode = "remote"
+
+    class L(C):
+        executor_mode = "local"
+
+    class Unlimited:
+        executor_max_concurrent_tasks = 0
+
+    assert perfmod.default_pool_workers("executor", E()) == 24 + 8
+    assert perfmod.default_pool_workers("coordinator", C()) == 24 + 8
+    assert perfmod.default_pool_workers("coordinator", L()) == 24 + 32 + 8
+    assert perfmod.default_pool_workers("executor", Unlimited()) == 8
+    # 동시성이 작으면 asyncio 기본값 아래로 줄이지 않는다.
+    monkeypatch.setattr(perfmod.os, "cpu_count", lambda: 64)
+    assert perfmod.default_pool_workers("executor", E()) == 32
+
+
+async def test_지표가_꺼져_있어도_기본_풀은_설정에_맞춘다(monkeypatch):
+    monkeypatch.setattr(perfmod.os, "cpu_count", lambda: 4)
+
+    class S:
+        log_perf_enabled = False
+        executor_max_concurrent_tasks = 24
+
+    loop = asyncio.get_running_loop()
+    perfmod.start_perf_reporter("executor", S())
+    assert loop._default_executor._max_workers == 32
 
 
 def test_종료_요약은_지표_로그가_꺼져_있으면_버린다(caplog):

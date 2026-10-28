@@ -722,7 +722,10 @@ n·p50·p95·max 로 요약되고 기록 뒤에 비워진다. 실행 슬롯·큐
 기록 주기가 장애 상황에서도 밀리지 않게 하려는 것이다.
 
 스레드 풀은 `InstrumentedThreadPoolExecutor` 로 만들면 사용 중 스레드·큐 길이·대기와 실행 시간이 `pool.<이름>.*`
-로 붙고, asyncio 기본 풀도 기동할 때 이것으로 바꿔 끼운다(§10 의 store·meta 풀도 같다). job·task 가 끝나면
+로 붙고, asyncio 기본 풀도 기동할 때 이것으로 바꿔 끼운다(§10 의 store·meta 풀도 같다). 이때 기본 풀 크기를
+설정한 동시성에 맞춰 키운다(`default_pool_workers`). executor 의 task 와 coordinator 의 Phase 2 INSERT 가 이 풀에서
+돌기 때문에 asyncio 기본 min(32, CPU+4) 를 그대로 두면 세마포어를 아무리 키워도 실제 동시성이 CPU 수에 묶이기
+때문이다(4코어 executor 는 `max_concurrent_tasks=24` 여도 8개만 돌았다). 지표를 꺼도 크기 조정은 한다. job·task 가 끝나면
 단계별 소요를 담은 `job_done`·`task_done` 요약 줄이 남고, `bottleneck` 은 소스 읽기 대기와 GP 쓰기 대기를 비교해
 어느 쪽이 느렸는지 판정한다. `dqe.perf` 로거는 전파하지 않으므로 서비스 로그에는 섞이지 않는다. 읽는 쪽은
 `bin/perf-report`(`tools/perf_report.py`)로, 시간대별로 묶어 병목 의심 구간과 조정 방향을 출력한다.

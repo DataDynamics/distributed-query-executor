@@ -353,8 +353,36 @@ class InstrumentedThreadPoolExecutor(ThreadPoolExecutor):
         return super().submit(_run)
 
 
-def install_default_executor(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
-    """실행 중인 루프의 기본 스레드 풀을 계측용 풀로 바꾼다(크기는 asyncio 기본과 같은 min(32, CPU+4)).
+# 기본 풀을 설정한 동시성에 맞출 때 그 위에 더 얹는 여유 스레드 수다. self-report·번들 상태 조회·메트릭 수집처럼
+# 같은 풀을 잠깐 쓰는 짧은 호출이 오래 걸리는 적재 작업 뒤에 줄 서지 않게 한다.
+_POOL_HEADROOM = 8
+
+
+def default_pool_workers(role: str, settings=None) -> int:
+    """역할과 설정에 맞는 asyncio 기본 스레드 풀 크기를 정한다.
+
+    asyncio 기본값 min(32, CPU+4) 는 CPU 수에만 묶여 있어 설정한 동시성과 무관하다. 그런데 executor 는 task
+    의 소스 읽기와 GP 적재를, coordinator 는 Phase 2 GP INSERT 와 local 모드 task 를 모두 이 풀에서 돌리므로,
+    풀이 세마포어보다 작으면 슬롯을 잡은 task 가 스레드를 얻지 못해 줄을 서고 실제 동시성은 풀 크기에서 멈춘다
+    (예: 4코어 executor 는 max_concurrent_tasks=24 여도 8개만 돈다). 그래서 기본값과 "필요한 동시 블로킹 호출 수 +
+    여유" 중 큰 값을 쓴다. 동시성이 무제한(0)이면 상한을 알 수 없으므로 기본값을 그대로 둔다.
+    """
+    base = min(32, (os.cpu_count() or 1) + 4)
+    if settings is None:
+        return base
+    if role == "executor":
+        need = int(getattr(settings, "executor_max_concurrent_tasks", 0) or 0)
+    else:
+        # Phase 2 적재는 실행 중인 job 마다 하나씩 돈다. local 모드면 task 도 같은 풀에서 돌며 디스패치 상한이 그 수를 묶는다.
+        need = int(getattr(settings, "max_concurrent_jobs", 0) or 0)
+        if need > 0 and getattr(settings, "executor_mode", "remote") == "local":
+            need += int(getattr(settings, "max_dispatch_concurrency", 0) or 0)
+    return max(base, need + _POOL_HEADROOM) if need > 0 else base
+
+
+def install_default_executor(loop: Optional[asyncio.AbstractEventLoop] = None,
+                             workers: Optional[int] = None) -> None:
+    """실행 중인 루프의 기본 스레드 풀을 계측용 풀로 바꾼다. 크기를 주지 않으면 asyncio 기본과 같은 min(32, CPU+4) 다.
 
     ``run_in_executor(None, …)`` 과 ``asyncio.to_thread`` 를 쓰는 모든 호출이 이 풀을 거치므로, 호출부를
     하나도 고치지 않고 기본 풀의 포화를 잴 수 있다. 이미 계측용이면 그대로 둔다.
@@ -362,10 +390,11 @@ def install_default_executor(loop: Optional[asyncio.AbstractEventLoop] = None) -
     loop = loop or asyncio.get_running_loop()
     if isinstance(getattr(loop, "_default_executor", None), InstrumentedThreadPoolExecutor):
         return
-    workers = min(32, (os.cpu_count() or 1) + 4)
+    workers = workers or default_pool_workers("")
     loop.set_default_executor(
         InstrumentedThreadPoolExecutor("default", workers, thread_name_prefix="asyncio")
     )
+    logger.info("기본 스레드 풀 크기=%d", workers)
 
 
 def _anyio_gauges() -> Optional[Dict[str, float]]:
@@ -582,17 +611,18 @@ class PerfReporter:
 
 
 def start_perf_reporter(role: str, settings) -> Optional[PerfReporter]:
-    """지표 로그나 Prometheus 가 켜져 있으면 기본 스레드 풀을 계측용으로 바꾸고 공통 게이지를 등록한 뒤
-    리포터를 띄운다.
+    """기본 스레드 풀을 설정한 동시성에 맞는 계측용 풀로 바꾸고, 지표 로그나 Prometheus 가 켜져 있으면 공통
+    게이지를 등록한 뒤 리포터를 띄운다.
 
     루프 안(lifespan)에서 불러야 한다. 지표 로그만 꺼져 있으면 줄은 쓰지 않고 Prometheus 가 읽을 루프 지연만
     잰다. 둘 다 꺼져 있으면 아무것도 하지 않고 None 을 돌려준다.
     """
+    # 기본 풀 크기는 실제 동시성 상한이므로 지표를 끄더라도 설정에 맞춰 키운다.
+    install_default_executor(workers=default_pool_workers(role, settings))
     interval = float(getattr(settings, "log_perf_interval_s", 30) or 0)
     log_on = bool(getattr(settings, "log_perf_enabled", False)) and interval > 0
     if not log_on and not getattr(settings, "prometheus_enabled", False):
         return None
-    install_default_executor()
     perf.gauge("pool.anyio", _anyio_gauges)
     if log_on:
         try:
