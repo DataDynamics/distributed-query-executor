@@ -336,3 +336,26 @@ class TaskHistoryReader:
             {"task_id": r[0], "status": r[1], "executor_url": r[2], "exec_mode": r[3], "phases": r[4] or []}
             for r in rows
         ]
+
+    def tasks_by_job(self, job_ids: list[str]) -> dict[str, list[dict]]:
+        """여러 job 의 task 별 최신 단계 기록을 한 번에 읽어 job_id 별로 묶는다.
+
+        이력 탭 한 페이지(기본 20 job)의 "task 단계 평균" 열을 채울 때 job 마다 따로 묻지 않도록
+        ``job_id = ANY(...)`` 한 번으로 읽는다(``idx_task_history_job_id`` 를 탄다).
+        """
+        if not self.enabled or not job_ids:
+            return {}
+        with meta_connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT ON (task_id) job_id, task_id, phases "
+                    f"FROM {self.table} WHERE job_id = ANY(%s) AND exec_mode IS DISTINCT FROM 'query_run' "
+                    "ORDER BY task_id, recorded_at DESC",
+                    (list(job_ids),),
+                )
+                rows = cur.fetchall()
+            conn.commit()
+        out: dict[str, list[dict]] = {}
+        for job_id, task_id, phases in rows:
+            out.setdefault(job_id, []).append({"task_id": task_id, "phases": phases or []})
+        return out

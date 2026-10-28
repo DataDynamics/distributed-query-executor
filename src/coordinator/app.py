@@ -47,7 +47,7 @@ from core.version import __version__
 from core.webassets import mount_static, register_offline_docs
 from . import load_results
 from .dashboard import DASHBOARD_HTML, masked_config
-from .breakdown import job_breakdown
+from .breakdown import job_breakdown, phase_avg_summary
 from .config import Settings, settings as default_settings
 from .dispatcher import HttpDispatcher, JobRunner, LocalDispatcher
 from .executor_status import ExecutorStatusRepository
@@ -1523,6 +1523,10 @@ def create_app(
                 "finished_at": j.finished_at,
                 "original_sql": j.original_sql,
                 "error": j.error,
+                # 끝난 단계만으로 낸 task 단계별 평균 소요다(대시보드 "task 단계 평균" 열).
+                **phase_avg_summary(
+                    [{"task_id": t.task_id, "phases": t.phases} for t in j.tasks], j.datasource,
+                ),
             }
             for j in (jobs if limit <= 0 else jobs[:limit])
         ]
@@ -1623,10 +1627,21 @@ def create_app(
         # status/username 은 정확 일치, job_id 는 전방일치(prefix) 필터다(빈 값은 무시).
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
-        return format_at_fields(history_reader.read(
+        out = history_reader.read(
             limit=limit, offset=offset,
             status=status, username=username, job_id=job_id,
-        ))
+        )
+        # 페이지의 job 들에 task 단계별 평균 소요를 붙인다. task_history 를 한 번에 읽으며, 실패해도 이력 목록은
+        # 그대로 보여 준다(평균 열만 비고 원인은 로그에 남긴다).
+        rows = out.get("rows") or []
+        try:
+            by_job = task_history_reader.tasks_by_job([r["job_id"] for r in rows])
+        except Exception:
+            logger.exception("이력의 task 단계 평균 조회 실패")
+            by_job = {}
+        for r in rows:
+            r.update(phase_avg_summary(by_job.get(r["job_id"], [])))
+        return format_at_fields(out)
 
     @app.get(
         "/templates",

@@ -73,6 +73,7 @@ tr:hover td { background:#f6f8fa; }
 /* 구간 분석에서 가장 오래 걸린 구간·단계를 강조한다. */
 .gtrack > i.hot { background:var(--bad); }
 .tl tr.hot td:first-child { font-weight:600; color:var(--bad); }
+.phdot.hot { color:var(--bad); font-weight:600; }
 .phdot { font-size:11px; padding:1px 7px; border-radius:9px; background:#ddf4ff;
          color:var(--acc); font-weight:600; }
 .tkhd { margin:14px 0 6px; font-weight:600; }

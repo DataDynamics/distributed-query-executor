@@ -142,3 +142,55 @@ def test_breakdown_엔드포인트는_없는_job_에_404(client):
 def test_대시보드_이력_탭에_구간_분석_링크가_있다(client):
     html = client.get("/").text
     assert "구간 분석" in html and "/breakdown" in html and "renderBreakdown" in html
+
+
+def test_phase_avg_summary_는_목록용_가벼운_요약이다():
+    from coordinator.breakdown import phase_avg_summary
+    out = phase_avg_summary(_job_view()["tasks"], "trino")
+    assert [p["name"] for p in out["phase_avg"]] == ["QUEUE_WAIT", "IMPALA_SUBMIT", "STREAM_COPY"]
+    assert out["phase_avg"][1] == {"name": "IMPALA_SUBMIT", "label": "Trino 조회 제출", "avg_ms": 20_000, "n": 2}
+    assert out["longest_phase"] == "STREAM_COPY"
+    # 진행 중인 단계(종료 시각 없음)는 평균에서 빠진다.
+    running = {"task_id": "t", "phases": [{"name": "STREAM_COPY", "started_at": "2026-10-28T10:00:00",
+                                           "finished_at": None, "duration_ms": None}]}
+    assert phase_avg_summary([running]) == {"phase_avg": [], "longest_phase": None}
+
+
+def test_jobs_목록에_task_단계_평균이_실린다(client, store):
+    job = _stored_job(datasource="trino")
+    store.add(job)
+    row = client.get("/jobs").json()["jobs"][0]
+    assert row["longest_phase"] == "STREAM_COPY"
+    assert [p["label"] for p in row["phase_avg"]] == ["Trino 조회 제출", "스트리밍 COPY"]
+
+
+def test_history_에_task_단계_평균이_붙고_조회_실패는_무시한다(client, monkeypatch):
+    from coordinator.history import JobHistoryRepository, TaskHistoryReader
+
+    rows = [{"job_id": "job_a", "status": "DONE"}, {"job_id": "job_b", "status": "DONE"}]
+    monkeypatch.setattr(JobHistoryRepository, "read", lambda self, **kw: {
+        "enabled": True, "rows": [dict(r) for r in rows], "total": 2, "limit": 20, "offset": 0})
+    asked = []
+
+    def tasks_by_job(self, ids):
+        asked.append(list(ids))
+        return {"job_a": _job_view()["tasks"]}
+
+    monkeypatch.setattr(TaskHistoryReader, "tasks_by_job", tasks_by_job)
+    body = client.get("/history").json()
+    assert asked == [["job_a", "job_b"]]  # 페이지 전체를 한 번에 묻는다
+    a, b = body["rows"]
+    assert a["longest_phase"] == "STREAM_COPY" and len(a["phase_avg"]) == 3
+    assert b["phase_avg"] == [] and b["longest_phase"] is None
+
+    def boom(self, ids):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(TaskHistoryReader, "tasks_by_job", boom)
+    body = client.get("/history").json()
+    assert [r["phase_avg"] for r in body["rows"]] == [[], []]
+
+
+def test_대시보드_목록에_task_단계_평균_열이_있다(client):
+    html = client.get("/").text
+    assert html.count('{t:"task 단계 평균", f:phaseAvg}') == 2

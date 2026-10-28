@@ -387,6 +387,14 @@ function renderBreakdown(b){
     (longest ? `<p>가장 오래 걸린 단계는 <b>${esc(longest.label)}</b> 이며 task 평균 ${fmtDur(longest.avg_ms)}`+
       `(평균 처리 시간의 ${longest.share_pct}%)입니다.</p>` : '');
 }
+// job 목록의 "task 단계 평균" 열: 끝난 단계들의 task 평균 소요를 짧은 라벨 칩으로 보이고, 평균이 가장 긴
+// 단계는 빨갛게 강조한다. 칩에 마우스를 올리면 전체 라벨과 평균에 쓴 task 수가 보인다.
+function phaseAvg(r){
+  const a = r.phase_avg||[];
+  if(!a.length) return fmt(null);
+  return a.map(p=>`<span class="phdot${p.name===r.longest_phase?' hot':''}" `+
+    `title="${esc(p.label)} · task ${p.n}개 평균">${esc(PHASE_LABELS[p.name]||p.label)} ${fmtDur(p.avg_ms)}</span>`).join(' ');
+}
 // job 상세 모달: /jobs/{id}/breakdown 을 받아 구간 분석을 위에, task 별 단계 타임라인을 아래에 쌓는다.
 // 저장소에서 사라진 종료 job 도 이력 테이블로 복원해 같은 화면을 보여 준다.
 async function showJobPhases(id){
@@ -465,6 +473,7 @@ async function loadJobs(){
     {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", f:r=>dur(r.started_at, r.finished_at)},
+    {t:"task 단계 평균", f:phaseAvg},
     {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
     {t:"액션", f:cancelBtn},
   ];
@@ -536,6 +545,7 @@ async function loadHist(){
     {t:"시작 시간", f:r=>`<span class="mut">${fmtDate(r.started_at)}</span>`},
     {t:"종료 시간", f:r=>`<span class="mut">${fmtDate(r.finished_at)}</span>`},
     {t:"소요 시간", cls:"col-dur", f:r=>dur(r.started_at, r.finished_at)},
+    {t:"task 단계 평균", f:phaseAvg},
     {t:"에러", cls:"col-err", f:r=>r.error?`<span class="err">${esc(r.error)}</span>`:fmt(null)},
     {t:"액션", f:retryBtn},
   ];

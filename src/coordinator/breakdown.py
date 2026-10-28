@@ -64,25 +64,26 @@ def _segment(key: str, label: str, ms: Optional[int], note: str) -> dict:
     return {"key": key, "label": label, "ms": ms, "note": note}
 
 
-def job_breakdown(job: dict) -> dict:
-    """job 하나의 구간별 소요와 task 단계별 평균 소요를 계산한다.
+def _task_phases(task: dict, datasource) -> list:
+    """task 의 단계 기록이다. job 의 datasource 를 알면 소스 조회 단계 라벨을 그 엔진으로 바로잡는다."""
+    if datasource:
+        return relabel_phases(task.get("phases"), datasource)
+    return list(task.get("phases") or [])
 
-    반환 dict 의 ``segments`` 는 job 구간 목록이고 ``phases`` 는 단계별 통계(처음 나타난 순서)다. 가장 오래
-    걸린 구간과 단계는 ``longest_segment``·``longest_phase`` 에 이름으로 담는다. 측정할 수 없는 값은 None 이다.
+
+def phase_stats(tasks: list, datasource=None) -> list[dict]:
+    """task 단계별 평균·최대·최소 소요와 비중을 처음 나타난 순서로 돌려준다.
+
+    task 마다 같은 이름의 단계 소요를 합친 뒤(재시도로 여러 번 열릴 수 있다) 그 단계를 거친 task 수로 평균을
+    낸다. 진행 중인 단계는 소요가 정해지지 않았으므로 빠진다. 구간 분석 화면과 job 목록의 "task 단계 평균"
+    열이 같은 계산을 쓴다.
     """
-    tasks = job.get("tasks") or []
-    datasource = job.get("datasource")
-
-    # ── 단계별 통계: task 마다 같은 이름의 단계 소요를 합친 뒤 task 들 사이에서 평균을 낸다 ──
     order: list[str] = []
     labels: dict[str, str] = {}
     per_task: dict[str, list[tuple[int, str]]] = {}
-    task_totals: list[int] = []
-    spans: list[tuple[Optional[datetime], Optional[datetime]]] = []
     for t in tasks:
-        phases = relabel_phases(t.get("phases"), datasource) if datasource else list(t.get("phases") or [])
         sums: dict[str, int] = {}
-        for p in phases:
+        for p in _task_phases(t, datasource):
             name = p.get("name")
             ms = _phase_ms(p)
             if not name or ms is None:
@@ -93,17 +94,10 @@ def job_breakdown(job: dict) -> dict:
             sums[name] = sums.get(name, 0) + ms
         for name, ms in sums.items():
             per_task.setdefault(name, []).append((ms, t.get("task_id") or ""))
-        span = _task_span(phases)
-        spans.append(span)
-        total = _gap_ms(*span)
-        if total is not None:
-            task_totals.append(total)
 
     stats = []
     for name in order:
-        vals = per_task.get(name) or []
-        if not vals:
-            continue
+        vals = per_task[name]
         ms_list = [v for v, _ in vals]
         slowest = max(vals, key=lambda v: v[0])
         stats.append({
@@ -115,7 +109,37 @@ def job_breakdown(job: dict) -> dict:
     for s in stats:
         # 평균 task 한 건의 처리 시간 중 이 단계가 차지하는 비중이다.
         s["share_pct"] = round(s["avg_ms"] / avg_sum * 100, 1) if avg_sum else 0.0
-    longest_phase = max(stats, key=lambda s: s["avg_ms"])["name"] if stats else None
+    return stats
+
+
+def longest_of(stats: list[dict]) -> Optional[str]:
+    """평균 소요가 가장 큰 단계 이름이다. 단계가 없으면 None 이다."""
+    return max(stats, key=lambda s: s["avg_ms"])["name"] if stats else None
+
+
+def phase_avg_summary(tasks: list, datasource=None) -> dict:
+    """job 목록 한 행에 붙일 가벼운 요약이다(단계 이름·라벨·평균·task 수와 가장 긴 단계)."""
+    stats = phase_stats(tasks, datasource)
+    return {
+        "phase_avg": [{k: s[k] for k in ("name", "label", "avg_ms", "n")} for s in stats],
+        "longest_phase": longest_of(stats),
+    }
+
+
+def job_breakdown(job: dict) -> dict:
+    """job 하나의 구간별 소요와 task 단계별 평균 소요를 계산한다.
+
+    반환 dict 의 ``segments`` 는 job 구간 목록이고 ``phases`` 는 단계별 통계(처음 나타난 순서)다. 가장 오래
+    걸린 구간과 단계는 ``longest_segment``·``longest_phase`` 에 이름으로 담는다. 측정할 수 없는 값은 None 이다.
+    """
+    tasks = job.get("tasks") or []
+    datasource = job.get("datasource")
+    stats = phase_stats(tasks, datasource)
+    longest_phase = longest_of(stats)
+
+    # task 하나의 처리 시간은 첫 단계 시작부터 마지막 단계 종료까지다.
+    spans = [_task_span(_task_phases(t, datasource)) for t in tasks]
+    task_totals = [ms for ms in (_gap_ms(*span) for span in spans) if ms is not None]
 
     # ── job 구간: 슬롯 대기 → 디스패치 대기 → task 실행 → 마감 ──
     created = _ts(job.get("created_at"))
